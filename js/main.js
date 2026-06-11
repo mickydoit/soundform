@@ -1,6 +1,6 @@
-import { AudioEngine }  from './audio.js?v=13';
-import { SoundRenderer } from './renderer.js?v=13';
-import { exportCanvas }  from './exporter.js?v=13';
+import { AudioEngine }  from './audio.js?v=14';
+import { SoundRenderer } from './renderer.js?v=14';
+import { exportCanvas }  from './exporter.js?v=14';
 
 const audio = new AudioEngine();
 let renderer = null;
@@ -72,7 +72,7 @@ function startAccum() {
   accumState = {
     fftSum:      new Float32Array(128),
     totalWeight: 0,
-    sumBass: 0, sumSubBass: 0, sumLowMid: 0, sumHighMid: 0, sumHigh: 0,
+    sumBass: 0, sumSubBass: 0, sumLowMid: 0, sumHighMid: 0, sumHigh: 0, sumSpread: 0,
     frames: 0,
   };
   trajectoryFrames = [];
@@ -92,7 +92,8 @@ function accumulateFrame(a) {
   s.sumSubBass  += a.subBass * w;
   s.sumLowMid   += a.lowMid  * w;
   s.sumHighMid  += a.highMid * w;
-  s.sumHigh     += a.high    * w;
+  s.sumHigh     += a.high          * w;
+  s.sumSpread   += (a.spectralSpread || 0) * w;
   s.frames++;
 
   // Timbre mode: sample one frame every ~50ms (every 3rd frame at 60fps)
@@ -143,6 +144,7 @@ function getAccumulatedAnalysis() {
     lowMid:           s.sumLowMid  / W,
     highMid:          s.sumHighMid / W,
     high:             s.sumHigh    / W,
+    spectralSpread:   s.sumSpread  / W,
     frames:           [...trajectoryFrames],  // for Timbre mode
   };
 }

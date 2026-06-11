@@ -436,7 +436,7 @@ export class SoundRenderer {
     const react = p.reactivity;
     // Thomas attractor is chaotic for b < 0.208; above that it collapses to a fixed point.
     // Bass energy lowers b toward 0.10 for denser, more complex loops.
-    const b  = Math.max(0.10, 0.185 - a.bass * react * 0.07 - a.spectralSpread * react * 0.02);
+    const b  = Math.max(0.10, 0.185 - a.bass * react * 0.07 - (a.spectralSpread || 0) * react * 0.02);
     const dt = 0.05;
 
     const nPoints     = Math.min(MAX_DENSITY, Math.floor(p.density));
