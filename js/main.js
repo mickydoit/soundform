@@ -1,6 +1,6 @@
-import { AudioEngine }  from './audio.js?v=10';
-import { SoundRenderer } from './renderer.js?v=10';
-import { exportCanvas }  from './exporter.js?v=10';
+import { AudioEngine }  from './audio.js?v=11';
+import { SoundRenderer } from './renderer.js?v=11';
+import { exportCanvas }  from './exporter.js?v=11';
 
 const audio = new AudioEngine();
 let renderer = null;
@@ -258,7 +258,7 @@ function bindControls() {
       });
       document.querySelectorAll('.points-mode').forEach(el => {
         const pm = params.mode;
-        el.style.display = (pm === 'chladni' || pm === 'spectral' || pm === 'timbre') ? '' : 'none';
+        el.style.display = (pm === 'chladni' || pm === 'spectral' || pm === 'timbre' || pm === 'attractor') ? '' : 'none';
       });
       rerenderIfCaptured();
     });

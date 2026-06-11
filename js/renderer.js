@@ -126,11 +126,12 @@ export class SoundRenderer {
     this._linesGroup.visible = m === 'radial' || m === 'timbre';
     this._points.visible     = m !== 'radial' && m !== 'fluid';
     this._sdfMesh.visible    = m === 'fluid';
-    if      (m === 'chladni')  this._buildChladni(analysis, params);
-    else if (m === 'radial')   this._buildRadial(analysis, params);
-    else if (m === 'spectral') this._buildSpectral(analysis, params);
-    else if (m === 'timbre')   this._buildTimbre(analysis.frames || [], params);
-    else if (m === 'fluid')    this._setSdfUniforms(analysis, params);
+    if      (m === 'chladni')   this._buildChladni(analysis, params);
+    else if (m === 'radial')    this._buildRadial(analysis, params);
+    else if (m === 'spectral')  this._buildSpectral(analysis, params);
+    else if (m === 'timbre')    this._buildTimbre(analysis.frames || [], params);
+    else if (m === 'fluid')     this._setSdfUniforms(analysis, params);
+    else if (m === 'attractor') this._buildAttractor(analysis, params);
   }
 
   clear() {
@@ -595,6 +596,99 @@ export class SoundRenderer {
     this._points.geometry.setDrawRange(0, nodeN);
     this._points.material.size    = 0.045 * p.scale * (p.pointSize / 2);
     this._points.material.opacity = Math.min(0.95, 0.88 * p.brightness);
+  }
+
+  // ── Thomas attractor particle cloud ─────────────────────────────
+  //   Integrates the Thomas cyclically symmetric strange attractor:
+  //     ẋ = sin(y) − b·x,  ẏ = sin(z) − b·y,  ż = sin(x) − b·z
+  //   b (damping) is audio-driven: bass lowers b → more loops, more complexity.
+  //   Speed-based brightness: slow regions = attractor manifold = bright streaks,
+  //   fast regions = sparse transients = dark — naturally recreates the density
+  //   rendering of the reference without an explicit density grid.
+  _buildAttractor(a, p) {
+    const react = p.reactivity;
+
+    // b drives complexity: 0.20 = simple interlocking rings, 0.10 = highly chaotic
+    const b  = Math.max(0.09, 0.21 - a.bass * react * 0.10 - a.spectralSpread * react * 0.03);
+    const dt = 0.05;
+
+    const nPoints = Math.min(MAX_DENSITY, Math.floor(p.density));
+
+    // Multiple seeds sample the attractor evenly; centroid drives how many
+    const nSeeds      = Math.max(1, Math.min(8, 2 + Math.round(a.spectralCentroid * react * 5)));
+    const warmup      = 4000;   // steps to reach the attractor from arbitrary start
+    const stepsPerSeed = Math.floor(nPoints / nSeeds);
+
+    const posArr = this._points.geometry.getAttribute('position').array;
+    const colArr = this._points.geometry.getAttribute('color').array;
+    const _c     = new THREE.Color();
+
+    // Thomas attractor lives in roughly ±1.5 per axis → scale to scene units
+    const sc = p.scale * 0.30;
+
+    // Hue anchor: spectralCentroid shifts from violet (bass-heavy) to pink (treble-heavy)
+    const baseHue = p.autoColor ? (0.72 - a.spectralCentroid * 0.18 + 1) % 1 : 0;
+
+    // Deterministic seed offsets so re-renders are stable
+    const fract = x => x - Math.floor(x);
+    const hash  = s => fract(Math.sin(s * 127.1) * 43758.5453);
+
+    let count = 0;
+
+    for (let seed = 0; seed < nSeeds && count < nPoints; seed++) {
+      let x = (hash(seed * 3.1)  - 0.5) * 0.8;
+      let y = (hash(seed * 7.3)  - 0.5) * 0.8;
+      let z = (hash(seed * 13.7) - 0.5) * 0.8;
+
+      // Warm up
+      for (let i = 0; i < warmup; i++) {
+        const dx = Math.sin(y) - b * x;
+        const dy = Math.sin(z) - b * y;
+        const dz = Math.sin(x) - b * z;
+        x += dx * dt; y += dy * dt; z += dz * dt;
+      }
+
+      const step = Math.min(stepsPerSeed, nPoints - count);
+      for (let i = 0; i < step; i++) {
+        const dx = Math.sin(y) - b * x;
+        const dy = Math.sin(z) - b * y;
+        const dz = Math.sin(x) - b * z;
+        x += dx * dt; y += dy * dt; z += dz * dt;
+
+        posArr[count * 3    ] = x * sc;
+        posArr[count * 3 + 1] = y * sc;
+        posArr[count * 3 + 2] = z * sc;
+
+        // Speed → density proxy: slow = dwell longer = brighter
+        const speed = Math.sqrt(dx * dx + dy * dy + dz * dz);
+        const bright = Math.min(1.0, 0.18 / (speed + 0.09));
+
+        if (p.autoColor) {
+          // Dark purple/maroon → pink → near-white at bright streaks (matches reference palette)
+          const hue = (baseHue + speed * 0.12) % 1;
+          const sat = 0.85 - bright * 0.65;          // desaturate to white at bright spots
+          const lum = Math.min(0.92, 0.08 + bright * 0.82) * p.brightness;
+          _c.setHSL(hue, Math.max(0, sat), lum);
+        } else {
+          const c1 = new THREE.Color(p.colorPrimary);
+          const c2 = new THREE.Color(p.colorSecondary);
+          _c.copy(c1).lerp(c2, 1 - bright).multiplyScalar(p.brightness * (0.15 + bright * 0.85));
+        }
+        colArr[count * 3    ] = _c.r;
+        colArr[count * 3 + 1] = _c.g;
+        colArr[count * 3 + 2] = _c.b;
+        count++;
+      }
+    }
+
+    this._points.geometry.getAttribute('position').needsUpdate = true;
+    this._points.geometry.getAttribute('color').needsUpdate    = true;
+    this._points.geometry.setDrawRange(0, count);
+
+    // Smaller points at higher density → delicate particle look, not blobs
+    const sizeFactor = Math.max(0.003, 0.009 * p.scale / Math.sqrt(Math.max(1, count / 40000)));
+    this._points.material.size    = sizeFactor * p.pointSize * 0.6;
+    this._points.material.opacity = Math.min(0.92, 0.72 * p.brightness);
   }
 
   // ── Radial frequency visualizer ───────────────────────────────
