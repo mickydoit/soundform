@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>Soundform — Audio Design Tool</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app">
+  <div id="canvas-wrap">
+    <div id="renderer-container"></div>
+
+    <div id="top-bar">
+      <span class="brand">SOUNDFORM</span>
+      <div id="audio-controls">
+        <button id="btn-mic" class="btn-icon" title="Microphone">🎤</button>
+        <label id="lbl-file" class="btn-icon" title="Upload audio file">
+          📁<input type="file" id="file-input" accept="audio/*" hidden>
+        </label>
+        <button id="btn-stop"   class="btn-icon hidden" title="Stop recording">⏹</button>
+        <button id="btn-submit" class="btn-icon hidden btn-submit" title="Create design">✓</button>
+        <button id="btn-clear"  class="btn-icon hidden" title="Clear canvas">🗑️</button>
+      </div>
+      <div id="export-btns">
+        <button class="btn-export" data-fmt="png">PNG</button>
+        <button class="btn-export" data-fmt="jpg">JPG</button>
+        <button class="btn-export" data-fmt="webp">WebP</button>
+        <button class="btn-export" data-fmt="svg">SVG</button>
+        <button class="btn-export" data-fmt="pdf">PDF</button>
+      </div>
+    </div>
+
+    <div id="status-bar">Ready — press 🎤 to record or 📁 to upload</div>
+
+    <!-- Live volume indicator — visible while listening -->
+    <div id="vu-wrap" class="hidden">
+      <div id="vu-track">
+        <div id="vu-fill"></div>
+      </div>
+      <div id="vu-label">MIC</div>
+    </div>
+  </div>
+
+  <div id="controls-panel">
+
+    <div class="panel-section">
+      <div class="section-title">Mode</div>
+      <div id="mode-btns">
+        <button class="btn-mode active" data-mode="chladni">Chladni</button>
+        <button class="btn-mode" data-mode="radial">Radial</button>
+        <button class="btn-mode" data-mode="spectral">Spectral</button>
+        <button class="btn-mode" data-mode="timbre">Timbre</button>
+        <button class="btn-mode" data-mode="fluid">Fluid</button>
+      </div>
+    </div>
+
+    <div class="panel-section">
+      <div class="section-title">Shape</div>
+
+      <!-- Chladni controls -->
+      <div class="sl-row chladni-only">
+        <div class="sl-label"><span>Detail</span><span id="val-complexity">48</span></div>
+        <input type="range" id="sl-complexity" min="4" max="120" step="1" value="48">
+      </div>
+      <!-- Chladni + Spectral (both use point clouds) -->
+      <div class="sl-row points-mode">
+        <div class="sl-label"><span>Particle Density</span><span id="val-density">80000</span></div>
+        <input type="range" id="sl-density" min="10000" max="250000" step="5000" value="80000">
+      </div>
+      <div class="sl-row points-mode">
+        <div class="sl-label"><span>Point Size</span><span id="val-point-size">2.0</span></div>
+        <input type="range" id="sl-point-size" min="0.5" max="6" step="0.5" value="2.0">
+      </div>
+      <!-- Radial controls -->
+      <div class="sl-row radial-only" style="display:none">
+        <div class="sl-label"><span>Rings</span><span id="val-layers">12</span></div>
+        <input type="range" id="sl-layers" min="4" max="48" step="1" value="12">
+      </div>
+      <div class="sl-row radial-only" style="display:none">
+        <div class="sl-label"><span>Ring Twist</span><span id="val-twist">0.5</span></div>
+        <input type="range" id="sl-twist" min="0" max="3" step="0.05" value="0.5">
+      </div>
+      <!-- Spectral controls -->
+      <div class="sl-row spectral-only" style="display:none">
+        <div class="sl-label"><span>Helix Turns</span><span id="val-helix">2</span></div>
+        <input type="range" id="sl-helix" min="0.5" max="5" step="0.1" value="2">
+      </div>
+
+      <div class="sl-row">
+        <div class="sl-label"><span>Scale</span><span id="val-scale">1.0</span></div>
+        <input type="range" id="sl-scale" min="0.2" max="2.5" step="0.05" value="1.0">
+      </div>
+    </div>
+
+    <div class="panel-section">
+      <div class="section-title">Capture</div>
+      <div class="sl-row">
+        <div class="sl-label"><span>Reactivity</span><span id="val-reactivity">0.7</span></div>
+        <input type="range" id="sl-reactivity" min="0" max="1" step="0.05" value="0.7">
+      </div>
+      <div class="sl-row">
+        <div class="sl-label"><span>Smoothing</span><span id="val-smoothing">0.5</span></div>
+        <input type="range" id="sl-smoothing" min="0" max="0.99" step="0.01" value="0.5">
+      </div>
+    </div>
+
+    <div class="panel-section">
+      <div class="section-title">Motion</div>
+      <div class="sl-row">
+        <div class="sl-label"><span>Rotation Speed</span><span id="val-rot-speed">0.3</span></div>
+        <input type="range" id="sl-rot-speed" min="0" max="2" step="0.05" value="0.3">
+      </div>
+    </div>
+
+    <div class="panel-section">
+      <div class="section-title">Colour</div>
+      <label class="toggle-row">
+        Auto spectrum
+        <input type="checkbox" id="chk-auto-color" checked>
+      </label>
+      <div id="manual-colors" class="color-pickers faded">
+        <label class="color-pick-label">Primary<input type="color" id="col-primary" value="#00d4ff"></label>
+        <label class="color-pick-label">Secondary<input type="color" id="col-secondary" value="#b44dff"></label>
+        <label class="color-pick-label">Accent<input type="color" id="col-accent" value="#ff6644"></label>
+      </div>
+      <div class="sl-row">
+        <div class="sl-label"><span>Brightness</span><span id="val-brightness">0.9</span></div>
+        <input type="range" id="sl-brightness" min="0.1" max="2.0" step="0.05" value="0.9">
+      </div>
+      <div class="sl-row radial-only" style="display:none">
+        <div class="sl-label"><span>Glow</span><span id="val-glow">0.4</span></div>
+        <input type="range" id="sl-glow" min="0" max="1" step="0.05" value="0.4">
+      </div>
+    </div>
+
+    <div class="panel-footer">🎤 Record → ⏹ Stop → ✓ Submit · Drag to rotate</div>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r134/three.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script type="module" src="js/main.js?v=10"></script>
+</body>
+</html>
