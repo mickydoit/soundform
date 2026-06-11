@@ -479,17 +479,19 @@ export class SoundRenderer {
         posArr[count * 3 + 2] = z * sc;
 
         const speed  = Math.sqrt(dx * dx + dy * dy + dz * dz);
-        const bright = Math.min(1.0, 0.18 / (speed + 0.09));
+        // Slow regions dwell on the attractor manifold → brighter (density proxy).
+        // Tuned so typical speed 0.35 → bright≈0.55, near-standstill → bright≈1.0.
+        const bright = Math.min(1.0, 0.25 / (speed + 0.12));
 
         if (p.autoColor) {
-          const hue = (baseHue + speed * 0.12) % 1;
-          const sat = 0.85 - bright * 0.65;
-          const lum = Math.min(0.92, 0.08 + bright * 0.82) * p.brightness;
-          _c.setHSL(hue, Math.max(0, sat), lum);
+          const hue = (baseHue + speed * 0.10) % 1;
+          const sat = 0.80 - bright * 0.45;          // desaturate to white at bright spots
+          const lum = Math.min(0.92, 0.30 + bright * 0.62) * p.brightness;
+          _c.setHSL(hue, Math.max(0.1, sat), lum);
         } else {
           const c1 = new THREE.Color(p.colorPrimary);
           const c2 = new THREE.Color(p.colorSecondary);
-          _c.copy(c1).lerp(c2, 1 - bright).multiplyScalar(p.brightness * (0.15 + bright * 0.85));
+          _c.copy(c1).lerp(c2, 1 - bright).multiplyScalar(p.brightness * (0.3 + bright * 0.7));
         }
         colArr[count * 3    ] = _c.r;
         colArr[count * 3 + 1] = _c.g;
@@ -501,9 +503,8 @@ export class SoundRenderer {
     this._points.geometry.getAttribute('position').needsUpdate = true;
     this._points.geometry.getAttribute('color').needsUpdate    = true;
     this._points.geometry.setDrawRange(0, count);
-    const sizeFactor = Math.max(0.003, 0.009 * p.scale / Math.sqrt(Math.max(1, count / 40000)));
-    this._points.material.size    = sizeFactor * p.pointSize * 0.6;
-    this._points.material.opacity = Math.min(0.92, 0.72 * p.brightness);
+    this._points.material.size    = 0.014 * p.scale * p.pointSize * 0.5;
+    this._points.material.opacity = Math.min(0.95, 0.85 * p.brightness);
   }
 
   // ── 3D Radial / orbital shells ────────────────────────────────
