@@ -1,6 +1,6 @@
-import { AudioEngine }  from './audio.js?v=11';
-import { SoundRenderer } from './renderer.js?v=11';
-import { exportCanvas }  from './exporter.js?v=11';
+import { AudioEngine }  from './audio.js?v=12';
+import { SoundRenderer } from './renderer.js?v=12';
+import { exportCanvas }  from './exporter.js?v=12';
 
 const audio = new AudioEngine();
 let renderer = null;
