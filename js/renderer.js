@@ -434,7 +434,9 @@ export class SoundRenderer {
   //   Speed-based brightness: slow regions dwell on the manifold = bright streaks.
   _buildAttractor(a, p) {
     const react = p.reactivity;
-    const b  = Math.max(0.09, 0.21 - a.bass * react * 0.10 - a.spectralSpread * react * 0.03);
+    // Thomas attractor is chaotic for b < 0.208; above that it collapses to a fixed point.
+    // Bass energy lowers b toward 0.10 for denser, more complex loops.
+    const b  = Math.max(0.10, 0.185 - a.bass * react * 0.07 - a.spectralSpread * react * 0.02);
     const dt = 0.05;
 
     const nPoints     = Math.min(MAX_DENSITY, Math.floor(p.density));
