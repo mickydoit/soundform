@@ -127,7 +127,10 @@ export class SoundRenderer {
     if      (m === 'chladni')   this._buildChladni(analysis, params);
     else if (m === 'spectral')  this._buildSpectral(analysis, params);
     else if (m === 'timbre')    this._buildTimbre(analysis.frames || [], params);
-    else if (m === 'attractor') this._buildAttractor(analysis, params);
+    else if (m === 'attractor') {
+      if (params.highDetail) this._buildAttractorDensity(analysis, params);
+      else                   this._buildAttractor(analysis, params);
+    }
   }
 
   clear() {
