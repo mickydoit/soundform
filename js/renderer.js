@@ -135,11 +135,9 @@ export class SoundRenderer {
   // ── Public API ────────────────────────────────────────────────
   captureDesign(analysis, params) {
     const m = params.mode;
-    const useDensity = m === 'attractor' &&
-      (params.attractorType === 'dejong' || params.attractorType === 'clifford');
     this._linesGroup.visible = m === 'timbre' || m === 'lorenz';
-    this._dPlane.visible     = useDensity;
-    this._points.visible     = !useDensity && m !== 'lorenz';
+    this._dPlane.visible     = false;
+    this._points.visible     = m !== 'lorenz';
     if      (m === 'chladni')   this._buildChladni(analysis, params);
     else if (m === 'spectral')  this._buildSpectral(analysis, params);
     else if (m === 'timbre')    this._buildTimbre(analysis.frames || [], params);
@@ -571,72 +569,79 @@ export class SoundRenderer {
     const baseHue = p.autoColor ? (a.dominantFreq * 0.72 + a.spectralCentroid * 0.28) % 1 : 0;
     const hueSpan = Math.max(0.15, (a.spectralSpread || 0.3) * react * 0.5);
 
-    // ── De Jong & Clifford: density-grid render ──────────────────
+    // ── De Jong & Clifford: 3D iterated map, rendered as particle cloud ──
     if (type === 'dejong' || type === 'clifford') {
-      const W = this._dW, H = this._dH;
-      const STEPS = 900000;
-      const grid  = new Int32Array(W * H);
+      // Two extra parameters driven by mid-frequency audio features
+      const lm = a.lowMid  || 0;
+      const hm = a.highMid || 0;
+      const a5 = (lm + sp * 0.5) * Math.PI * 2.1 + sc * Math.PI;
+      const a6 = (hm + bs * 0.3) * Math.PI * 1.8 + df * Math.PI;
+      const pe = sg(Math.cos(a5)) * (1.0 + Math.abs(Math.cos(a5)) * r);
+      const pf = sg(Math.sin(a6)) * (1.0 + Math.abs(Math.sin(a6)) * r);
 
-      let x = 0.1, y = 0.1;
+      const nPoints = Math.min(MAX_DENSITY, Math.floor(p.density));
+      const posArr  = this._points.geometry.getAttribute('position').array;
+      const colArr  = this._points.geometry.getAttribute('color').array;
+      const _c      = new THREE.Color();
+      const fract   = x => x - Math.floor(x);
+      const sc_     = p.scale * 0.38;
+
+      // Full 3D coupling: each axis feeds into the next (x→y→z→x)
+      let x = 0.1, y = 0.1, z = 0.05;
+
       const iterate = type === 'clifford'
-        ? () => { const nx=Math.sin(pa*y)+pc*Math.cos(pa*x); const ny=Math.sin(pb*x)+pd*Math.cos(pb*y); x=nx; y=ny; }
-        : () => { const nx=Math.sin(pa*y)-Math.cos(pb*x);     const ny=Math.sin(pc*x)-Math.cos(pd*y);     x=nx; y=ny; };
+        ? () => {
+            const nx = Math.sin(pa * y) + pc * Math.cos(pa * z);
+            const ny = Math.sin(pb * z) + pd * Math.cos(pb * x);
+            const nz = Math.sin(pe * x) + pf * Math.cos(pe * y);
+            x = nx; y = ny; z = nz;
+          }
+        : () => {
+            const nx = Math.sin(pa * y) - Math.cos(pb * z);
+            const ny = Math.sin(pc * z) - Math.cos(pd * x);
+            const nz = Math.sin(pe * x) - Math.cos(pf * y);
+            x = nx; y = ny; z = nz;
+          };
 
-      // Warmup — let trajectory settle before accumulating
-      for (let i=0; i<1000; i++) iterate();
+      for (let i = 0; i < 1000; i++) iterate();
 
-      const range = 2.6;
-      for (let i=0; i<STEPS; i++) {
+      for (let i = 0; i < nPoints; i++) {
         iterate();
-        const gx = ((x + range) / (range * 2) * (W - 1)) | 0;
-        const gy = ((y + range) / (range * 2) * (H - 1)) | 0;
-        if (gx >= 0 && gx < W && gy >= 0 && gy < H) grid[gy * W + gx]++;
-      }
+        posArr[i * 3    ] = x * sc_;
+        posArr[i * 3 + 1] = y * sc_;
+        posArr[i * 3 + 2] = z * sc_;
 
-      let maxVal = 1;
-      for (let i=0; i<W*H; i++) if (grid[i] > maxVal) maxVal = grid[i];
-      const logMax = Math.log(1 + maxVal);
-
-      const ctx = this._dCanvas.getContext('2d');
-      const img = ctx.createImageData(W, H);
-      const d   = img.data;
-      const _c  = new THREE.Color();
-
-      for (let i=0; i<W*H; i++) {
-        if (!grid[i]) { d[i*4+3] = 255; continue; }   // background stays black
-        const t = Math.log(1 + grid[i]) / logMax;      // 0..1 log-normalised density
-
-        let hue, sat, lum;
-        if (cStyle === 'position') {
-          // Hue by angle from centre → each lobe of the attractor gets its own colour
-          const nx = (i % W) / W - 0.5;
-          const ny = Math.floor(i / W) / H - 0.5;
-          const angle = (Math.atan2(ny, nx) / (Math.PI * 2) + 1) % 1;
-          hue = (baseHue + angle * hueSpan * 2.0) % 1;
-          sat = 0.85;
-          lum = Math.min(0.87, 0.08 + t * 0.79) * p.brightness;
-        } else if (cStyle === 'rainbow') {
-          // Hue cycles from sparse (outer) → dense (core)
-          hue = (baseHue + t * hueSpan * 1.6) % 1;
-          sat = 0.88;
-          lum = Math.min(0.82, 0.10 + t * 0.72) * p.brightness;
+        if (p.autoColor) {
+          let hue, sat, lum;
+          if (cStyle === 'position') {
+            hue = (fract((x + y + z) * 0.25 + baseHue) + 1) % 1;
+            sat = 0.85;
+            lum = Math.min(0.80, 0.28 + Math.abs(z) * sc_ * 0.3) * p.brightness;
+          } else if (cStyle === 'rainbow') {
+            hue = (baseHue + (i / nPoints) * hueSpan) % 1;
+            sat = 0.9;
+            lum = 0.48 * p.brightness;
+          } else {
+            hue = (baseHue + Math.abs(z) * hueSpan) % 1;
+            sat = 0.80;
+            lum = Math.min(0.80, 0.30 + Math.abs(z * sc_) * 0.35) * p.brightness;
+          }
+          _c.setHSL((hue + 1) % 1, Math.max(0.15, sat), lum);
         } else {
-          // Flame: dark saturated edge → bright white-hot core
-          hue = baseHue;
-          sat = Math.max(0.05, 0.88 - t * 0.78);
-          lum = Math.min(0.93, 0.05 + t * 0.88) * p.brightness;
+          const c1 = new THREE.Color(p.colorPrimary);
+          const c2 = new THREE.Color(p.colorSecondary);
+          _c.copy(c1).lerp(c2, (Math.sin(x) + 1) * 0.5).multiplyScalar(p.brightness);
         }
-
-        _c.setHSL((hue + 1) % 1, sat, lum);
-        d[i*4  ] = (_c.r * 255) | 0;
-        d[i*4+1] = (_c.g * 255) | 0;
-        d[i*4+2] = (_c.b * 255) | 0;
-        d[i*4+3] = 255;
+        colArr[i * 3    ] = _c.r;
+        colArr[i * 3 + 1] = _c.g;
+        colArr[i * 3 + 2] = _c.b;
       }
 
-      ctx.putImageData(img, 0, 0);
-      this._dTex.needsUpdate = true;
-      this._dPlane.scale.setScalar(p.scale);
+      this._points.geometry.getAttribute('position').needsUpdate = true;
+      this._points.geometry.getAttribute('color').needsUpdate    = true;
+      this._points.geometry.setDrawRange(0, nPoints);
+      this._points.material.size    = 0.010 * p.scale * p.pointSize * 0.5;
+      this._points.material.opacity = Math.min(0.95, 0.85 * p.brightness);
       return;
     }
 
