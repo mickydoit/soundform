@@ -152,6 +152,84 @@ export class SoundRenderer {
     return this.renderer.domElement;
   }
 
+  exportSVG() {
+    this.renderer.render(this.scene, this.camera);
+
+    const canvas = this.renderer.domElement;
+    const w = canvas.width;
+    const h = canvas.height;
+
+    // Build MVP matrix: projection × view × group-world-rotation
+    this.group.updateMatrixWorld(true);
+    const mvp = new THREE.Matrix4()
+      .multiplyMatrices(this.camera.projectionMatrix, this.camera.matrixWorldInverse)
+      .multiply(this.group.matrixWorld);
+
+    const parts = [
+      '<?xml version="1.0" encoding="UTF-8"?>',
+      `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">`,
+      `  <rect width="${w}" height="${h}" fill="#03040a"/>`,
+    ];
+
+    const vec = new THREE.Vector3();
+
+    if (this._points.visible) {
+      const geo   = this._points.geometry;
+      const total = Math.min(geo.drawRange.count, geo.getAttribute('position').array.length / 3);
+      const pos   = geo.getAttribute('position').array;
+      const col   = geo.getAttribute('color').array;
+
+      // Figma rasterises SVGs above ~3 MB. Cap at 15 k circles; scale radius up
+      // to compensate for the lower density (area ∝ r², so scale by √stride).
+      const MAX_SVG_PTS = 15000;
+      const stride  = Math.max(1, Math.ceil(total / MAX_SVG_PTS));
+      const fovCot  = this.camera.projectionMatrix.elements[5];
+      const baseR   = (this._points.material.size * fovCot * h * 0.5) / this.camera.position.z;
+      const r       = Math.max(0.5, baseR * Math.sqrt(stride)).toFixed(1);
+      const op      = this._points.material.opacity.toFixed(2);
+
+      // Helper: float 0-1 → two-digit hex byte
+      const hex2 = v => Math.round(Math.max(0, Math.min(255, v * 255))).toString(16).padStart(2, '0');
+
+      parts.push('  <g>');
+      for (let i = 0; i < total; i += stride) {
+        vec.set(pos[i * 3], pos[i * 3 + 1], pos[i * 3 + 2]);
+        vec.applyMatrix4(mvp);
+        if (vec.z < -1 || vec.z > 1) continue; // outside near/far clip planes
+
+        const sx  = ((vec.x + 1) * 0.5 * w).toFixed(1);
+        const sy  = ((1 - vec.y) * 0.5 * h).toFixed(1);
+        const hex = `#${hex2(col[i * 3])}${hex2(col[i * 3 + 1])}${hex2(col[i * 3 + 2])}`;
+        parts.push(`    <circle cx="${sx}" cy="${sy}" r="${r}" fill="${hex}" opacity="${op}"/>`);
+      }
+      parts.push('  </g>');
+    }
+
+    if (this._linesGroup.visible) {
+      for (const line of this._linesGroup.children) {
+        if (!line.visible) continue;
+        const geo   = line.geometry;
+        const count = geo.drawRange.count;
+        const pos   = geo.getAttribute('position').array;
+        const stroke = '#' + line.material.color.getHexString();
+        const op     = line.material.opacity.toFixed(2);
+        const pts    = [];
+
+        for (let i = 0; i < count; i++) {
+          vec.set(pos[i * 3], pos[i * 3 + 1], pos[i * 3 + 2]);
+          vec.applyMatrix4(mvp);
+          if (vec.z > 1) continue;
+          pts.push(`${((vec.x + 1) * 0.5 * w).toFixed(1)},${((1 - vec.y) * 0.5 * h).toFixed(1)}`);
+        }
+        if (pts.length > 1)
+          parts.push(`  <polyline points="${pts.join(' ')}" fill="none" stroke="${stroke}" stroke-width="1.2" opacity="${op}"/>`);
+      }
+    }
+
+    parts.push('</svg>');
+    return parts.join('\n');
+  }
+
   // ── Spherical Chladni ─────────────────────────────────────────
   //   Classic Chladni patterns lifted onto a sphere surface.
   //   f(θ,φ) = Σ_k amp_k · [sin(m_k·θ)·cos(n_k·φ) + sin(n_k·θ)·cos(m_k·φ)]
@@ -162,7 +240,7 @@ export class SoundRenderer {
     const react = p.reactivity;
     const fft   = a.fftSnapshot || new Float32Array(128);
 
-    // Derive up to 4 mode pairs from the loudest FFT peaks
+    // Derive up to 6 mode pairs from the loudest FFT peaks
     const peaks = [];
     for (let i = 2; i < 80; i++) {
       if (fft[i] > 0.04 && fft[i] > fft[i - 1] && fft[i] > fft[i + 1]) {
@@ -170,13 +248,21 @@ export class SoundRenderer {
       }
     }
     peaks.sort((a, b) => b.e - a.e);
-    while (peaks.length < 2) peaks.push({ k: 8 + peaks.length * 14, e: 0.25 });
+    // Fallback peaks derived from audio features so quiet recordings still vary
+    while (peaks.length < 3) {
+      const kBase = 5 + Math.round((a.dominantFreq * 47 + a.spectralCentroid * 31 + peaks.length * 23) % 68);
+      peaks.push({ k: Math.max(2, kBase), e: 0.15 + a.spectralCentroid * 0.15 });
+    }
 
-    const modes = peaks.slice(0, 4).map(pk => {
+    // Wider multipliers (14/11 vs 7/6) expand the integer range so different
+    // recordings produce distinct (m,n) pairs. spectralSpread drives n independently
+    // of m so tonal vs noisy audio looks different.
+    const modes = peaks.slice(0, 6).map((pk, idx) => {
       const t = pk.k / 80;
-      const m = Math.max(1, 1 + Math.round(t * 7 * react));
-      let n   = Math.max(1, 1 + Math.round((1 - t + a.spectralCentroid * 0.4) * 6 * react));
+      const m = Math.max(1, 2 + Math.round(t * 14 * react) + idx * 2);
+      let n   = Math.max(1, 2 + Math.round((1 - t + a.spectralCentroid * 0.7 + a.spectralSpread * 0.5) * 11 * react) + idx);
       if (n === m) n = m + 1;
+      if (n === m) n = m + 2;
       return { m, n, amp: pk.e };
     });
 

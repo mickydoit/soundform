@@ -1,6 +1,6 @@
-import { AudioEngine }  from './audio.js?v=15';
-import { SoundRenderer } from './renderer.js?v=15';
-import { exportCanvas }  from './exporter.js?v=15';
+import { AudioEngine }  from './audio.js?v=17';
+import { SoundRenderer } from './renderer.js?v=17';
+import { exportCanvas }  from './exporter.js?v=17';
 
 const audio = new AudioEngine();
 let renderer = null;
@@ -320,7 +320,18 @@ function bindExport() {
   document.querySelectorAll('.btn-export').forEach(btn => {
     btn.addEventListener('click', async () => {
       try {
-        await exportCanvas(renderer.getCanvas(), btn.dataset.fmt);
+        const fmt = btn.dataset.fmt;
+        if (fmt === 'svg') {
+          const svg = renderer.exportSVG();
+          const url = URL.createObjectURL(new Blob([svg], { type: 'image/svg+xml' }));
+          const a = Object.assign(document.createElement('a'), { href: url, download: 'soundform.svg' });
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          setTimeout(() => URL.revokeObjectURL(url), 3000);
+        } else {
+          await exportCanvas(renderer.getCanvas(), fmt);
+        }
       } catch (e) {
         setStatus(`Export error: ${e.message}`);
       }
