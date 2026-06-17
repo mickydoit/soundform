@@ -1,6 +1,6 @@
-import { AudioEngine }  from './audio.js?v=20';
-import { SoundRenderer } from './renderer.js?v=20';
-import { exportCanvas }  from './exporter.js?v=20';
+import { AudioEngine }  from './audio.js?v=21';
+import { SoundRenderer } from './renderer.js?v=21';
+import { exportCanvas }  from './exporter.js?v=21';
 
 const audio = new AudioEngine();
 let renderer = null;
@@ -30,9 +30,9 @@ const params = {
   colorAccent:    '#ff6644',
   brightness:     0.9,
   glow:           0.4,
-  attractorType:  'thomas',
+  attractorType:  'dejong',
   chaos:          0.5,
-  colorStyle:     'speed',
+  colorStyle:     'position',
 };
 
 let vuFill, vuWrap, statusEl, clearBtn, submitBtn;
