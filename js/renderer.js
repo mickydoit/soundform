@@ -526,12 +526,13 @@ export class SoundRenderer {
     const react = p.reactivity;
 
     // Map audio features to sine map parameters
-    const pa = 1.0 + a.spectralCentroid * react * 2.8;
-    const pb = 1.0 + a.dominantFreq    * react * 3.2;
-    const pc = 0.8 + (a.spectralSpread || 0.2) * react * 0.8;
-    const pd = -0.8 + a.bass   * react * 1.6;
-    const pe = -0.4 + a.highMid * react * 1.2;
-    const pf =  0.5 + a.high   * react * 0.8;
+    // a,b ≥ 1.8 ensures the map stays chaotic; d,e,f ≥ 0.6 ensures coupling
+    const pa = 1.8 + a.spectralCentroid * react * 2.2;
+    const pb = 2.2 + a.dominantFreq    * react * 2.4;
+    const pc = 1.0 + (a.spectralSpread || 0.3) * react * 0.5;
+    const pd = 0.6 + a.bass    * react * 0.8;
+    const pe = 0.5 + a.lowMid  * react * 0.8;
+    const pf = 0.6 + a.high    * react * 0.7;
 
     const nPoints = Math.min(MAX_DENSITY, Math.floor(p.density));
     const sc      = p.scale * 0.42;
@@ -587,12 +588,13 @@ export class SoundRenderer {
   _buildAttractorDensity(a, p) {
     const react = p.reactivity;
 
-    const pa = 1.0 + a.spectralCentroid * react * 2.8;
-    const pb = 1.0 + a.dominantFreq    * react * 3.2;
-    const pc = 0.8 + (a.spectralSpread || 0.2) * react * 0.8;
-    const pd = -0.8 + a.bass    * react * 1.6;
-    const pe = -0.4 + a.highMid * react * 1.2;
-    const pf =  0.5 + a.high    * react * 0.8;
+    // a,b ≥ 1.8 ensures the map stays chaotic; d,e,f ≥ 0.6 ensures coupling
+    const pa = 1.8 + a.spectralCentroid * react * 2.2;
+    const pb = 2.2 + a.dominantFreq    * react * 2.4;
+    const pc = 1.0 + (a.spectralSpread || 0.3) * react * 0.5;
+    const pd = 0.6 + a.bass    * react * 0.8;
+    const pe = 0.5 + a.lowMid  * react * 0.8;
+    const pf = 0.6 + a.high    * react * 0.7;
 
     const GRID  = 128;
     const RANGE = 2.5;
