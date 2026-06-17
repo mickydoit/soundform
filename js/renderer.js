@@ -544,22 +544,28 @@ export class SoundRenderer {
     const chaos  = p.chaos         ?? 0.5;
     const react  = p.reactivity;
 
-    // Divide FFT into 4 equal bands → 4 independent shape parameters.
-    // Every distinct sound produces a different (q1,q2,q3,q4) profile → different attractor.
     const fft = a.fftSnapshot;
-    let q1=0, q2=0, q3=0, q4=0;
-    for (let i=0;  i<32;  i++) q1 += fft[i];
-    for (let i=32; i<64;  i++) q2 += fft[i];
-    for (let i=64; i<96;  i++) q3 += fft[i];
-    for (let i=96; i<128; i++) q4 += fft[i];
-    q1/=32; q2/=32; q3/=32; q4/=32;
 
-    // chaos widens the parameter range; each band drives one parameter across [-spread, +spread]
-    const spread = 1.4 + chaos * 1.1;
-    const pa = -spread + q1 * spread * 2.2;
-    const pb = -spread + q2 * spread * 2.2;
-    const pc = -spread + q3 * spread * 2.2;
-    const pd = -spread + q4 * spread * 2.2;
+    // Audio features that reliably differ between sounds:
+    //   sc  = spectral centroid (brightness: 0=bass, 1=treble)
+    //   df  = dominant frequency (pitch)
+    //   bs  = bass energy
+    //   hi  = treble energy
+    //   sp  = spectral spread (how wide the frequency content is)
+    const sc = a.spectralCentroid;
+    const df = a.dominantFreq;
+    const bs = a.bass;
+    const hi = a.high;
+    const sp = a.spectralSpread || 0.3;
+
+    // Map each feature through sin so parameters span full [-r, +r]
+    // even when the raw feature values cluster in a narrow range.
+    // Different phases/frequencies decorrelate pa, pb, pc, pd from each other.
+    const r  = 1.8 + chaos * 0.9;   // 1.8..2.7 — chaos widens the explored region
+    const pa = r * Math.sin(sc * 2.7 * Math.PI);
+    const pb = r * Math.sin(df * 2.1 * Math.PI + 0.9);
+    const pc = r * Math.sin((bs - hi + 1.0) * 1.45 * Math.PI);
+    const pd = r * Math.sin((sc + df * 0.7 + sp * 0.4) * 1.6 * Math.PI + 0.4);
 
     // Hue: full spectrum — bass sounds → warm (red/orange), treble → cool (blue/violet)
     const baseHue = p.autoColor ? (a.dominantFreq * 0.72 + a.spectralCentroid * 0.28) % 1 : 0;
@@ -568,7 +574,7 @@ export class SoundRenderer {
     // ── De Jong & Clifford: density-grid render ──────────────────
     if (type === 'dejong' || type === 'clifford') {
       const W = this._dW, H = this._dH;
-      const STEPS = 700000;
+      const STEPS = 900000;
       const grid  = new Int32Array(W * H);
 
       let x = 0.1, y = 0.1;
