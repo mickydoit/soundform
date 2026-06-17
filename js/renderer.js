@@ -516,133 +516,104 @@ export class SoundRenderer {
     this._points.material.opacity = Math.min(0.95, 0.88 * p.brightness);
   }
 
-  // ── Thomas attractor particle cloud ──────────────────────────
-  //   ẋ = sin(y)−b·x, ẏ = sin(z)−b·y, ż = sin(x)−b·z
-  //   Each detected frequency peak drives its own b and hue:
-  //   low notes → b near 0.10 (complex, loopy), high notes → b near 0.185 (tighter).
-  //   Speed-based brightness: slow regions dwell on the manifold = bright streaks.
+  // ── 3D Sine Map attractor ────────────────────────────────────
+  //   x(n+1) = sin(a·y) + d·sin(b·z)
+  //   y(n+1) = sin(b·z) + e·sin(c·x)
+  //   z(n+1) = sin(c·x) + f·sin(a·y)
+  //   Audio drives a,b,c (shape frequency) and d,e,f (shape amplitude).
+  //   Produces twisted ribbon / shell forms like the reference images.
   _buildAttractor(a, p) {
     const react = p.reactivity;
-    const dt    = 0.05;
-    const fft   = a.fftSnapshot || new Float32Array(128);
 
-    // Detect prominent frequency peaks — each one drives its own attractor trajectory
-    const peaks = [];
-    for (let i = 2; i < 100; i++) {
-      if (fft[i] > 0.04 && fft[i] > fft[i - 1] && fft[i] > fft[i + 1])
-        peaks.push({ k: i, e: fft[i] });
-    }
-    peaks.sort((a, b) => b.e - a.e);
-    while (peaks.length < 2) {
-      peaks.push({ k: 5 + peaks.length * 30, e: 0.2 + a.bass * 0.2 });
-    }
+    // Map audio features to sine map parameters
+    const pa = 1.0 + a.spectralCentroid * react * 2.8;
+    const pb = 1.0 + a.dominantFreq    * react * 3.2;
+    const pc = 0.8 + (a.spectralSpread || 0.2) * react * 0.8;
+    const pd = -0.8 + a.bass   * react * 1.6;
+    const pe = -0.4 + a.highMid * react * 1.2;
+    const pf =  0.5 + a.high   * react * 0.8;
 
-    const nSeeds = Math.max(1, Math.min(8, 2 + Math.round(a.spectralCentroid * react * 5)));
-    // Low-freq peaks → b near 0.10 (chaotic, loopy); high-freq → b near 0.185 (structured)
-    const seedBs   = peaks.slice(0, nSeeds).map(pk =>
-      Math.max(0.10, Math.min(0.185, 0.10 + (pk.k / 100) * 0.085 - a.bass * react * 0.03)));
-    // Each peak gets a distinct hue so different notes are visually separable
-    const seedHues = peaks.slice(0, nSeeds).map(pk => (0.72 - (pk.k / 100) * 0.55 + 1) % 1);
-
-    const nPoints      = Math.min(MAX_DENSITY, Math.floor(p.density));
-    const warmup       = 4000;
-    const stepsPerSeed = Math.floor(nPoints / nSeeds);
+    const nPoints = Math.min(MAX_DENSITY, Math.floor(p.density));
+    const sc      = p.scale * 0.42;
+    const baseHue = p.autoColor ? (0.72 - a.spectralCentroid * 0.18 + 1) % 1 : 0;
 
     const posArr = this._points.geometry.getAttribute('position').array;
     const colArr = this._points.geometry.getAttribute('color').array;
     const _c     = new THREE.Color();
-    const sc     = p.scale * 0.30;
 
-    const fract = x => x - Math.floor(x);
-    const hash  = s => fract(Math.sin(s * 127.1) * 43758.5453);
+    let x = 0.1, y = 0.0, z = 0.0;
+    for (let i = 0; i < 1000; i++) {
+      const nx = Math.sin(pa * y) + pd * Math.sin(pb * z);
+      const ny = Math.sin(pb * z) + pe * Math.sin(pc * x);
+      const nz = Math.sin(pc * x) + pf * Math.sin(pa * y);
+      x = nx; y = ny; z = nz;
+    }
 
-    let count = 0;
+    for (let i = 0; i < nPoints; i++) {
+      const nx = Math.sin(pa * y) + pd * Math.sin(pb * z);
+      const ny = Math.sin(pb * z) + pe * Math.sin(pc * x);
+      const nz = Math.sin(pc * x) + pf * Math.sin(pa * y);
+      x = nx; y = ny; z = nz;
 
-    for (let seed = 0; seed < nSeeds && count < nPoints; seed++) {
-      const b       = seedBs[seed]   ?? 0.15;
-      const peakHue = seedHues[seed] ?? 0.72;
+      posArr[i * 3    ] = x * sc;
+      posArr[i * 3 + 1] = y * sc;
+      posArr[i * 3 + 2] = z * sc;
 
-      let x = (hash(seed * 3.1)  - 0.5) * 0.8;
-      let y = (hash(seed * 7.3)  - 0.5) * 0.8;
-      let z = (hash(seed * 13.7) - 0.5) * 0.8;
-
-      for (let i = 0; i < warmup; i++) {
-        const dx = Math.sin(y) - b * x;
-        const dy = Math.sin(z) - b * y;
-        const dz = Math.sin(x) - b * z;
-        x += dx * dt; y += dy * dt; z += dz * dt;
+      const t = (y + 2) / 4;
+      if (p.autoColor) {
+        const hue = (baseHue + t * 0.45) % 1;
+        const lum = Math.min(0.85, 0.30 + Math.abs(x) * 0.28) * p.brightness;
+        _c.setHSL(hue, 0.85, lum);
+      } else {
+        const c1 = new THREE.Color(p.colorPrimary);
+        const c2 = new THREE.Color(p.colorSecondary);
+        _c.copy(c1).lerp(c2, t).multiplyScalar(p.brightness);
       }
-
-      const step = Math.min(stepsPerSeed, nPoints - count);
-      for (let i = 0; i < step; i++) {
-        const dx = Math.sin(y) - b * x;
-        const dy = Math.sin(z) - b * y;
-        const dz = Math.sin(x) - b * z;
-        x += dx * dt; y += dy * dt; z += dz * dt;
-
-        posArr[count * 3    ] = x * sc;
-        posArr[count * 3 + 1] = y * sc;
-        posArr[count * 3 + 2] = z * sc;
-
-        const speed  = Math.sqrt(dx * dx + dy * dy + dz * dz);
-        // Slow regions dwell on the attractor manifold → brighter (density proxy).
-        const bright = Math.min(1.0, 0.25 / (speed + 0.12));
-
-        if (p.autoColor) {
-          const hue = (peakHue + speed * 0.10) % 1;
-          const sat = 0.80 - bright * 0.45;
-          const lum = Math.min(0.92, 0.30 + bright * 0.62) * p.brightness;
-          _c.setHSL(hue, Math.max(0.1, sat), lum);
-        } else {
-          const c1 = new THREE.Color(p.colorPrimary);
-          const c2 = new THREE.Color(p.colorSecondary);
-          _c.copy(c1).lerp(c2, 1 - bright).multiplyScalar(p.brightness * (0.3 + bright * 0.7));
-        }
-        colArr[count * 3    ] = _c.r;
-        colArr[count * 3 + 1] = _c.g;
-        colArr[count * 3 + 2] = _c.b;
-        count++;
-      }
+      colArr[i * 3    ] = _c.r;
+      colArr[i * 3 + 1] = _c.g;
+      colArr[i * 3 + 2] = _c.b;
     }
 
     this._points.geometry.getAttribute('position').needsUpdate = true;
     this._points.geometry.getAttribute('color').needsUpdate    = true;
-    this._points.geometry.setDrawRange(0, count);
-    this._points.material.size    = 0.014 * p.scale * p.pointSize * 0.5;
+    this._points.geometry.setDrawRange(0, nPoints);
+    this._points.material.size    = 0.009 * p.scale * p.pointSize * 0.5;
     this._points.material.opacity = Math.min(0.95, 0.85 * p.brightness);
   }
 
-
-  // ── Thomas attractor — density grid (high detail) ────────────
-  //   Accumulates 10M trajectory steps into a 128³ voxel grid,
-  //   then colours each occupied cell by log-density: bright = path dwells here.
+  // ── 3D Sine Map — density grid (high detail) ─────────────────
+  //   Same sine map, 10M iterations accumulated into a 128³ voxel grid.
+  //   Colour = log-density: dark where the path barely passes, bright where it dwells.
   _buildAttractorDensity(a, p) {
     const react = p.reactivity;
-    const b  = Math.max(0.10, 0.185 - a.bass * react * 0.07 - (a.spectralSpread || 0) * react * 0.02);
-    const dt = 0.05;
+
+    const pa = 1.0 + a.spectralCentroid * react * 2.8;
+    const pb = 1.0 + a.dominantFreq    * react * 3.2;
+    const pc = 0.8 + (a.spectralSpread || 0.2) * react * 0.8;
+    const pd = -0.8 + a.bass    * react * 1.6;
+    const pe = -0.4 + a.highMid * react * 1.2;
+    const pf =  0.5 + a.high    * react * 0.8;
 
     const GRID  = 128;
-    const RANGE = 4.5;
+    const RANGE = 2.5;
     const CELL  = (2 * RANGE) / GRID;
     const GRID3 = GRID * GRID * GRID;
     const grid  = new Int32Array(GRID3);
 
-    // Warmup
     let x = 0.1, y = 0.0, z = 0.0;
-    for (let i = 0; i < 4000; i++) {
-      const dx = Math.sin(y) - b * x;
-      const dy = Math.sin(z) - b * y;
-      const dz = Math.sin(x) - b * z;
-      x += dx * dt; y += dy * dt; z += dz * dt;
+    for (let i = 0; i < 1000; i++) {
+      const nx = Math.sin(pa * y) + pd * Math.sin(pb * z);
+      const ny = Math.sin(pb * z) + pe * Math.sin(pc * x);
+      const nz = Math.sin(pc * x) + pf * Math.sin(pa * y);
+      x = nx; y = ny; z = nz;
     }
 
-    // Accumulate into density grid
     let maxDensity = 0;
     for (let i = 0; i < 10000000; i++) {
-      const dx = Math.sin(y) - b * x;
-      const dy = Math.sin(z) - b * y;
-      const dz = Math.sin(x) - b * z;
-      x += dx * dt; y += dy * dt; z += dz * dt;
+      const nx = Math.sin(pa * y) + pd * Math.sin(pb * z);
+      const ny = Math.sin(pb * z) + pe * Math.sin(pc * x);
+      const nz = Math.sin(pc * x) + pf * Math.sin(pa * y);
+      x = nx; y = ny; z = nz;
 
       const gx = (x + RANGE) / CELL | 0;
       const gy = (y + RANGE) / CELL | 0;
@@ -654,7 +625,7 @@ export class SoundRenderer {
       }
     }
 
-    // Find threshold that keeps rendered points under MAX_DENSITY
+    // Adaptive threshold: keep rendered points under MAX_DENSITY
     let minDensity = 2;
     let cellCount = 0;
     for (let i = 0; i < GRID3; i++) if (grid[i] >= minDensity) cellCount++;
@@ -664,11 +635,10 @@ export class SoundRenderer {
       for (let i = 0; i < GRID3; i++) if (grid[i] >= minDensity) cellCount++;
     }
 
-    // Render occupied cells coloured by log-density
     const posArr = this._points.geometry.getAttribute('position').array;
     const colArr = this._points.geometry.getAttribute('color').array;
     const _c     = new THREE.Color();
-    const sc     = p.scale * 0.30;
+    const sc     = p.scale * 0.42;
     const logMax = Math.log(maxDensity + 1);
     let count = 0;
 
@@ -685,6 +655,7 @@ export class SoundRenderer {
           const t = Math.log(density + 1) / logMax;
 
           if (p.autoColor) {
+            // Violet → pink → near-white at density peaks
             const hue = (0.78 - t * 0.25 + 1) % 1;
             const sat = Math.max(0.05, 0.95 - t * 0.70);
             const lum = Math.min(0.95, 0.10 + t * 0.85) * p.brightness;
