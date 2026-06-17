@@ -516,30 +516,23 @@ export class SoundRenderer {
     this._points.material.opacity = Math.min(0.95, 0.88 * p.brightness);
   }
 
-  // ── Thomas attractor particle cloud ──────────────────────────
-  //   ẋ = sin(y)−b·x, ẏ = sin(z)−b·y, ż = sin(x)−b·z
-  //   b (damping) driven by bass: lower = more loops, more complexity.
-  //   Speed-based brightness: slow regions dwell on the manifold = bright streaks.
+  // ── Thomas / Aizawa / Halvorsen / Dadras attractor cloud ────────
   _buildAttractor(a, p) {
-    const react = p.reactivity;
-    // Thomas attractor is chaotic for b < 0.208; above that it collapses to a fixed point.
-    // Bass energy lowers b toward 0.10 for denser, more complex loops.
-    const b  = Math.max(0.10, 0.185 - a.bass * react * 0.07 - (a.spectralSpread || 0) * react * 0.02);
-    const dt = 0.05;
+    const react      = p.reactivity;
+    const chaos      = p.chaos      ?? 0.5;
+    const type       = p.attractorType ?? 'thomas';
+    const colorStyle = p.colorStyle  ?? 'speed';
 
-    const nPoints     = Math.min(MAX_DENSITY, Math.floor(p.density));
-    const nSeeds      = Math.max(1, Math.min(8, 2 + Math.round(a.spectralCentroid * react * 5)));
-    const warmup      = 4000;
+    const nPoints      = Math.min(MAX_DENSITY, Math.floor(p.density));
+    const nSeeds       = Math.max(1, Math.min(8, 2 + Math.round(a.spectralCentroid * react * 5)));
     const stepsPerSeed = Math.floor(nPoints / nSeeds);
 
     const posArr = this._points.geometry.getAttribute('position').array;
     const colArr = this._points.geometry.getAttribute('color').array;
     const _c     = new THREE.Color();
-    const sc     = p.scale * 0.30;
+    const fract  = x => x - Math.floor(x);
+    const hash   = s => fract(Math.sin(s * 127.1) * 43758.5453);
     const baseHue = p.autoColor ? (0.72 - a.spectralCentroid * 0.18 + 1) % 1 : 0;
-
-    const fract = x => x - Math.floor(x);
-    const hash  = s => fract(Math.sin(s * 127.1) * 43758.5453);
 
     let count = 0;
 
@@ -547,36 +540,93 @@ export class SoundRenderer {
       let x = (hash(seed * 3.1)  - 0.5) * 0.8;
       let y = (hash(seed * 7.3)  - 0.5) * 0.8;
       let z = (hash(seed * 13.7) - 0.5) * 0.8;
+      let dt = 0.05, sc = p.scale * 0.30, warmup = 4000;
+      let step;
 
-      for (let i = 0; i < warmup; i++) {
-        const dx = Math.sin(y) - b * x;
-        const dy = Math.sin(z) - b * y;
-        const dz = Math.sin(x) - b * z;
-        x += dx * dt; y += dy * dt; z += dz * dt;
+      if (type === 'thomas') {
+        const b = Math.max(0.09, 0.20 - chaos * 0.10 - a.bass * react * 0.04);
+        step = () => {
+          const dx = Math.sin(y) - b * x;
+          const dy = Math.sin(z) - b * y;
+          const dz = Math.sin(x) - b * z;
+          x += dx * dt; y += dy * dt; z += dz * dt;
+          return Math.sqrt(dx*dx + dy*dy + dz*dz);
+        };
+
+      } else if (type === 'aizawa') {
+        const aa = 0.95, ab = 0.7, ac = 0.55 + chaos * 0.12 + a.highMid * react * 0.05;
+        const ad = 3.5,  ae = 0.25, af = 0.1;
+        dt = 0.01; sc = p.scale * 0.38; warmup = 5000;
+        x = (hash(seed * 3.1) - 0.5) * 0.3 + 0.1;
+        y = (hash(seed * 7.3) - 0.5) * 0.3;
+        z = (hash(seed * 13.7) - 0.5) * 0.3 + 0.3;
+        step = () => {
+          const dx = (z - ab) * x - ad * y;
+          const dy = ad * x + (z - ab) * y;
+          const dz = ac + aa * z - z*z*z/3 - (x*x + y*y) * (1 + ae * z) + af * z * x*x*x;
+          x += dx * dt; y += dy * dt; z += dz * dt;
+          return Math.sqrt(dx*dx + dy*dy + dz*dz);
+        };
+
+      } else if (type === 'halvorsen') {
+        const ha = 1.27 + (1 - chaos) * 0.28 - a.highMid * react * 0.05;
+        dt = 0.005; sc = p.scale * 0.065; warmup = 5000;
+        x = (hash(seed * 3.1) - 0.5) * 3;
+        y = (hash(seed * 7.3) - 0.5) * 3;
+        z = (hash(seed * 13.7) - 0.5) * 3;
+        step = () => {
+          const dx = -ha * x - 4*y - 4*z - y*y;
+          const dy = -ha * y - 4*z - 4*x - z*z;
+          const dz = -ha * z - 4*x - 4*y - x*x;
+          x += dx * dt; y += dy * dt; z += dz * dt;
+          return Math.sqrt(dx*dx + dy*dy + dz*dz);
+        };
+
+      } else { // dadras
+        const da = 3, db = 2.7, dc = 1.5 + chaos * 0.5 + a.highMid * react * 0.2;
+        const dd = 2, de = 9 - a.bass * react * 1.5;
+        dt = 0.004; sc = p.scale * 0.085; warmup = 5000;
+        x = (hash(seed * 3.1) - 0.5) * 2;
+        y = (hash(seed * 7.3) - 0.5) * 2;
+        z = (hash(seed * 13.7) - 0.5) * 4;
+        step = () => {
+          const dx = y - da * x + db * y * z;
+          const dy = dc * y - x * z + z;
+          const dz = dd * x * y - de * z;
+          x += dx * dt; y += dy * dt; z += dz * dt;
+          return Math.sqrt(dx*dx + dy*dy + dz*dz);
+        };
       }
 
-      const step = Math.min(stepsPerSeed, nPoints - count);
-      for (let i = 0; i < step; i++) {
-        const dx = Math.sin(y) - b * x;
-        const dy = Math.sin(z) - b * y;
-        const dz = Math.sin(x) - b * z;
-        x += dx * dt; y += dy * dt; z += dz * dt;
+      for (let i = 0; i < warmup; i++) step();
 
+      const stepCount = Math.min(stepsPerSeed, nPoints - count);
+      for (let i = 0; i < stepCount; i++) {
+        const speed = step();
         posArr[count * 3    ] = x * sc;
         posArr[count * 3 + 1] = y * sc;
         posArr[count * 3 + 2] = z * sc;
 
-        const speed  = Math.sqrt(dx * dx + dy * dy + dz * dz);
-        // Slow regions dwell on the attractor manifold → brighter (density proxy).
-        // Tuned so typical speed 0.35 → bright≈0.55, near-standstill → bright≈1.0.
-        const bright = Math.min(1.0, 0.25 / (speed + 0.12));
-
         if (p.autoColor) {
-          const hue = (baseHue + speed * 0.10) % 1;
-          const sat = 0.80 - bright * 0.45;          // desaturate to white at bright spots
-          const lum = Math.min(0.92, 0.30 + bright * 0.62) * p.brightness;
+          let hue, sat, lum;
+          if (colorStyle === 'position') {
+            hue = (fract((x * sc + y * sc + z * sc) * 0.8 + 0.5) + baseHue * 0.4) % 1;
+            sat = 0.85;
+            lum = Math.min(0.85, 0.35 + Math.abs(z * sc) * 0.3) * p.brightness;
+          } else if (colorStyle === 'rainbow') {
+            hue = (baseHue + (i / stepCount) * 0.85) % 1;
+            const bright = Math.min(1.0, 0.25 / (speed + 0.12));
+            sat = 0.9;
+            lum = Math.min(0.85, 0.30 + bright * 0.55) * p.brightness;
+          } else { // speed (default)
+            const bright = Math.min(1.0, 0.25 / (speed + 0.12));
+            hue = (baseHue + speed * 0.10) % 1;
+            sat = 0.80 - bright * 0.45;
+            lum = Math.min(0.92, 0.30 + bright * 0.62) * p.brightness;
+          }
           _c.setHSL(hue, Math.max(0.1, sat), lum);
         } else {
+          const bright = Math.min(1.0, 0.25 / (speed + 0.12));
           const c1 = new THREE.Color(p.colorPrimary);
           const c2 = new THREE.Color(p.colorSecondary);
           _c.copy(c1).lerp(c2, 1 - bright).multiplyScalar(p.brightness * (0.3 + bright * 0.7));
