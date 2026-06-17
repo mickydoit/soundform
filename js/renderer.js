@@ -518,33 +518,53 @@ export class SoundRenderer {
 
   // ── Thomas / Aizawa / Halvorsen / Dadras attractor cloud ────────
   _buildAttractor(a, p) {
-    const react      = p.reactivity;
-    const chaos      = p.chaos      ?? 0.5;
-    const type       = p.attractorType ?? 'thomas';
-    const colorStyle = p.colorStyle  ?? 'speed';
+    const react  = p.reactivity;
+    const chaos  = p.chaos      ?? 0.5;
+    const type   = p.attractorType ?? 'thomas';
+    const cStyle = p.colorStyle  ?? 'speed';
 
-    const nPoints      = Math.min(MAX_DENSITY, Math.floor(p.density));
-    const nSeeds       = Math.max(1, Math.min(8, 2 + Math.round(a.spectralCentroid * react * 5)));
+    const nPoints  = Math.min(MAX_DENSITY, Math.floor(p.density));
+    // Richer spectra get more seeds → more thorough exploration of the attractor
+    const nSeeds   = Math.max(1, Math.min(12,
+      3 + Math.round((a.spectralCentroid + (a.spectralSpread || 0) * 0.5) * react * 7)));
     const stepsPerSeed = Math.floor(nPoints / nSeeds);
+
+    // Hue spans the full spectrum based on pitch:
+    //   low / bass-heavy sound  → red / orange / yellow
+    //   high / treble-heavy     → green / blue / violet
+    const baseHue  = p.autoColor ? (a.dominantFreq * 0.75 + a.spectralCentroid * 0.25) % 1 : 0;
+    // Wide spectrum → more rainbow spread across the design
+    const hueSpan  = Math.max(0.15, (a.spectralSpread || 0.3) * react * 0.6);
 
     const posArr = this._points.geometry.getAttribute('position').array;
     const colArr = this._points.geometry.getAttribute('color').array;
     const _c     = new THREE.Color();
     const fract  = x => x - Math.floor(x);
     const hash   = s => fract(Math.sin(s * 127.1) * 43758.5453);
-    const baseHue = p.autoColor ? (0.72 - a.spectralCentroid * 0.18 + 1) % 1 : 0;
 
     let count = 0;
 
     for (let seed = 0; seed < nSeeds && count < nPoints; seed++) {
-      let x = (hash(seed * 3.1)  - 0.5) * 0.8;
-      let y = (hash(seed * 7.3)  - 0.5) * 0.8;
-      let z = (hash(seed * 13.7) - 0.5) * 0.8;
-      let dt = 0.05, sc = p.scale * 0.30, warmup = 4000;
-      let step;
+      // Use FFT energy at this seed's frequency band to offset the starting position
+      // → different spectra emphasise different regions of the attractor
+      const fftOff = (a.fftSnapshot[Math.min(127, seed * 16)] || 0) * 2.5;
+
+      let x, y, z, dt, sc, warmup, step;
 
       if (type === 'thomas') {
-        const b = Math.max(0.09, 0.20 - chaos * 0.10 - a.bass * react * 0.04);
+        // Thomas: b < 0.208 → chaotic. Lower b = denser / more tangled.
+        // Bass lowers b strongly; treble slightly raises it.
+        const b = Math.max(0.08,
+          0.20 - chaos * 0.10
+               - a.bass    * react * 0.07
+               - a.lowMid  * react * 0.02
+               + a.high    * react * 0.04
+        );
+        dt = 0.045 + a.high * react * 0.02; // treble = finer steps = more detail
+        sc = p.scale * 0.30; warmup = 4000;
+        x = (hash(seed * 3.1  + fftOff) - 0.5) * 1.5;
+        y = (hash(seed * 7.3  + fftOff) - 0.5) * 1.5;
+        z = (hash(seed * 13.7 + fftOff) - 0.5) * 1.5;
         step = () => {
           const dx = Math.sin(y) - b * x;
           const dy = Math.sin(z) - b * y;
@@ -554,46 +574,53 @@ export class SoundRenderer {
         };
 
       } else if (type === 'aizawa') {
-        const aa = 0.95, ab = 0.7, ac = 0.55 + chaos * 0.12 + a.highMid * react * 0.05;
-        const ad = 3.5,  ae = 0.25, af = 0.1;
+        // c controls toroid tightness: bass tightens, treble loosens
+        const ac = 0.50 + chaos * 0.15
+                       + a.highMid * react * 0.08
+                       - a.bass    * react * 0.06;
+        const aa = 0.95, ab = 0.7, ad = 3.5, ae = 0.25, af = 0.1;
         dt = 0.01; sc = p.scale * 0.38; warmup = 5000;
-        x = (hash(seed * 3.1) - 0.5) * 0.3 + 0.1;
-        y = (hash(seed * 7.3) - 0.5) * 0.3;
-        z = (hash(seed * 13.7) - 0.5) * 0.3 + 0.3;
+        x = (hash(seed * 3.1  + fftOff) - 0.5) * 0.5 + 0.1;
+        y = (hash(seed * 7.3  + fftOff) - 0.5) * 0.5;
+        z = (hash(seed * 13.7 + fftOff) - 0.5) * 0.5 + 0.3;
         step = () => {
           const dx = (z - ab) * x - ad * y;
           const dy = ad * x + (z - ab) * y;
-          const dz = ac + aa * z - z*z*z/3 - (x*x + y*y) * (1 + ae * z) + af * z * x*x*x;
-          x += dx * dt; y += dy * dt; z += dz * dt;
+          const dz = ac + aa*z - z*z*z/3 - (x*x + y*y)*(1 + ae*z) + af*z*x*x*x;
+          x += dx*dt; y += dy*dt; z += dz*dt;
           return Math.sqrt(dx*dx + dy*dy + dz*dz);
         };
 
       } else if (type === 'halvorsen') {
-        const ha = 1.27 + (1 - chaos) * 0.28 - a.highMid * react * 0.05;
+        // a ≈ 1.27–1.55; lower = more complex trefoil arms
+        const ha = 1.55 - chaos * 0.28
+                       - a.bass * react * 0.10
+                       + a.high * react * 0.05;
         dt = 0.005; sc = p.scale * 0.065; warmup = 5000;
-        x = (hash(seed * 3.1) - 0.5) * 3;
-        y = (hash(seed * 7.3) - 0.5) * 3;
-        z = (hash(seed * 13.7) - 0.5) * 3;
+        x = (hash(seed * 3.1  + fftOff) - 0.5) * 5;
+        y = (hash(seed * 7.3  + fftOff) - 0.5) * 5;
+        z = (hash(seed * 13.7 + fftOff) - 0.5) * 5;
         step = () => {
-          const dx = -ha * x - 4*y - 4*z - y*y;
-          const dy = -ha * y - 4*z - 4*x - z*z;
-          const dz = -ha * z - 4*x - 4*y - x*x;
-          x += dx * dt; y += dy * dt; z += dz * dt;
+          const dx = -ha*x - 4*y - 4*z - y*y;
+          const dy = -ha*y - 4*z - 4*x - z*z;
+          const dz = -ha*z - 4*x - 4*y - x*x;
+          x += dx*dt; y += dy*dt; z += dz*dt;
           return Math.sqrt(dx*dx + dy*dy + dz*dz);
         };
 
       } else { // dadras
-        const da = 3, db = 2.7, dc = 1.5 + chaos * 0.5 + a.highMid * react * 0.2;
-        const dd = 2, de = 9 - a.bass * react * 1.5;
+        // c and e drive the complexity of the butterfly wings
+        const dc = 1.5 + chaos * 0.5 + a.highMid * react * 0.35;
+        const de = 9.0 - a.bass * react * 2.5;
         dt = 0.004; sc = p.scale * 0.085; warmup = 5000;
-        x = (hash(seed * 3.1) - 0.5) * 2;
-        y = (hash(seed * 7.3) - 0.5) * 2;
-        z = (hash(seed * 13.7) - 0.5) * 4;
+        x = (hash(seed * 3.1  + fftOff) - 0.5) * 3;
+        y = (hash(seed * 7.3  + fftOff) - 0.5) * 3;
+        z = (hash(seed * 13.7 + fftOff) - 0.5) * 7;
         step = () => {
-          const dx = y - da * x + db * y * z;
-          const dy = dc * y - x * z + z;
-          const dz = dd * x * y - de * z;
-          x += dx * dt; y += dy * dt; z += dz * dt;
+          const dx = y - 3*x + 2.7*y*z;
+          const dy = dc*y - x*z + z;
+          const dz = 2*x*y - de*z;
+          x += dx*dt; y += dy*dt; z += dz*dt;
           return Math.sqrt(dx*dx + dy*dy + dz*dz);
         };
       }
@@ -608,23 +635,22 @@ export class SoundRenderer {
         posArr[count * 3 + 2] = z * sc;
 
         if (p.autoColor) {
+          const bright = Math.min(1.0, 0.25 / (speed + 0.12));
           let hue, sat, lum;
-          if (colorStyle === 'position') {
-            hue = (fract((x * sc + y * sc + z * sc) * 0.8 + 0.5) + baseHue * 0.4) % 1;
+          if (cStyle === 'position') {
+            hue = (fract((x * sc + y * sc + z * sc) * 0.8 + baseHue) + 1) % 1;
             sat = 0.85;
             lum = Math.min(0.85, 0.35 + Math.abs(z * sc) * 0.3) * p.brightness;
-          } else if (colorStyle === 'rainbow') {
-            hue = (baseHue + (i / stepCount) * 0.85) % 1;
-            const bright = Math.min(1.0, 0.25 / (speed + 0.12));
+          } else if (cStyle === 'rainbow') {
+            hue = (baseHue + (i / stepCount) * hueSpan) % 1;
             sat = 0.9;
             lum = Math.min(0.85, 0.30 + bright * 0.55) * p.brightness;
-          } else { // speed (default)
-            const bright = Math.min(1.0, 0.25 / (speed + 0.12));
-            hue = (baseHue + speed * 0.10) % 1;
-            sat = 0.80 - bright * 0.45;
+          } else { // speed
+            hue = (baseHue + speed * hueSpan * 0.6) % 1;
+            sat = 0.80 - bright * 0.35;
             lum = Math.min(0.92, 0.30 + bright * 0.62) * p.brightness;
           }
-          _c.setHSL(hue, Math.max(0.1, sat), lum);
+          _c.setHSL(hue, Math.max(0.15, sat), lum);
         } else {
           const bright = Math.min(1.0, 0.25 / (speed + 0.12));
           const c1 = new THREE.Color(p.colorPrimary);
