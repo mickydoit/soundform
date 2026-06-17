@@ -200,6 +200,22 @@ input[type="color"] {
   font-size: 8px; letter-spacing: .1em; color: var(--muted);
 }
 
+/* ─── Attractor sub-controls ─── */
+.sub-label {
+  font-size: 9px; font-weight: 700; letter-spacing: .12em;
+  text-transform: uppercase; color: var(--muted);
+  margin: 10px 0 6px;
+}
+.sub-btns { display: flex; gap: 4px; flex-wrap: wrap; margin-bottom: 10px; }
+.btn-sub {
+  flex: 1; min-width: 0; background: rgba(255,255,255,.04); border: 1px solid var(--border);
+  color: var(--muted); border-radius: 6px; padding: 5px 4px;
+  cursor: pointer; font-size: 10px; font-family: inherit; font-weight: 600;
+  transition: all .15s; white-space: nowrap;
+}
+.btn-sub.active { background: rgba(180,77,255,.15); border-color: rgba(180,77,255,.5); color: var(--accent2); }
+.btn-sub:hover:not(.active) { background: rgba(255,255,255,.07); color: var(--text); }
+
 /* ─── Mobile ─── */
 @media (max-width: 640px) {
   #app { flex-direction: column; }
