@@ -249,9 +249,6 @@ function bindControls() {
       document.querySelectorAll('.chladni-only').forEach(el => {
         el.style.display = params.mode === 'chladni' ? '' : 'none';
       });
-      document.querySelectorAll('.radial-only').forEach(el => {
-        el.style.display = params.mode === 'radial' ? '' : 'none';
-      });
       document.querySelectorAll('.spectral-only').forEach(el => {
         el.style.display = params.mode === 'spectral' ? '' : 'none';
       });
