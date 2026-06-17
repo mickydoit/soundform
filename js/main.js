@@ -30,6 +30,7 @@ const params = {
   colorAccent:    '#ff6644',
   brightness:     0.9,
   glow:           0.4,
+  highDetail:     false,
 };
 
 let vuFill, vuWrap, statusEl, clearBtn, submitBtn;
@@ -255,6 +256,9 @@ document.querySelectorAll('.spectral-only').forEach(el => {
       document.querySelectorAll('.timbre-only').forEach(el => {
         el.style.display = params.mode === 'timbre' ? '' : 'none';
       });
+      document.querySelectorAll('.attractor-only').forEach(el => {
+        el.style.display = params.mode === 'attractor' ? '' : 'none';
+      });
       document.querySelectorAll('.points-mode').forEach(el => {
         const pm = params.mode;
         el.style.display = (pm === 'chladni' || pm === 'spectral' || pm === 'timbre' || pm === 'attractor') ? '' : 'none';
@@ -268,6 +272,12 @@ document.querySelectorAll('.spectral-only').forEach(el => {
   chkAuto.addEventListener('change', () => {
     params.autoColor = chkAuto.checked;
     manualColors.classList.toggle('faded', params.autoColor);
+    rerenderIfCaptured();
+  });
+
+  const chkHighDetail = document.getElementById('chk-high-detail');
+  if (chkHighDetail) chkHighDetail.addEventListener('change', () => {
+    params.highDetail = chkHighDetail.checked;
     rerenderIfCaptured();
   });
 
