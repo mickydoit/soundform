@@ -51,7 +51,6 @@
       <div class="section-title">Mode</div>
       <div id="mode-btns">
         <button class="btn-mode active" data-mode="chladni">Chladni</button>
-        <button class="btn-mode" data-mode="radial">Radial</button>
         <button class="btn-mode" data-mode="spectral">Spectral</button>
         <button class="btn-mode" data-mode="timbre">Timbre</button>
         <button class="btn-mode" data-mode="attractor">Attractor</button>
@@ -74,15 +73,6 @@
       <div class="sl-row points-mode">
         <div class="sl-label"><span>Point Size</span><span id="val-point-size">2.0</span></div>
         <input type="range" id="sl-point-size" min="0.5" max="6" step="0.5" value="2.0">
-      </div>
-      <!-- Radial controls -->
-      <div class="sl-row radial-only" style="display:none">
-        <div class="sl-label"><span>Rings</span><span id="val-layers">12</span></div>
-        <input type="range" id="sl-layers" min="4" max="48" step="1" value="12">
-      </div>
-      <div class="sl-row radial-only" style="display:none">
-        <div class="sl-label"><span>Ring Twist</span><span id="val-twist">0.5</span></div>
-        <input type="range" id="sl-twist" min="0" max="3" step="0.05" value="0.5">
       </div>
       <!-- Spectral controls -->
       <div class="sl-row spectral-only" style="display:none">
@@ -130,10 +120,6 @@
       <div class="sl-row">
         <div class="sl-label"><span>Brightness</span><span id="val-brightness">0.9</span></div>
         <input type="range" id="sl-brightness" min="0.1" max="2.0" step="0.05" value="0.9">
-      </div>
-      <div class="sl-row radial-only" style="display:none">
-        <div class="sl-label"><span>Glow</span><span id="val-glow">0.4</span></div>
-        <input type="range" id="sl-glow" min="0" max="1" step="0.05" value="0.4">
       </div>
     </div>
 
