@@ -1,6 +1,6 @@
-import { AudioEngine }  from './audio.js?v=19';
-import { SoundRenderer } from './renderer.js?v=19';
-import { exportCanvas }  from './exporter.js?v=19';
+import { AudioEngine }  from './audio.js?v=20';
+import { SoundRenderer } from './renderer.js?v=20';
+import { exportCanvas }  from './exporter.js?v=20';
 
 const audio = new AudioEngine();
 let renderer = null;
@@ -30,6 +30,9 @@ const params = {
   colorAccent:    '#ff6644',
   brightness:     0.9,
   glow:           0.4,
+  attractorType:  'thomas',
+  chaos:          0.5,
+  colorStyle:     'speed',
 };
 
 let vuFill, vuWrap, statusEl, clearBtn, submitBtn;
@@ -258,6 +261,9 @@ function bindControls() {
       document.querySelectorAll('.lorenz-only').forEach(el => {
         el.style.display = params.mode === 'lorenz' ? '' : 'none';
       });
+      document.querySelectorAll('.attractor-only').forEach(el => {
+        el.style.display = params.mode === 'attractor' ? '' : 'none';
+      });
       document.querySelectorAll('.points-mode').forEach(el => {
         const pm = params.mode;
         el.style.display = (pm === 'chladni' || pm === 'spectral' || pm === 'timbre' || pm === 'attractor') && pm !== 'lorenz' ? '' : 'none';
@@ -294,6 +300,7 @@ function bindControls() {
     ['sl-smoothing',   'smoothing',   parseFloat, false],
     ['sl-brightness',  'brightness',  parseFloat, true],
     ['sl-glow',        'glow',        parseFloat, true],
+    ['sl-chaos',       'chaos',       parseFloat, true],
   ];
 
   sliders.forEach(([id, key, parse, rerender]) => {
@@ -305,6 +312,24 @@ function bindControls() {
       if (valEl) valEl.textContent = params[key];
       if (key === 'smoothing') audio.setSmoothing(params[key]);
       if (rerender) rerenderIfCaptured();
+    });
+  });
+
+  // Attractor type buttons
+  document.querySelectorAll('[data-atype]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      params.attractorType = btn.dataset.atype;
+      document.querySelectorAll('[data-atype]').forEach(b => b.classList.toggle('active', b === btn));
+      rerenderIfCaptured();
+    });
+  });
+
+  // Colour style buttons
+  document.querySelectorAll('[data-cstyle]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      params.colorStyle = btn.dataset.cstyle;
+      document.querySelectorAll('[data-cstyle]').forEach(b => b.classList.toggle('active', b === btn));
+      rerenderIfCaptured();
     });
   });
 }
