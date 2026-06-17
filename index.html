@@ -54,14 +54,15 @@
         <button class="btn-mode" data-mode="spectral">Spectral</button>
         <button class="btn-mode" data-mode="timbre">Timbre</button>
         <button class="btn-mode" data-mode="attractor">Attractor</button>
+        <button class="btn-mode" data-mode="lorenz">Lorenz</button>
       </div>
     </div>
 
     <div class="panel-section">
       <div class="section-title">Shape</div>
 
-      <!-- Chladni controls -->
-      <div class="sl-row chladni-only">
+      <!-- Chladni / Lorenz controls -->
+      <div class="sl-row chladni-only lorenz-only">
         <div class="sl-label"><span>Detail</span><span id="val-complexity">48</span></div>
         <input type="range" id="sl-complexity" min="4" max="120" step="1" value="48">
       </div>
