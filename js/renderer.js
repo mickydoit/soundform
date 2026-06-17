@@ -612,16 +612,101 @@ export class SoundRenderer {
     this._points.material.opacity = Math.min(0.95, 0.85 * p.brightness);
   }
 
-}──
-function _ringColor(tR, a, p, energy) {
-  if (p.autoColor) {
-    const hue = (0.05 + tR * 0.7 + a.spectralCentroid * 0.2) % 1;
-    const lum = Math.min(0.85, 0.45 + energy * 0.4);
-    return new THREE.Color().setHSL(hue, 0.9, lum);
+
+  // ── Thomas attractor — density grid (high detail) ────────────
+  //   Accumulates 10M trajectory steps into a 128³ voxel grid,
+  //   then colours each occupied cell by log-density: bright = path dwells here.
+  _buildAttractorDensity(a, p) {
+    const react = p.reactivity;
+    const b  = Math.max(0.10, 0.185 - a.bass * react * 0.07 - (a.spectralSpread || 0) * react * 0.02);
+    const dt = 0.05;
+
+    const GRID  = 128;
+    const RANGE = 4.5;
+    const CELL  = (2 * RANGE) / GRID;
+    const GRID3 = GRID * GRID * GRID;
+    const grid  = new Int32Array(GRID3);
+
+    // Warmup
+    let x = 0.1, y = 0.0, z = 0.0;
+    for (let i = 0; i < 4000; i++) {
+      const dx = Math.sin(y) - b * x;
+      const dy = Math.sin(z) - b * y;
+      const dz = Math.sin(x) - b * z;
+      x += dx * dt; y += dy * dt; z += dz * dt;
+    }
+
+    // Accumulate into density grid
+    let maxDensity = 0;
+    for (let i = 0; i < 10000000; i++) {
+      const dx = Math.sin(y) - b * x;
+      const dy = Math.sin(z) - b * y;
+      const dz = Math.sin(x) - b * z;
+      x += dx * dt; y += dy * dt; z += dz * dt;
+
+      const gx = (x + RANGE) / CELL | 0;
+      const gy = (y + RANGE) / CELL | 0;
+      const gz = (z + RANGE) / CELL | 0;
+
+      if (gx >= 0 && gx < GRID && gy >= 0 && gy < GRID && gz >= 0 && gz < GRID) {
+        const v = ++grid[gx + gy * GRID + gz * GRID * GRID];
+        if (v > maxDensity) maxDensity = v;
+      }
+    }
+
+    // Find threshold that keeps rendered points under MAX_DENSITY
+    let minDensity = 2;
+    let cellCount = 0;
+    for (let i = 0; i < GRID3; i++) if (grid[i] >= minDensity) cellCount++;
+    while (cellCount > MAX_DENSITY) {
+      minDensity = Math.ceil(minDensity * 1.5);
+      cellCount = 0;
+      for (let i = 0; i < GRID3; i++) if (grid[i] >= minDensity) cellCount++;
+    }
+
+    // Render occupied cells coloured by log-density
+    const posArr = this._points.geometry.getAttribute('position').array;
+    const colArr = this._points.geometry.getAttribute('color').array;
+    const _c     = new THREE.Color();
+    const sc     = p.scale * 0.30;
+    const logMax = Math.log(maxDensity + 1);
+    let count = 0;
+
+    for (let gx = 0; gx < GRID && count < MAX_DENSITY; gx++) {
+      for (let gy = 0; gy < GRID && count < MAX_DENSITY; gy++) {
+        for (let gz = 0; gz < GRID && count < MAX_DENSITY; gz++) {
+          const density = grid[gx + gy * GRID + gz * GRID * GRID];
+          if (density < minDensity) continue;
+
+          posArr[count * 3    ] = ((gx + 0.5) / GRID * 2 * RANGE - RANGE) * sc;
+          posArr[count * 3 + 1] = ((gy + 0.5) / GRID * 2 * RANGE - RANGE) * sc;
+          posArr[count * 3 + 2] = ((gz + 0.5) / GRID * 2 * RANGE - RANGE) * sc;
+
+          const t = Math.log(density + 1) / logMax;
+
+          if (p.autoColor) {
+            const hue = (0.78 - t * 0.25 + 1) % 1;
+            const sat = Math.max(0.05, 0.95 - t * 0.70);
+            const lum = Math.min(0.95, 0.10 + t * 0.85) * p.brightness;
+            _c.setHSL(hue, sat, lum);
+          } else {
+            const c1 = new THREE.Color(p.colorPrimary);
+            const c2 = new THREE.Color(p.colorSecondary);
+            _c.copy(c1).lerp(c2, t).multiplyScalar(p.brightness * (0.15 + t * 0.85));
+          }
+          colArr[count * 3    ] = _c.r;
+          colArr[count * 3 + 1] = _c.g;
+          colArr[count * 3 + 2] = _c.b;
+          count++;
+        }
+      }
+    }
+
+    this._points.geometry.getAttribute('position').needsUpdate = true;
+    this._points.geometry.getAttribute('color').needsUpdate    = true;
+    this._points.geometry.setDrawRange(0, count);
+    this._points.material.size    = 0.022 * p.scale;
+    this._points.material.opacity = Math.min(0.95, 0.90 * p.brightness);
   }
-  const c1 = new THREE.Color(p.colorPrimary);
-  const c2 = new THREE.Color(p.colorSecondary);
-  const c3 = new THREE.Color(p.colorAccent);
-  const c  = tR < 0.5 ? c1.clone().lerp(c2, tR * 2) : c2.clone().lerp(c3, (tR - 0.5) * 2);
-  return c.multiplyScalar(p.brightness * (0.6 + energy * 0.6));
+
 }
