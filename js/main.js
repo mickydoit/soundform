@@ -1,6 +1,6 @@
-import { AudioEngine }  from './audio.js?v=18';
-import { SoundRenderer } from './renderer.js?v=18';
-import { exportCanvas }  from './exporter.js?v=18';
+import { AudioEngine }  from './audio.js?v=17';
+import { SoundRenderer } from './renderer.js?v=17';
+import { exportCanvas }  from './exporter.js?v=17';
 
 const audio = new AudioEngine();
 let renderer = null;
@@ -30,7 +30,6 @@ const params = {
   colorAccent:    '#ff6644',
   brightness:     0.9,
   glow:           0.4,
-  highDetail:     false,
 };
 
 let vuFill, vuWrap, statusEl, clearBtn, submitBtn;
@@ -250,14 +249,14 @@ function bindControls() {
       document.querySelectorAll('.chladni-only').forEach(el => {
         el.style.display = params.mode === 'chladni' ? '' : 'none';
       });
-document.querySelectorAll('.spectral-only').forEach(el => {
+      document.querySelectorAll('.radial-only').forEach(el => {
+        el.style.display = params.mode === 'radial' ? '' : 'none';
+      });
+      document.querySelectorAll('.spectral-only').forEach(el => {
         el.style.display = params.mode === 'spectral' ? '' : 'none';
       });
       document.querySelectorAll('.timbre-only').forEach(el => {
         el.style.display = params.mode === 'timbre' ? '' : 'none';
-      });
-      document.querySelectorAll('.attractor-only').forEach(el => {
-        el.style.display = params.mode === 'attractor' ? '' : 'none';
       });
       document.querySelectorAll('.points-mode').forEach(el => {
         const pm = params.mode;
@@ -272,12 +271,6 @@ document.querySelectorAll('.spectral-only').forEach(el => {
   chkAuto.addEventListener('change', () => {
     params.autoColor = chkAuto.checked;
     manualColors.classList.toggle('faded', params.autoColor);
-    rerenderIfCaptured();
-  });
-
-  const chkHighDetail = document.getElementById('chk-high-detail');
-  if (chkHighDetail) chkHighDetail.addEventListener('change', () => {
-    params.highDetail = chkHighDetail.checked;
     rerenderIfCaptured();
   });
 
