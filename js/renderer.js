@@ -546,26 +546,26 @@ export class SoundRenderer {
 
     const fft = a.fftSnapshot;
 
-    // Audio features that reliably differ between sounds:
-    //   sc  = spectral centroid (brightness: 0=bass, 1=treble)
-    //   df  = dominant frequency (pitch)
-    //   bs  = bass energy
-    //   hi  = treble energy
-    //   sp  = spectral spread (how wide the frequency content is)
     const sc = a.spectralCentroid;
     const df = a.dominantFreq;
     const bs = a.bass;
     const hi = a.high;
     const sp = a.spectralSpread || 0.3;
 
-    // Map each feature through sin so parameters span full [-r, +r]
-    // even when the raw feature values cluster in a narrow range.
-    // Different phases/frequencies decorrelate pa, pb, pc, pd from each other.
-    const r  = 1.8 + chaos * 0.9;   // 1.8..2.7 — chaos widens the explored region
-    const pa = r * Math.sin(sc * 2.7 * Math.PI);
-    const pb = r * Math.sin(df * 2.1 * Math.PI + 0.9);
-    const pc = r * Math.sin((bs - hi + 1.0) * 1.45 * Math.PI);
-    const pd = r * Math.sin((sc + df * 0.7 + sp * 0.4) * 1.6 * Math.PI + 0.4);
+    // Convert audio features to angles, then to de Jong parameters that are
+    // ALWAYS ≥ 1.0 in magnitude — this keeps the map in its chaotic regime.
+    // (Near-zero parameters collapse the de Jong to a fixed point or tiny cycle.)
+    const r  = 1.2 + chaos * 0.9;   // extra radius on top of the 1.0 floor
+    const a1 = sc * Math.PI * 2.3;
+    const a2 = df * Math.PI * 1.9  + bs * Math.PI;
+    const a3 = (bs - hi + 1.0)     * Math.PI * 1.7;
+    const a4 = (sc * 0.6 + df * 1.1 + sp * 0.8) * Math.PI * 1.5;
+
+    const sg = v => v >= 0 ? 1 : -1;
+    const pa = sg(Math.cos(a1)) * (1.0 + Math.abs(Math.cos(a1)) * r);
+    const pb = sg(Math.cos(a2)) * (1.0 + Math.abs(Math.cos(a2)) * r);
+    const pc = sg(Math.sin(a3)) * (1.0 + Math.abs(Math.sin(a3)) * r);
+    const pd = sg(Math.sin(a4)) * (1.0 + Math.abs(Math.sin(a4)) * r);
 
     // Hue: full spectrum — bass sounds → warm (red/orange), treble → cool (blue/violet)
     const baseHue = p.autoColor ? (a.dominantFreq * 0.72 + a.spectralCentroid * 0.28) % 1 : 0;
