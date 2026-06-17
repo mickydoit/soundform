@@ -81,7 +81,27 @@
         <input type="range" id="sl-helix" min="0.5" max="5" step="0.1" value="2">
       </div>
 
-      <div class="sl-row">
+      <!-- Attractor controls -->
+      <div class="attractor-only" style="display:none">
+        <div class="sub-label">Attractor shape</div>
+        <div class="sub-btns" id="attractor-type-btns">
+          <button class="btn-sub active" data-atype="thomas">Thomas</button>
+          <button class="btn-sub" data-atype="aizawa">Aizawa</button>
+          <button class="btn-sub" data-atype="halvorsen">Halvors.</button>
+          <button class="btn-sub" data-atype="dadras">Dadras</button>
+        </div>
+        <div class="sl-row">
+          <div class="sl-label"><span>Chaos</span><span id="val-chaos">0.50</span></div>
+          <input type="range" id="sl-chaos" min="0" max="1" step="0.05" value="0.5">
+        </div>
+        <div class="sub-label">Colour style</div>
+        <div class="sub-btns" id="color-style-btns">
+          <button class="btn-sub active" data-cstyle="speed">Speed</button>
+          <button class="btn-sub" data-cstyle="position">Position</button>
+          <button class="btn-sub" data-cstyle="rainbow">Rainbow</button>
+        </div>
+      </div>
+            <div class="sl-row">
         <div class="sl-label"><span>Scale</span><span id="val-scale">1.0</span></div>
         <input type="range" id="sl-scale" min="0.2" max="2.5" step="0.05" value="1.0">
       </div>
@@ -130,6 +150,6 @@
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r134/three.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
-<script type="module" src="js/main.js?v=19"></script>
+<script type="module" src="js/main.js?v=20"></script>
 </body>
 </html>
