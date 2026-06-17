@@ -173,63 +173,85 @@ export class SoundRenderer {
 
   exportSVG() {
     this.renderer.render(this.scene, this.camera);
-
     const canvas = this.renderer.domElement;
-    const w = canvas.width;
-    const h = canvas.height;
+    const w = canvas.width, h = canvas.height;
 
-    // Build MVP matrix: projection × view × group-world-rotation
     this.group.updateMatrixWorld(true);
     const mvp = new THREE.Matrix4()
       .multiplyMatrices(this.camera.projectionMatrix, this.camera.matrixWorldInverse)
       .multiply(this.group.matrixWorld);
 
-    const parts = [
-      '<?xml version="1.0" encoding="UTF-8"?>',
-      `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">`,
-      `  <rect width="${w}" height="${h}" fill="#03040a"/>`,
+    const out = [
+      '<?xml version="1.0" encoding="UTF-8" standalone="no"?>',
+      `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"`,
+      `     width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">`,
+      '  <title>Soundform Design</title>',
+      `  <rect id="background" width="${w}" height="${h}" fill="#03040a"/>`,
     ];
 
-    const vec = new THREE.Vector3();
+    const vec  = new THREE.Vector3();
+    const hex2 = v => Math.round(Math.max(0, Math.min(255, v * 255))).toString(16).padStart(2, '0');
 
+    // ── Particle modes ──────────────────────────────────────────────
     if (this._points.visible) {
       const geo   = this._points.geometry;
       const total = Math.min(geo.drawRange.count, geo.getAttribute('position').array.length / 3);
       const pos   = geo.getAttribute('position').array;
       const col   = geo.getAttribute('color').array;
 
-      // Figma rasterises SVGs above ~3 MB. Cap at 15 k circles; scale radius up
-      // to compensate for the lower density (area ∝ r², so scale by √stride).
-      const MAX_SVG_PTS = 15000;
-      const stride  = Math.max(1, Math.ceil(total / MAX_SVG_PTS));
+      // 4 k circles opens instantly in Illustrator; scale r up to compensate
+      const MAX_PTS = 4000;
+      const stride  = Math.max(1, Math.ceil(total / MAX_PTS));
       const fovCot  = this.camera.projectionMatrix.elements[5];
       const baseR   = (this._points.material.size * fovCot * h * 0.5) / this.camera.position.z;
-      const r       = Math.max(0.5, baseR * Math.sqrt(stride)).toFixed(1);
+      const r       = Math.max(1.2, baseR * Math.sqrt(stride)).toFixed(1);
       const op      = this._points.material.opacity.toFixed(2);
 
-      // Helper: float 0-1 → two-digit hex byte
-      const hex2 = v => Math.round(Math.max(0, Math.min(255, v * 255))).toString(16).padStart(2, '0');
+      // Group by hue band so each colour family is independently selectable
+      const BANDS = 12;
+      const buckets = Array.from({ length: BANDS }, () => []);
 
-      parts.push('  <g>');
       for (let i = 0; i < total; i += stride) {
         vec.set(pos[i * 3], pos[i * 3 + 1], pos[i * 3 + 2]);
         vec.applyMatrix4(mvp);
-        if (vec.z < -1 || vec.z > 1) continue; // outside near/far clip planes
+        if (vec.z < -1 || vec.z > 1) continue;
 
-        const sx  = ((vec.x + 1) * 0.5 * w).toFixed(1);
-        const sy  = ((1 - vec.y) * 0.5 * h).toFixed(1);
-        const hex = `#${hex2(col[i * 3])}${hex2(col[i * 3 + 1])}${hex2(col[i * 3 + 2])}`;
-        parts.push(`    <circle cx="${sx}" cy="${sy}" r="${r}" fill="${hex}" opacity="${op}"/>`);
+        const sx = ((vec.x + 1) * 0.5 * w).toFixed(1);
+        const sy = ((1 - vec.y) * 0.5 * h).toFixed(1);
+        const cr = col[i * 3], cg = col[i * 3 + 1], cb = col[i * 3 + 2];
+        const fill = `#${hex2(cr)}${hex2(cg)}${hex2(cb)}`;
+
+        // Approximate hue for bucketing
+        const mx = Math.max(cr, cg, cb), mn = Math.min(cr, cg, cb), d = mx - mn;
+        let hue = 0;
+        if (d > 0.001) {
+          if (mx === cr)      hue = ((cg - cb) / d + 6) % 6;
+          else if (mx === cg) hue = (cb - cr) / d + 2;
+          else                hue = (cr - cg) / d + 4;
+        }
+        buckets[Math.min(BANDS - 1, (hue / 6 * BANDS) | 0)]
+          .push(`    <circle cx="${sx}" cy="${sy}" r="${r}" fill="${fill}"/>`);
       }
-      parts.push('  </g>');
+
+      out.push('  <g id="particles" opacity="' + op + '">');
+      for (let b = 0; b < BANDS; b++) {
+        if (!buckets[b].length) continue;
+        out.push(`    <g id="hue-band-${b}">`);
+        out.push(...buckets[b]);
+        out.push('    </g>');
+      }
+      out.push('  </g>');
     }
 
+    // ── Line modes (Lorenz / Timbre) ────────────────────────────────
     if (this._linesGroup.visible) {
+      out.push('  <g id="lines">');
+      let li = 0;
       for (const line of this._linesGroup.children) {
         if (!line.visible) continue;
-        const geo   = line.geometry;
-        const count = geo.drawRange.count;
-        const pos   = geo.getAttribute('position').array;
+        const geo    = line.geometry;
+        const count  = geo.drawRange.count;
+        const pos    = geo.getAttribute('position').array;
         const stroke = '#' + line.material.color.getHexString();
         const op     = line.material.opacity.toFixed(2);
         const pts    = [];
@@ -241,12 +263,13 @@ export class SoundRenderer {
           pts.push(`${((vec.x + 1) * 0.5 * w).toFixed(1)},${((1 - vec.y) * 0.5 * h).toFixed(1)}`);
         }
         if (pts.length > 1)
-          parts.push(`  <polyline points="${pts.join(' ')}" fill="none" stroke="${stroke}" stroke-width="1.2" opacity="${op}"/>`);
+          out.push(`    <polyline id="line-${li++}" fill="none" stroke="${stroke}" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" opacity="${op}" points="${pts.join(' ')}"/>`);
       }
+      out.push('  </g>');
     }
 
-    parts.push('</svg>');
-    return parts.join('\n');
+    out.push('</svg>');
+    return out.join('\n');
   }
 
   // ── Spherical Chladni ─────────────────────────────────────────
