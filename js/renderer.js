@@ -122,12 +122,13 @@ export class SoundRenderer {
   // ── Public API ────────────────────────────────────────────────
   captureDesign(analysis, params) {
     const m = params.mode;
-    this._linesGroup.visible = m === 'timbre';
-    this._points.visible     = true;
+    this._linesGroup.visible = m === 'timbre' || m === 'lorenz';
+    this._points.visible     = m !== 'lorenz';
     if      (m === 'chladni')   this._buildChladni(analysis, params);
     else if (m === 'spectral')  this._buildSpectral(analysis, params);
     else if (m === 'timbre')    this._buildTimbre(analysis.frames || [], params);
     else if (m === 'attractor') this._buildAttractor(analysis, params);
+    else if (m === 'lorenz')    this._buildLorenz(analysis, params);
   }
 
   clear() {
@@ -304,8 +305,10 @@ export class SoundRenderer {
         if (Math.abs(f) > threshold) continue;
 
         // Tiny jitter along sphere surface for organic sand texture
-        const jT = (Math.random() - 0.5) * 0.010;
-        const jP = (Math.random() - 0.5) * 0.010;
+        // Deterministic jitter: same audio → same pixel positions
+        const _fh = (a, b) => { const s = Math.sin(a * 127.1 + b * 311.7) * 43758.5453; return s - Math.floor(s); };
+        const jT = (_fh(i * 2,     j * 3    ) - 0.5) * 0.010;
+        const jP = (_fh(i * 3 + 1, j * 2 + 1) - 0.5) * 0.010;
         const th2 = theta + jT, ph2 = phi + jP;
         const sT2 = Math.sin(th2), cT2 = Math.cos(th2);
 
@@ -590,6 +593,66 @@ export class SoundRenderer {
     this._points.geometry.setDrawRange(0, count);
     this._points.material.size    = 0.014 * p.scale * p.pointSize * 0.5;
     this._points.material.opacity = Math.min(0.95, 0.85 * p.brightness);
+  }
+
+  // ── Lorenz attractor — continuous line strips ─────────────────
+  //   dx/dt = σ(y−x)  dy/dt = x(ρ−z)−y  dz/dt = xy−βz
+  //   Audio drives σ (timbre), ρ (bass/power), β (treble).
+  //   Trajectory rendered as 64 rainbow line strips wound around
+  //   the butterfly manifold — each strip a different spectral hue.
+  _buildLorenz(a, p) {
+    const react = p.reactivity;
+
+    // Lorenz parameters — always in the chaotic regime
+    const sigma = 10 + a.spectralCentroid * react * 4.0;  // [10, 14]
+    const rho   = 24 + a.bass             * react * 14.0; // [24, 38]
+    const beta  = 2.0 + a.high            * react * 1.5;  // [2.0, 3.5]
+    const dt    = 0.007;
+    const PTS   = Math.min(MAX_PTS - 1, Math.round(800 + p.complexity * 3));
+
+    // Warmup — settle onto the attractor
+    let x = 1.0, y = 0.0, z = 20.0;
+    for (let i = 0; i < 3000; i++) {
+      const dx = sigma * (y - x);
+      const dy = x * (rho - z) - y;
+      const dz = x * y - beta * z;
+      x += dx * dt; y += dy * dt; z += dz * dt;
+    }
+
+    const zCenter = rho - sigma;
+    const sc      = p.scale * 0.028;
+    const nLines  = MAX_LINES;
+    const pool    = this._linesGroup.children;
+
+    for (let li = 0; li < MAX_LINES; li++) {
+      const line = pool[li];
+      line.visible = true;
+      const arr = line.geometry.getAttribute('position').array;
+
+      for (let i = 0; i <= PTS; i++) {
+        const dx = sigma * (y - x);
+        const dy = x * (rho - z) - y;
+        const dz = x * y - beta * z;
+        x += dx * dt; y += dy * dt; z += dz * dt;
+        arr[i * 3    ] = x * sc;
+        arr[i * 3 + 1] = y * sc;
+        arr[i * 3 + 2] = (z - zCenter) * sc;
+      }
+
+      line.geometry.getAttribute('position').needsUpdate = true;
+      line.geometry.setDrawRange(0, PTS + 1);
+
+      // Cycle full spectrum across the 64 line strips
+      const tLine = li / nLines;
+      const hue   = p.autoColor ? tLine : 0;
+      const c = p.autoColor
+        ? new THREE.Color().setHSL(hue, 0.92, Math.min(0.72, 0.42 + tLine * 0.3) * p.brightness)
+        : new THREE.Color(p.colorPrimary).clone()
+            .lerp(new THREE.Color(p.colorSecondary), tLine)
+            .multiplyScalar(p.brightness);
+      line.material.color.set(c);
+      line.material.opacity = Math.min(0.9, 0.3 + tLine * 0.55);
+    }
   }
 
 }
