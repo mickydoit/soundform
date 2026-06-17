@@ -77,6 +77,19 @@ export class SoundRenderer {
     this._points = new THREE.Points(pGeo, pMat);
     this._points.visible = false;
     this.group.add(this._points);
+
+    // Density canvas — de Jong / Clifford attractor
+    this._dW = 512; this._dH = 512;
+    this._dCanvas = document.createElement('canvas');
+    this._dCanvas.width  = this._dW;
+    this._dCanvas.height = this._dH;
+    this._dTex   = new THREE.CanvasTexture(this._dCanvas);
+    this._dPlane = new THREE.Mesh(
+      new THREE.PlaneGeometry(1.9, 1.9),
+      new THREE.MeshBasicMaterial({ map: this._dTex, side: THREE.DoubleSide })
+    );
+    this._dPlane.visible = false;
+    this.group.add(this._dPlane);
   }
 
   // ── Drag & pinch ──────────────────────────────────────────────
@@ -122,8 +135,11 @@ export class SoundRenderer {
   // ── Public API ────────────────────────────────────────────────
   captureDesign(analysis, params) {
     const m = params.mode;
+    const useDensity = m === 'attractor' &&
+      (params.attractorType === 'dejong' || params.attractorType === 'clifford');
     this._linesGroup.visible = m === 'timbre' || m === 'lorenz';
-    this._points.visible     = m !== 'lorenz';
+    this._dPlane.visible     = useDensity;
+    this._points.visible     = !useDensity && m !== 'lorenz';
     if      (m === 'chladni')   this._buildChladni(analysis, params);
     else if (m === 'spectral')  this._buildSpectral(analysis, params);
     else if (m === 'timbre')    this._buildTimbre(analysis.frames || [], params);
@@ -135,6 +151,11 @@ export class SoundRenderer {
     for (const line of this._linesGroup.children) line.visible = false;
     this._linesGroup.visible = false;
     this._points.visible     = false;
+    this._dPlane.visible     = false;
+    const ctx0 = this._dCanvas.getContext('2d');
+    ctx0.fillStyle = '#03040a';
+    ctx0.fillRect(0, 0, this._dW, this._dH);
+    this._dTex.needsUpdate = true;
     this.renderer.render(this.scene, this.camera);
   }
 
@@ -516,124 +537,117 @@ export class SoundRenderer {
     this._points.material.opacity = Math.min(0.95, 0.88 * p.brightness);
   }
 
-  // ── De Jong / Clifford / Thomas / Halvorsen attractor cloud ─────
+  // ── Attractor — de Jong / Clifford density render, Thomas / Halvorsen particle cloud ──
   _buildAttractor(a, p) {
-    const react  = p.reactivity;
-    const chaos  = p.chaos ?? 0.5;
     const type   = p.attractorType ?? 'dejong';
-    const cStyle = p.colorStyle ?? 'position';
+    const cStyle = p.colorStyle    ?? 'position';
+    const chaos  = p.chaos         ?? 0.5;
+    const react  = p.reactivity;
 
-    const nPoints = Math.min(MAX_DENSITY, Math.floor(p.density));
+    // Divide FFT into 4 equal bands → 4 independent shape parameters.
+    // Every distinct sound produces a different (q1,q2,q3,q4) profile → different attractor.
     const fft = a.fftSnapshot;
+    let q1=0, q2=0, q3=0, q4=0;
+    for (let i=0;  i<32;  i++) q1 += fft[i];
+    for (let i=32; i<64;  i++) q2 += fft[i];
+    for (let i=64; i<96;  i++) q3 += fft[i];
+    for (let i=96; i<128; i++) q4 += fft[i];
+    q1/=32; q2/=32; q3/=32; q4/=32;
 
-    // Divide FFT into 4 bands → 4 shape parameters.
-    // Different sounds produce genuinely different FFT profiles → different shapes.
-    let q1 = 0, q2 = 0, q3 = 0, q4 = 0;
-    for (let i =  0; i <  32; i++) q1 += fft[i];
-    for (let i = 32; i <  64; i++) q2 += fft[i];
-    for (let i = 64; i <  96; i++) q3 += fft[i];
-    for (let i = 96; i < 128; i++) q4 += fft[i];
-    q1 /= 32; q2 /= 32; q3 /= 32; q4 /= 32;
-
-    // chaos controls how wide the parameter range is
+    // chaos widens the parameter range; each band drives one parameter across [-spread, +spread]
     const spread = 1.4 + chaos * 1.1;
     const pa = -spread + q1 * spread * 2.2;
     const pb = -spread + q2 * spread * 2.2;
     const pc = -spread + q3 * spread * 2.2;
     const pd = -spread + q4 * spread * 2.2;
 
-    // Hue: full spectrum — low sounds are warm, high sounds are cool
-    const baseHue = p.autoColor
-      ? (a.dominantFreq * 0.72 + a.spectralCentroid * 0.28) % 1
-      : 0;
-    const hueSpan = Math.max(0.20, (a.spectralSpread || 0.3) * react * 0.7);
+    // Hue: full spectrum — bass sounds → warm (red/orange), treble → cool (blue/violet)
+    const baseHue = p.autoColor ? (a.dominantFreq * 0.72 + a.spectralCentroid * 0.28) % 1 : 0;
+    const hueSpan = Math.max(0.15, (a.spectralSpread || 0.3) * react * 0.5);
 
-    // z depth: brighter/higher sounds get more 3D depth
-    const zDepth = (a.spectralCentroid * 0.5 + chaos * 0.25) * react;
+    // ── De Jong & Clifford: density-grid render ──────────────────
+    if (type === 'dejong' || type === 'clifford') {
+      const W = this._dW, H = this._dH;
+      const STEPS = 700000;
+      const grid  = new Int32Array(W * H);
+
+      let x = 0.1, y = 0.1;
+      const iterate = type === 'clifford'
+        ? () => { const nx=Math.sin(pa*y)+pc*Math.cos(pa*x); const ny=Math.sin(pb*x)+pd*Math.cos(pb*y); x=nx; y=ny; }
+        : () => { const nx=Math.sin(pa*y)-Math.cos(pb*x);     const ny=Math.sin(pc*x)-Math.cos(pd*y);     x=nx; y=ny; };
+
+      // Warmup — let trajectory settle before accumulating
+      for (let i=0; i<1000; i++) iterate();
+
+      const range = 2.6;
+      for (let i=0; i<STEPS; i++) {
+        iterate();
+        const gx = ((x + range) / (range * 2) * (W - 1)) | 0;
+        const gy = ((y + range) / (range * 2) * (H - 1)) | 0;
+        if (gx >= 0 && gx < W && gy >= 0 && gy < H) grid[gy * W + gx]++;
+      }
+
+      let maxVal = 1;
+      for (let i=0; i<W*H; i++) if (grid[i] > maxVal) maxVal = grid[i];
+      const logMax = Math.log(1 + maxVal);
+
+      const ctx = this._dCanvas.getContext('2d');
+      const img = ctx.createImageData(W, H);
+      const d   = img.data;
+      const _c  = new THREE.Color();
+
+      for (let i=0; i<W*H; i++) {
+        if (!grid[i]) { d[i*4+3] = 255; continue; }   // background stays black
+        const t = Math.log(1 + grid[i]) / logMax;      // 0..1 log-normalised density
+
+        let hue, sat, lum;
+        if (cStyle === 'position') {
+          // Hue by angle from centre → each lobe of the attractor gets its own colour
+          const nx = (i % W) / W - 0.5;
+          const ny = Math.floor(i / W) / H - 0.5;
+          const angle = (Math.atan2(ny, nx) / (Math.PI * 2) + 1) % 1;
+          hue = (baseHue + angle * hueSpan * 2.0) % 1;
+          sat = 0.85;
+          lum = Math.min(0.87, 0.08 + t * 0.79) * p.brightness;
+        } else if (cStyle === 'rainbow') {
+          // Hue cycles from sparse (outer) → dense (core)
+          hue = (baseHue + t * hueSpan * 1.6) % 1;
+          sat = 0.88;
+          lum = Math.min(0.82, 0.10 + t * 0.72) * p.brightness;
+        } else {
+          // Flame: dark saturated edge → bright white-hot core
+          hue = baseHue;
+          sat = Math.max(0.05, 0.88 - t * 0.78);
+          lum = Math.min(0.93, 0.05 + t * 0.88) * p.brightness;
+        }
+
+        _c.setHSL((hue + 1) % 1, sat, lum);
+        d[i*4  ] = (_c.r * 255) | 0;
+        d[i*4+1] = (_c.g * 255) | 0;
+        d[i*4+2] = (_c.b * 255) | 0;
+        d[i*4+3] = 255;
+      }
+
+      ctx.putImageData(img, 0, 0);
+      this._dTex.needsUpdate = true;
+      this._dPlane.scale.setScalar(p.scale);
+      return;
+    }
+
+    // ── Thomas & Halvorsen: 3D particle cloud ────────────────────
+    const fract = x => x - Math.floor(x);
+    const hash  = s => fract(Math.sin(s * 127.1) * 43758.5453);
+    const nSeeds = Math.max(1, Math.min(12,
+      3 + Math.round((a.spectralCentroid + (a.spectralSpread || 0) * 0.5) * react * 7)));
+    const nPoints      = Math.min(MAX_DENSITY, Math.floor(p.density));
+    const stepsPerSeed = Math.floor(nPoints / nSeeds);
 
     const posArr = this._points.geometry.getAttribute('position').array;
     const colArr = this._points.geometry.getAttribute('color').array;
     const _c     = new THREE.Color();
-    const fract  = x => x - Math.floor(x);
-
-    // ── De Jong & Clifford: 2D iterated maps extruded into 3D ────────
-    if (type === 'dejong' || type === 'clifford') {
-      let x = 0.1, y = 0.1;
-
-      const iterate = type === 'dejong'
-        ? () => {
-            const nx = Math.sin(pa * y) - Math.cos(pb * x);
-            const ny = Math.sin(pc * x) - Math.cos(pd * y);
-            x = nx; y = ny;
-          }
-        : () => {
-            const nx = Math.sin(pa * y) + pc * Math.cos(pa * x);
-            const ny = Math.sin(pb * x) + pd * Math.cos(pb * y);
-            x = nx; y = ny;
-          };
-
-      // Warmup
-      for (let i = 0; i < 1000; i++) iterate();
-
-      const sc = p.scale * 0.38;
-      let prevX = x, prevY = y;
-
-      for (let i = 0; i < nPoints; i++) {
-        prevX = x; prevY = y;
-        iterate();
-
-        posArr[i * 3    ] = x * sc;
-        posArr[i * 3 + 1] = y * sc;
-        // z: gentle wave driven by position + parameters → different per sound
-        posArr[i * 3 + 2] = (Math.sin(x * 1.1 + pa * 0.7) + Math.sin(y * 1.1 + pb * 0.7))
-                             * 0.5 * zDepth * sc;
-
-        if (p.autoColor) {
-          let hue, sat, lum;
-          const spd = Math.sqrt((x - prevX) ** 2 + (y - prevY) ** 2);
-
-          if (cStyle === 'position') {
-            hue = (fract(x * sc * 0.55 + y * sc * 0.35 + baseHue) + 1) % 1;
-            sat = 0.85;
-            lum = Math.min(0.82, 0.38 + Math.abs(y * sc) * 0.28) * p.brightness;
-          } else if (cStyle === 'rainbow') {
-            hue = (baseHue + (i / nPoints) * hueSpan) % 1;
-            sat = 0.88;
-            lum = 0.52 * p.brightness;
-          } else { // speed
-            const bright = Math.min(1.0, 0.04 / (spd + 0.015));
-            hue = (baseHue + spd * hueSpan * 2.5) % 1;
-            sat = 0.82 - bright * 0.30;
-            lum = Math.min(0.90, 0.28 + bright * 0.62) * p.brightness;
-          }
-          _c.setHSL(hue, Math.max(0.15, sat), lum);
-        } else {
-          const t = (Math.sin(x * 1.8) + 1) * 0.5;
-          const c1 = new THREE.Color(p.colorPrimary);
-          const c2 = new THREE.Color(p.colorSecondary);
-          _c.copy(c1).lerp(c2, t).multiplyScalar(p.brightness);
-        }
-        colArr[i * 3    ] = _c.r;
-        colArr[i * 3 + 1] = _c.g;
-        colArr[i * 3 + 2] = _c.b;
-      }
-
-      this._points.geometry.getAttribute('position').needsUpdate = true;
-      this._points.geometry.getAttribute('color').needsUpdate    = true;
-      this._points.geometry.setDrawRange(0, nPoints);
-      this._points.material.size    = 0.010 * p.scale * p.pointSize * 0.5;
-      this._points.material.opacity = Math.min(0.95, 0.85 * p.brightness);
-      return;
-    }
-
-    // ── Thomas & Halvorsen: 3D continuous attractors ──────────────
-    const hash = s => fract(Math.sin(s * 127.1) * 43758.5453);
-    const nSeeds = Math.max(1, Math.min(12,
-      3 + Math.round((a.spectralCentroid + (a.spectralSpread || 0) * 0.5) * react * 7)));
-    const stepsPerSeed = Math.floor(nPoints / nSeeds);
     let count = 0;
 
-    for (let seed = 0; seed < nSeeds && count < nPoints; seed++) {
+    for (let seed=0; seed<nSeeds && count<nPoints; seed++) {
       const fftOff = (fft[Math.min(127, seed * 16)] || 0) * 2.5;
       let x, y, z, dt, sc, warmup, step;
 
@@ -643,68 +657,55 @@ export class SoundRenderer {
                - a.lowMid * react * 0.02 + a.high * react * 0.04);
         dt = 0.045 + a.high * react * 0.02;
         sc = p.scale * 0.30; warmup = 4000;
-        x = (hash(seed * 3.1  + fftOff) - 0.5) * 1.5;
-        y = (hash(seed * 7.3  + fftOff) - 0.5) * 1.5;
-        z = (hash(seed * 13.7 + fftOff) - 0.5) * 1.5;
+        x = (hash(seed*3.1  + fftOff) - 0.5) * 1.5;
+        y = (hash(seed*7.3  + fftOff) - 0.5) * 1.5;
+        z = (hash(seed*13.7 + fftOff) - 0.5) * 1.5;
         step = () => {
-          const dx = Math.sin(y) - b * x;
-          const dy = Math.sin(z) - b * y;
-          const dz = Math.sin(x) - b * z;
-          x += dx * dt; y += dy * dt; z += dz * dt;
-          return Math.sqrt(dx*dx + dy*dy + dz*dz);
+          const dx=Math.sin(y)-b*x, dy=Math.sin(z)-b*y, dz=Math.sin(x)-b*z;
+          x+=dx*dt; y+=dy*dt; z+=dz*dt;
+          return Math.sqrt(dx*dx+dy*dy+dz*dz);
         };
       } else { // halvorsen
-        const ha = 1.55 - chaos * 0.28 - a.bass * react * 0.10 + a.high * react * 0.05;
+        const ha = 1.55 - chaos*0.28 - a.bass*react*0.10 + a.high*react*0.05;
         dt = 0.005; sc = p.scale * 0.065; warmup = 5000;
-        x = (hash(seed * 3.1  + fftOff) - 0.5) * 5;
-        y = (hash(seed * 7.3  + fftOff) - 0.5) * 5;
-        z = (hash(seed * 13.7 + fftOff) - 0.5) * 5;
+        x = (hash(seed*3.1  + fftOff) - 0.5) * 5;
+        y = (hash(seed*7.3  + fftOff) - 0.5) * 5;
+        z = (hash(seed*13.7 + fftOff) - 0.5) * 5;
         step = () => {
-          const dx = -ha*x - 4*y - 4*z - y*y;
-          const dy = -ha*y - 4*z - 4*x - z*z;
-          const dz = -ha*z - 4*x - 4*y - x*x;
-          x += dx*dt; y += dy*dt; z += dz*dt;
-          return Math.sqrt(dx*dx + dy*dy + dz*dz);
+          const dx=-ha*x-4*y-4*z-y*y, dy=-ha*y-4*z-4*x-z*z, dz=-ha*z-4*x-4*y-x*x;
+          x+=dx*dt; y+=dy*dt; z+=dz*dt;
+          return Math.sqrt(dx*dx+dy*dy+dz*dz);
         };
       }
 
-      for (let i = 0; i < warmup; i++) step();
+      for (let i=0; i<warmup; i++) step();
       const stepCount = Math.min(stepsPerSeed, nPoints - count);
-
-      for (let i = 0; i < stepCount; i++) {
+      for (let i=0; i<stepCount; i++) {
         const speed = step();
-        posArr[count * 3    ] = x * sc;
-        posArr[count * 3 + 1] = y * sc;
-        posArr[count * 3 + 2] = z * sc;
-
+        posArr[count*3  ] = x*sc; posArr[count*3+1] = y*sc; posArr[count*3+2] = z*sc;
         if (p.autoColor) {
           const bright = Math.min(1.0, 0.25 / (speed + 0.12));
           let hue, sat, lum;
           if (cStyle === 'position') {
-            hue = (fract((x * sc + y * sc + z * sc) * 0.8 + baseHue) + 1) % 1;
-            sat = 0.85; lum = Math.min(0.85, 0.35 + Math.abs(z * sc) * 0.3) * p.brightness;
+            hue = (fract((x*sc+y*sc+z*sc)*0.8+baseHue)+1)%1;
+            sat=0.85; lum=Math.min(0.85,0.35+Math.abs(z*sc)*0.3)*p.brightness;
           } else if (cStyle === 'rainbow') {
-            hue = (baseHue + (i / stepCount) * hueSpan) % 1;
-            sat = 0.9; lum = Math.min(0.85, 0.30 + bright * 0.55) * p.brightness;
+            hue=(baseHue+(i/stepCount)*hueSpan)%1; sat=0.9;
+            lum=Math.min(0.85,0.30+bright*0.55)*p.brightness;
           } else {
-            hue = (baseHue + speed * hueSpan * 0.6) % 1;
-            sat = 0.80 - bright * 0.35;
-            lum = Math.min(0.92, 0.30 + bright * 0.62) * p.brightness;
+            hue=(baseHue+speed*hueSpan*0.6)%1; sat=0.80-bright*0.35;
+            lum=Math.min(0.92,0.30+bright*0.62)*p.brightness;
           }
-          _c.setHSL(hue, Math.max(0.15, sat), lum);
+          _c.setHSL((hue+1)%1, Math.max(0.15,sat), lum);
         } else {
-          const bright = Math.min(1.0, 0.25 / (speed + 0.12));
-          const c1 = new THREE.Color(p.colorPrimary);
-          const c2 = new THREE.Color(p.colorSecondary);
-          _c.copy(c1).lerp(c2, 1 - bright).multiplyScalar(p.brightness * (0.3 + bright * 0.7));
+          const bright=Math.min(1.0,0.25/(speed+0.12));
+          const c1=new THREE.Color(p.colorPrimary), c2=new THREE.Color(p.colorSecondary);
+          _c.copy(c1).lerp(c2,1-bright).multiplyScalar(p.brightness*(0.3+bright*0.7));
         }
-        colArr[count * 3    ] = _c.r;
-        colArr[count * 3 + 1] = _c.g;
-        colArr[count * 3 + 2] = _c.b;
+        colArr[count*3]=_c.r; colArr[count*3+1]=_c.g; colArr[count*3+2]=_c.b;
         count++;
       }
     }
-
     this._points.geometry.getAttribute('position').needsUpdate = true;
     this._points.geometry.getAttribute('color').needsUpdate    = true;
     this._points.geometry.setDrawRange(0, count);
