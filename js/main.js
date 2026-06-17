@@ -247,7 +247,7 @@ function bindControls() {
       params.mode = btn.dataset.mode;
       document.querySelectorAll('.btn-mode').forEach(b => b.classList.toggle('active', b === btn));
       document.querySelectorAll('.chladni-only').forEach(el => {
-        el.style.display = params.mode === 'chladni' ? '' : 'none';
+        el.style.display = (params.mode === 'chladni' || params.mode === 'lorenz') ? '' : 'none';
       });
       document.querySelectorAll('.spectral-only').forEach(el => {
         el.style.display = params.mode === 'spectral' ? '' : 'none';
@@ -255,9 +255,12 @@ function bindControls() {
       document.querySelectorAll('.timbre-only').forEach(el => {
         el.style.display = params.mode === 'timbre' ? '' : 'none';
       });
+      document.querySelectorAll('.lorenz-only').forEach(el => {
+        el.style.display = params.mode === 'lorenz' ? '' : 'none';
+      });
       document.querySelectorAll('.points-mode').forEach(el => {
         const pm = params.mode;
-        el.style.display = (pm === 'chladni' || pm === 'spectral' || pm === 'timbre' || pm === 'attractor') ? '' : 'none';
+        el.style.display = (pm === 'chladni' || pm === 'spectral' || pm === 'timbre' || pm === 'attractor') && pm !== 'lorenz' ? '' : 'none';
       });
       rerenderIfCaptured();
     });
