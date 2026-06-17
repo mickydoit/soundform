@@ -42,7 +42,7 @@ export class SoundRenderer {
 
   // ── Object pools ──────────────────────────────────────────────
   _initPools() {
-    // Lines group — used by Radial and Timbre modes
+    // Lines group — used by Timbre mode
     this._linesGroup = new THREE.Group();
     for (let i = 0; i < MAX_LINES; i++) {
       const pos  = new Float32Array(MAX_PTS * 3);
@@ -122,10 +122,9 @@ export class SoundRenderer {
   // ── Public API ────────────────────────────────────────────────
   captureDesign(analysis, params) {
     const m = params.mode;
-    this._linesGroup.visible = m === 'radial' || m === 'timbre';
-    this._points.visible     = m !== 'radial';
+    this._linesGroup.visible = m === 'timbre';
+    this._points.visible     = true;
     if      (m === 'chladni')   this._buildChladni(analysis, params);
-    else if (m === 'radial')    this._buildRadial(analysis, params);
     else if (m === 'spectral')  this._buildSpectral(analysis, params);
     else if (m === 'timbre')    this._buildTimbre(analysis.frames || [], params);
     else if (m === 'attractor') this._buildAttractor(analysis, params);
@@ -593,88 +592,8 @@ export class SoundRenderer {
     this._points.material.opacity = Math.min(0.95, 0.85 * p.brightness);
   }
 
-  // ── 3D Radial / orbital shells ────────────────────────────────
-  //   Each ring is tilted into a unique 3D orientation via Rodrigues rotation,
-  //   so the stack fans into a complex orbital sculpture rather than flat discs.
-  //   Multi-harmonic deformation creates complex lobed shapes.
-  //   Bass rings dip, treble rings rise; neighbouring rings interleave in 3D.
-  _buildRadial(a, p) {
-    const react = p.reactivity;
-    const fft   = a.fftSnapshot || new Float32Array(128);
-    const rings  = Math.min(MAX_LINES, Math.round(p.layers));
-    const pool   = this._linesGroup.children;
-    const PTS    = 512;
-
-    for (let ri = 0; ri < MAX_LINES; ri++) {
-      const line = pool[ri];
-      if (ri >= rings) { line.visible = false; continue; }
-      line.visible = true;
-
-      const tR = ri / Math.max(1, rings - 1);
-
-      // Band energy for this ring
-      const lo = Math.floor(tR * 120);
-      const hi = Math.min(127, Math.floor(((ri + 1) / rings) * 120));
-      let energy = 0;
-      for (let k = lo; k <= hi; k++) energy += fft[k];
-      energy /= Math.max(1, hi - lo + 1);
-
-      const baseR = (0.25 + tR * 0.75) * p.scale * (0.85 + a.volume * react * 0.35);
-      const phase = a.dominantFreq * Math.PI * 6 * (ri + 1) + tR * p.twist * Math.PI * 2;
-      const lobes = 2 + Math.round(a.dominantFreq * react * 10) + ri;
-
-      // 3D tilt: each ring's plane rotated by Rodrigues' formula
-      // tiltAngle increases through the stack; tiltAxis rotates with the ring index
-      const tiltAngle = tR * Math.PI * (0.85 + a.spectralCentroid * react * 0.55);
-      const axisAngle = ri * (Math.PI / Math.max(1, rings)) * 2.4 + a.dominantFreq * Math.PI * react;
-      const ax = Math.cos(axisAngle), ay = Math.sin(axisAngle);
-      const ct = Math.cos(tiltAngle), st = Math.sin(tiltAngle);
-
-      const arr = line.geometry.getAttribute('position').array;
-
-      for (let i = 0; i <= PTS; i++) {
-        const θ = (i / PTS) * Math.PI * 2;
-
-        const binIdx = Math.min(127, lo + Math.floor((θ / (Math.PI * 2)) * Math.max(1, hi - lo)));
-        const fftVal = fft[binIdx];
-
-        // Multi-harmonic deformation for complex, non-circular shapes
-        const mod1 = Math.sin(lobes * θ + phase)                     * energy * react * 0.32;
-        const mod2 = Math.sin(lobes * 2 * θ + phase * 1.53)          * energy * a.spectralCentroid * react * 0.18;
-        const mod3 = fftVal                                            * react * 0.20;
-        const mod4 = Math.cos((lobes + 1) * θ + phase * 0.71)        * energy * a.high * react * 0.13;
-
-        const r = Math.max(0.05, baseR + mod1 + mod2 + mod3 + mod4);
-
-        // Local point in the ring's flat plane before 3D tilt
-        const lx = Math.cos(θ) * r;
-        const ly = Math.sin(θ) * r;
-        // Z deformation: meaningfully large for real depth
-        const lz = (Math.sin(lobes * θ * 0.5 + phase)          * energy * 0.50
-                 +  Math.cos(lobes * θ      + phase * 1.2)      * energy * a.high * react * 0.22) * p.scale;
-
-        // Rodrigues' rotation: (lx, ly, lz) rotated by tiltAngle around (ax, ay, 0)
-        const dot = ax * lx + ay * ly;
-        const cx  =  ay * lz;
-        const cy  = -ax * lz;
-        const cz  =  ax * ly - ay * lx;
-
-        arr[i * 3    ] = lx * ct + cx * st + ax * dot * (1 - ct);
-        arr[i * 3 + 1] = ly * ct + cy * st + ay * dot * (1 - ct);
-        arr[i * 3 + 2] = lz * ct + cz * st;
-      }
-
-      line.geometry.getAttribute('position').needsUpdate = true;
-      line.geometry.setDrawRange(0, PTS + 1);
-
-      const c = _ringColor(tR, a, p, energy);
-      line.material.color.set(c);
-      line.material.opacity = Math.min(1, Math.max(0.25, 0.28 + energy * p.brightness * 0.95));
-    }
-  }
 }
-
-// ── Color helpers ─────────────────────────────────────────────────
+ ─────────────────────────────────────────────────
 function _ringColor(tR, a, p, energy) {
   if (p.autoColor) {
     const hue = (0.05 + tR * 0.7 + a.spectralCentroid * 0.2) % 1;
