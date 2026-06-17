@@ -122,15 +122,13 @@ export class SoundRenderer {
   // ── Public API ────────────────────────────────────────────────
   captureDesign(analysis, params) {
     const m = params.mode;
-    this._linesGroup.visible = m === 'timbre';
-    this._points.visible     = true;
+    this._linesGroup.visible = m === 'radial' || m === 'timbre';
+    this._points.visible     = m !== 'radial';
     if      (m === 'chladni')   this._buildChladni(analysis, params);
+    else if (m === 'radial')    this._buildRadial(analysis, params);
     else if (m === 'spectral')  this._buildSpectral(analysis, params);
     else if (m === 'timbre')    this._buildTimbre(analysis.frames || [], params);
-    else if (m === 'attractor') {
-      if (params.highDetail) this._buildAttractorDensity(analysis, params);
-      else                   this._buildAttractor(analysis, params);
-    }
+    else if (m === 'attractor') this._buildAttractor(analysis, params);
   }
 
   clear() {
@@ -516,170 +514,176 @@ export class SoundRenderer {
     this._points.material.opacity = Math.min(0.95, 0.88 * p.brightness);
   }
 
-  // ── 3D Sine Map attractor ────────────────────────────────────
-  //   x(n+1) = sin(a·y) + d·sin(b·z)
-  //   y(n+1) = sin(b·z) + e·sin(c·x)
-  //   z(n+1) = sin(c·x) + f·sin(a·y)
-  //   Audio drives a,b,c (shape frequency) and d,e,f (shape amplitude).
-  //   Produces twisted ribbon / shell forms like the reference images.
+  // ── Thomas attractor particle cloud ──────────────────────────
+  //   ẋ = sin(y)−b·x, ẏ = sin(z)−b·y, ż = sin(x)−b·z
+  //   b (damping) driven by bass: lower = more loops, more complexity.
+  //   Speed-based brightness: slow regions dwell on the manifold = bright streaks.
   _buildAttractor(a, p) {
     const react = p.reactivity;
+    // Thomas attractor is chaotic for b < 0.208; above that it collapses to a fixed point.
+    // Bass energy lowers b toward 0.10 for denser, more complex loops.
+    const b  = Math.max(0.10, 0.185 - a.bass * react * 0.07 - (a.spectralSpread || 0) * react * 0.02);
+    const dt = 0.05;
 
-    // Map audio features to sine map parameters
-    // a,b ≥ 1.8 ensures the map stays chaotic; d,e,f ≥ 0.6 ensures coupling
-    const pa = 1.8 + a.spectralCentroid * react * 2.2;
-    const pb = 2.2 + a.dominantFreq    * react * 2.4;
-    const pc = 1.0 + (a.spectralSpread || 0.3) * react * 0.5;
-    const pd = 0.6 + a.bass    * react * 0.8;
-    const pe = 0.5 + a.lowMid  * react * 0.8;
-    const pf = 0.6 + a.high    * react * 0.7;
+    const nPoints     = Math.min(MAX_DENSITY, Math.floor(p.density));
+    const nSeeds      = Math.max(1, Math.min(8, 2 + Math.round(a.spectralCentroid * react * 5)));
+    const warmup      = 4000;
+    const stepsPerSeed = Math.floor(nPoints / nSeeds);
 
-    const nPoints = Math.min(MAX_DENSITY, Math.floor(p.density));
-    const sc      = p.scale * 0.42;
+    const posArr = this._points.geometry.getAttribute('position').array;
+    const colArr = this._points.geometry.getAttribute('color').array;
+    const _c     = new THREE.Color();
+    const sc     = p.scale * 0.30;
     const baseHue = p.autoColor ? (0.72 - a.spectralCentroid * 0.18 + 1) % 1 : 0;
 
-    const posArr = this._points.geometry.getAttribute('position').array;
-    const colArr = this._points.geometry.getAttribute('color').array;
-    const _c     = new THREE.Color();
+    const fract = x => x - Math.floor(x);
+    const hash  = s => fract(Math.sin(s * 127.1) * 43758.5453);
 
-    let x = 0.1, y = 0.0, z = 0.0;
-    for (let i = 0; i < 1000; i++) {
-      const nx = Math.sin(pa * y) + pd * Math.sin(pb * z);
-      const ny = Math.sin(pb * z) + pe * Math.sin(pc * x);
-      const nz = Math.sin(pc * x) + pf * Math.sin(pa * y);
-      x = nx; y = ny; z = nz;
-    }
-
-    for (let i = 0; i < nPoints; i++) {
-      const nx = Math.sin(pa * y) + pd * Math.sin(pb * z);
-      const ny = Math.sin(pb * z) + pe * Math.sin(pc * x);
-      const nz = Math.sin(pc * x) + pf * Math.sin(pa * y);
-      x = nx; y = ny; z = nz;
-
-      posArr[i * 3    ] = x * sc;
-      posArr[i * 3 + 1] = y * sc;
-      posArr[i * 3 + 2] = z * sc;
-
-      const t = (y + 2) / 4;
-      if (p.autoColor) {
-        const hue = (baseHue + t * 0.45) % 1;
-        const lum = Math.min(0.85, 0.30 + Math.abs(x) * 0.28) * p.brightness;
-        _c.setHSL(hue, 0.85, lum);
-      } else {
-        const c1 = new THREE.Color(p.colorPrimary);
-        const c2 = new THREE.Color(p.colorSecondary);
-        _c.copy(c1).lerp(c2, t).multiplyScalar(p.brightness);
-      }
-      colArr[i * 3    ] = _c.r;
-      colArr[i * 3 + 1] = _c.g;
-      colArr[i * 3 + 2] = _c.b;
-    }
-
-    this._points.geometry.getAttribute('position').needsUpdate = true;
-    this._points.geometry.getAttribute('color').needsUpdate    = true;
-    this._points.geometry.setDrawRange(0, nPoints);
-    this._points.material.size    = 0.009 * p.scale * p.pointSize * 0.5;
-    this._points.material.opacity = Math.min(0.95, 0.85 * p.brightness);
-  }
-
-  // ── 3D Sine Map — density grid (high detail) ─────────────────
-  //   Same sine map, 10M iterations accumulated into a 128³ voxel grid.
-  //   Colour = log-density: dark where the path barely passes, bright where it dwells.
-  _buildAttractorDensity(a, p) {
-    const react = p.reactivity;
-
-    // a,b ≥ 1.8 ensures the map stays chaotic; d,e,f ≥ 0.6 ensures coupling
-    const pa = 1.8 + a.spectralCentroid * react * 2.2;
-    const pb = 2.2 + a.dominantFreq    * react * 2.4;
-    const pc = 1.0 + (a.spectralSpread || 0.3) * react * 0.5;
-    const pd = 0.6 + a.bass    * react * 0.8;
-    const pe = 0.5 + a.lowMid  * react * 0.8;
-    const pf = 0.6 + a.high    * react * 0.7;
-
-    const GRID  = 128;
-    const RANGE = 2.5;
-    const CELL  = (2 * RANGE) / GRID;
-    const GRID3 = GRID * GRID * GRID;
-    const grid  = new Int32Array(GRID3);
-
-    let x = 0.1, y = 0.0, z = 0.0;
-    for (let i = 0; i < 1000; i++) {
-      const nx = Math.sin(pa * y) + pd * Math.sin(pb * z);
-      const ny = Math.sin(pb * z) + pe * Math.sin(pc * x);
-      const nz = Math.sin(pc * x) + pf * Math.sin(pa * y);
-      x = nx; y = ny; z = nz;
-    }
-
-    let maxDensity = 0;
-    for (let i = 0; i < 10000000; i++) {
-      const nx = Math.sin(pa * y) + pd * Math.sin(pb * z);
-      const ny = Math.sin(pb * z) + pe * Math.sin(pc * x);
-      const nz = Math.sin(pc * x) + pf * Math.sin(pa * y);
-      x = nx; y = ny; z = nz;
-
-      const gx = (x + RANGE) / CELL | 0;
-      const gy = (y + RANGE) / CELL | 0;
-      const gz = (z + RANGE) / CELL | 0;
-
-      if (gx >= 0 && gx < GRID && gy >= 0 && gy < GRID && gz >= 0 && gz < GRID) {
-        const v = ++grid[gx + gy * GRID + gz * GRID * GRID];
-        if (v > maxDensity) maxDensity = v;
-      }
-    }
-
-    // Adaptive threshold: keep rendered points under MAX_DENSITY
-    let minDensity = 2;
-    let cellCount = 0;
-    for (let i = 0; i < GRID3; i++) if (grid[i] >= minDensity) cellCount++;
-    while (cellCount > MAX_DENSITY) {
-      minDensity = Math.ceil(minDensity * 1.5);
-      cellCount = 0;
-      for (let i = 0; i < GRID3; i++) if (grid[i] >= minDensity) cellCount++;
-    }
-
-    const posArr = this._points.geometry.getAttribute('position').array;
-    const colArr = this._points.geometry.getAttribute('color').array;
-    const _c     = new THREE.Color();
-    const sc     = p.scale * 0.42;
-    const logMax = Math.log(maxDensity + 1);
     let count = 0;
 
-    for (let gx = 0; gx < GRID && count < MAX_DENSITY; gx++) {
-      for (let gy = 0; gy < GRID && count < MAX_DENSITY; gy++) {
-        for (let gz = 0; gz < GRID && count < MAX_DENSITY; gz++) {
-          const density = grid[gx + gy * GRID + gz * GRID * GRID];
-          if (density < minDensity) continue;
+    for (let seed = 0; seed < nSeeds && count < nPoints; seed++) {
+      let x = (hash(seed * 3.1)  - 0.5) * 0.8;
+      let y = (hash(seed * 7.3)  - 0.5) * 0.8;
+      let z = (hash(seed * 13.7) - 0.5) * 0.8;
 
-          posArr[count * 3    ] = ((gx + 0.5) / GRID * 2 * RANGE - RANGE) * sc;
-          posArr[count * 3 + 1] = ((gy + 0.5) / GRID * 2 * RANGE - RANGE) * sc;
-          posArr[count * 3 + 2] = ((gz + 0.5) / GRID * 2 * RANGE - RANGE) * sc;
+      for (let i = 0; i < warmup; i++) {
+        const dx = Math.sin(y) - b * x;
+        const dy = Math.sin(z) - b * y;
+        const dz = Math.sin(x) - b * z;
+        x += dx * dt; y += dy * dt; z += dz * dt;
+      }
 
-          const t = Math.log(density + 1) / logMax;
+      const step = Math.min(stepsPerSeed, nPoints - count);
+      for (let i = 0; i < step; i++) {
+        const dx = Math.sin(y) - b * x;
+        const dy = Math.sin(z) - b * y;
+        const dz = Math.sin(x) - b * z;
+        x += dx * dt; y += dy * dt; z += dz * dt;
 
-          if (p.autoColor) {
-            // Violet → pink → near-white at density peaks
-            const hue = (0.78 - t * 0.25 + 1) % 1;
-            const sat = Math.max(0.05, 0.95 - t * 0.70);
-            const lum = Math.min(0.95, 0.10 + t * 0.85) * p.brightness;
-            _c.setHSL(hue, sat, lum);
-          } else {
-            const c1 = new THREE.Color(p.colorPrimary);
-            const c2 = new THREE.Color(p.colorSecondary);
-            _c.copy(c1).lerp(c2, t).multiplyScalar(p.brightness * (0.15 + t * 0.85));
-          }
-          colArr[count * 3    ] = _c.r;
-          colArr[count * 3 + 1] = _c.g;
-          colArr[count * 3 + 2] = _c.b;
-          count++;
+        posArr[count * 3    ] = x * sc;
+        posArr[count * 3 + 1] = y * sc;
+        posArr[count * 3 + 2] = z * sc;
+
+        const speed  = Math.sqrt(dx * dx + dy * dy + dz * dz);
+        // Slow regions dwell on the attractor manifold → brighter (density proxy).
+        // Tuned so typical speed 0.35 → bright≈0.55, near-standstill → bright≈1.0.
+        const bright = Math.min(1.0, 0.25 / (speed + 0.12));
+
+        if (p.autoColor) {
+          const hue = (baseHue + speed * 0.10) % 1;
+          const sat = 0.80 - bright * 0.45;          // desaturate to white at bright spots
+          const lum = Math.min(0.92, 0.30 + bright * 0.62) * p.brightness;
+          _c.setHSL(hue, Math.max(0.1, sat), lum);
+        } else {
+          const c1 = new THREE.Color(p.colorPrimary);
+          const c2 = new THREE.Color(p.colorSecondary);
+          _c.copy(c1).lerp(c2, 1 - bright).multiplyScalar(p.brightness * (0.3 + bright * 0.7));
         }
+        colArr[count * 3    ] = _c.r;
+        colArr[count * 3 + 1] = _c.g;
+        colArr[count * 3 + 2] = _c.b;
+        count++;
       }
     }
 
     this._points.geometry.getAttribute('position').needsUpdate = true;
     this._points.geometry.getAttribute('color').needsUpdate    = true;
     this._points.geometry.setDrawRange(0, count);
-    this._points.material.size    = 0.022 * p.scale;
-    this._points.material.opacity = Math.min(0.95, 0.90 * p.brightness);
+    this._points.material.size    = 0.014 * p.scale * p.pointSize * 0.5;
+    this._points.material.opacity = Math.min(0.95, 0.85 * p.brightness);
   }
 
+  // ── 3D Radial / orbital shells ────────────────────────────────
+  //   Each ring is tilted into a unique 3D orientation via Rodrigues rotation,
+  //   so the stack fans into a complex orbital sculpture rather than flat discs.
+  //   Multi-harmonic deformation creates complex lobed shapes.
+  //   Bass rings dip, treble rings rise; neighbouring rings interleave in 3D.
+  _buildRadial(a, p) {
+    const react = p.reactivity;
+    const fft   = a.fftSnapshot || new Float32Array(128);
+    const rings  = Math.min(MAX_LINES, Math.round(p.layers));
+    const pool   = this._linesGroup.children;
+    const PTS    = 512;
+
+    for (let ri = 0; ri < MAX_LINES; ri++) {
+      const line = pool[ri];
+      if (ri >= rings) { line.visible = false; continue; }
+      line.visible = true;
+
+      const tR = ri / Math.max(1, rings - 1);
+
+      // Band energy for this ring
+      const lo = Math.floor(tR * 120);
+      const hi = Math.min(127, Math.floor(((ri + 1) / rings) * 120));
+      let energy = 0;
+      for (let k = lo; k <= hi; k++) energy += fft[k];
+      energy /= Math.max(1, hi - lo + 1);
+
+      const baseR = (0.25 + tR * 0.75) * p.scale * (0.85 + a.volume * react * 0.35);
+      const phase = a.dominantFreq * Math.PI * 6 * (ri + 1) + tR * p.twist * Math.PI * 2;
+      const lobes = 2 + Math.round(a.dominantFreq * react * 10) + ri;
+
+      // 3D tilt: each ring's plane rotated by Rodrigues' formula
+      // tiltAngle increases through the stack; tiltAxis rotates with the ring index
+      const tiltAngle = tR * Math.PI * (0.85 + a.spectralCentroid * react * 0.55);
+      const axisAngle = ri * (Math.PI / Math.max(1, rings)) * 2.4 + a.dominantFreq * Math.PI * react;
+      const ax = Math.cos(axisAngle), ay = Math.sin(axisAngle);
+      const ct = Math.cos(tiltAngle), st = Math.sin(tiltAngle);
+
+      const arr = line.geometry.getAttribute('position').array;
+
+      for (let i = 0; i <= PTS; i++) {
+        const θ = (i / PTS) * Math.PI * 2;
+
+        const binIdx = Math.min(127, lo + Math.floor((θ / (Math.PI * 2)) * Math.max(1, hi - lo)));
+        const fftVal = fft[binIdx];
+
+        // Multi-harmonic deformation for complex, non-circular shapes
+        const mod1 = Math.sin(lobes * θ + phase)                     * energy * react * 0.32;
+        const mod2 = Math.sin(lobes * 2 * θ + phase * 1.53)          * energy * a.spectralCentroid * react * 0.18;
+        const mod3 = fftVal                                            * react * 0.20;
+        const mod4 = Math.cos((lobes + 1) * θ + phase * 0.71)        * energy * a.high * react * 0.13;
+
+        const r = Math.max(0.05, baseR + mod1 + mod2 + mod3 + mod4);
+
+        // Local point in the ring's flat plane before 3D tilt
+        const lx = Math.cos(θ) * r;
+        const ly = Math.sin(θ) * r;
+        // Z deformation: meaningfully large for real depth
+        const lz = (Math.sin(lobes * θ * 0.5 + phase)          * energy * 0.50
+                 +  Math.cos(lobes * θ      + phase * 1.2)      * energy * a.high * react * 0.22) * p.scale;
+
+        // Rodrigues' rotation: (lx, ly, lz) rotated by tiltAngle around (ax, ay, 0)
+        const dot = ax * lx + ay * ly;
+        const cx  =  ay * lz;
+        const cy  = -ax * lz;
+        const cz  =  ax * ly - ay * lx;
+
+        arr[i * 3    ] = lx * ct + cx * st + ax * dot * (1 - ct);
+        arr[i * 3 + 1] = ly * ct + cy * st + ay * dot * (1 - ct);
+        arr[i * 3 + 2] = lz * ct + cz * st;
+      }
+
+      line.geometry.getAttribute('position').needsUpdate = true;
+      line.geometry.setDrawRange(0, PTS + 1);
+
+      const c = _ringColor(tR, a, p, energy);
+      line.material.color.set(c);
+      line.material.opacity = Math.min(1, Math.max(0.25, 0.28 + energy * p.brightness * 0.95));
+    }
+  }
+}
+
+// ── Color helpers ─────────────────────────────────────────────────
+function _ringColor(tR, a, p, energy) {
+  if (p.autoColor) {
+    const hue = (0.05 + tR * 0.7 + a.spectralCentroid * 0.2) % 1;
+    const lum = Math.min(0.85, 0.45 + energy * 0.4);
+    return new THREE.Color().setHSL(hue, 0.9, lum);
+  }
+  const c1 = new THREE.Color(p.colorPrimary);
+  const c2 = new THREE.Color(p.colorSecondary);
+  const c3 = new THREE.Color(p.colorAccent);
+  const c  = tR < 0.5 ? c1.clone().lerp(c2, tR * 2) : c2.clone().lerp(c3, (tR - 0.5) * 2);
+  return c.multiplyScalar(p.brightness * (0.6 + energy * 0.6));
 }
