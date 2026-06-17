@@ -516,25 +516,40 @@ export class SoundRenderer {
 
   // ── Thomas attractor particle cloud ──────────────────────────
   //   ẋ = sin(y)−b·x, ẏ = sin(z)−b·y, ż = sin(x)−b·z
-  //   b (damping) driven by bass: lower = more loops, more complexity.
+  //   Each detected frequency peak drives its own b and hue:
+  //   low notes → b near 0.10 (complex, loopy), high notes → b near 0.185 (tighter).
   //   Speed-based brightness: slow regions dwell on the manifold = bright streaks.
   _buildAttractor(a, p) {
     const react = p.reactivity;
-    // Thomas attractor is chaotic for b < 0.208; above that it collapses to a fixed point.
-    // Bass energy lowers b toward 0.10 for denser, more complex loops.
-    const b  = Math.max(0.10, 0.185 - a.bass * react * 0.07 - (a.spectralSpread || 0) * react * 0.02);
-    const dt = 0.05;
+    const dt    = 0.05;
+    const fft   = a.fftSnapshot || new Float32Array(128);
 
-    const nPoints     = Math.min(MAX_DENSITY, Math.floor(p.density));
-    const nSeeds      = Math.max(1, Math.min(8, 2 + Math.round(a.spectralCentroid * react * 5)));
-    const warmup      = 4000;
+    // Detect prominent frequency peaks — each one drives its own attractor trajectory
+    const peaks = [];
+    for (let i = 2; i < 100; i++) {
+      if (fft[i] > 0.04 && fft[i] > fft[i - 1] && fft[i] > fft[i + 1])
+        peaks.push({ k: i, e: fft[i] });
+    }
+    peaks.sort((a, b) => b.e - a.e);
+    while (peaks.length < 2) {
+      peaks.push({ k: 5 + peaks.length * 30, e: 0.2 + a.bass * 0.2 });
+    }
+
+    const nSeeds = Math.max(1, Math.min(8, 2 + Math.round(a.spectralCentroid * react * 5)));
+    // Low-freq peaks → b near 0.10 (chaotic, loopy); high-freq → b near 0.185 (structured)
+    const seedBs   = peaks.slice(0, nSeeds).map(pk =>
+      Math.max(0.10, Math.min(0.185, 0.10 + (pk.k / 100) * 0.085 - a.bass * react * 0.03)));
+    // Each peak gets a distinct hue so different notes are visually separable
+    const seedHues = peaks.slice(0, nSeeds).map(pk => (0.72 - (pk.k / 100) * 0.55 + 1) % 1);
+
+    const nPoints      = Math.min(MAX_DENSITY, Math.floor(p.density));
+    const warmup       = 4000;
     const stepsPerSeed = Math.floor(nPoints / nSeeds);
 
     const posArr = this._points.geometry.getAttribute('position').array;
     const colArr = this._points.geometry.getAttribute('color').array;
     const _c     = new THREE.Color();
     const sc     = p.scale * 0.30;
-    const baseHue = p.autoColor ? (0.72 - a.spectralCentroid * 0.18 + 1) % 1 : 0;
 
     const fract = x => x - Math.floor(x);
     const hash  = s => fract(Math.sin(s * 127.1) * 43758.5453);
@@ -542,6 +557,9 @@ export class SoundRenderer {
     let count = 0;
 
     for (let seed = 0; seed < nSeeds && count < nPoints; seed++) {
+      const b       = seedBs[seed]   ?? 0.15;
+      const peakHue = seedHues[seed] ?? 0.72;
+
       let x = (hash(seed * 3.1)  - 0.5) * 0.8;
       let y = (hash(seed * 7.3)  - 0.5) * 0.8;
       let z = (hash(seed * 13.7) - 0.5) * 0.8;
@@ -566,12 +584,11 @@ export class SoundRenderer {
 
         const speed  = Math.sqrt(dx * dx + dy * dy + dz * dz);
         // Slow regions dwell on the attractor manifold → brighter (density proxy).
-        // Tuned so typical speed 0.35 → bright≈0.55, near-standstill → bright≈1.0.
         const bright = Math.min(1.0, 0.25 / (speed + 0.12));
 
         if (p.autoColor) {
-          const hue = (baseHue + speed * 0.10) % 1;
-          const sat = 0.80 - bright * 0.45;          // desaturate to white at bright spots
+          const hue = (peakHue + speed * 0.10) % 1;
+          const sat = 0.80 - bright * 0.45;
           const lum = Math.min(0.92, 0.30 + bright * 0.62) * p.brightness;
           _c.setHSL(hue, Math.max(0.1, sat), lum);
         } else {
