@@ -656,16 +656,3 @@ export class SoundRenderer {
   }
 
 }
- ─────────────────────────────────────────────────
-function _ringColor(tR, a, p, energy) {
-  if (p.autoColor) {
-    const hue = (0.05 + tR * 0.7 + a.spectralCentroid * 0.2) % 1;
-    const lum = Math.min(0.85, 0.45 + energy * 0.4);
-    return new THREE.Color().setHSL(hue, 0.9, lum);
-  }
-  const c1 = new THREE.Color(p.colorPrimary);
-  const c2 = new THREE.Color(p.colorSecondary);
-  const c3 = new THREE.Color(p.colorAccent);
-  const c  = tR < 0.5 ? c1.clone().lerp(c2, tR * 2) : c2.clone().lerp(c3, (tR - 0.5) * 2);
-  return c.multiplyScalar(p.brightness * (0.6 + energy * 0.6));
-}
