@@ -1,6 +1,6 @@
-import { AudioEngine }  from './audio.js?v=21';
-import { SoundRenderer } from './renderer.js?v=21';
-import { exportCanvas }  from './exporter.js?v=21';
+import { AudioEngine }  from './audio.js?v=22';
+import { SoundRenderer } from './renderer.js?v=22';
+import { exportCanvas }  from './exporter.js?v=22';
 
 const audio = new AudioEngine();
 let renderer = null;
@@ -355,7 +355,9 @@ function bindExport() {
           document.body.removeChild(a);
           setTimeout(() => URL.revokeObjectURL(url), 3000);
         } else {
-          await exportCanvas(renderer.getCanvas(), fmt);
+          // PDF wraps as JPEG anyway; raster formats get 3× resolution for detail
+          const canvas = fmt === 'pdf' ? renderer.getCanvas() : renderer.getHighResCanvas(3);
+          await exportCanvas(canvas, fmt);
         }
       } catch (e) {
         setStatus(`Export error: ${e.message}`);
