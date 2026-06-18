@@ -171,6 +171,31 @@ export class SoundRenderer {
     return this.renderer.domElement;
   }
 
+  // Render at scale× resolution for high-quality raster export, then restore display size.
+  getHighResCanvas(scale = 3) {
+    const dw = this.container.clientWidth  || (window.innerWidth  - 272);
+    const dh = this.container.clientHeight || window.innerHeight;
+
+    this.renderer.setPixelRatio(scale);
+    this.renderer.setSize(dw, dh, false);
+    this.camera.aspect = dw / dh;
+    this.camera.updateProjectionMatrix();
+    this.renderer.render(this.scene, this.camera);
+
+    const src = this.renderer.domElement;
+    const dst = document.createElement('canvas');
+    dst.width  = src.width;
+    dst.height = src.height;
+    dst.getContext('2d').drawImage(src, 0, 0);
+
+    this.renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+    this.renderer.setSize(dw, dh, false);
+    this.camera.updateProjectionMatrix();
+    this.renderer.render(this.scene, this.camera);
+
+    return dst;
+  }
+
   exportSVG() {
     this.renderer.render(this.scene, this.camera);
     const canvas = this.renderer.domElement;
@@ -186,6 +211,17 @@ export class SoundRenderer {
       `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"`,
       `     width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">`,
       '  <title>Soundform Design</title>',
+      '  <defs>',
+      '    <filter id="bloom" color-interpolation-filters="sRGB"',
+      '            x="-60%" y="-60%" width="220%" height="220%">',
+      '      <feGaussianBlur in="SourceGraphic" stdDeviation="5" result="blur"/>',
+      '      <feMerge>',
+      '        <feMergeNode in="blur"/>',
+      '        <feMergeNode in="blur"/>',
+      '        <feMergeNode in="SourceGraphic"/>',
+      '      </feMerge>',
+      '    </filter>',
+      '  </defs>',
       `  <rect id="background" width="${w}" height="${h}" fill="#03040a"/>`,
     ];
 
@@ -199,15 +235,15 @@ export class SoundRenderer {
       const pos   = geo.getAttribute('position').array;
       const col   = geo.getAttribute('color').array;
 
-      // 4 k circles opens instantly in Illustrator; scale r up to compensate
-      const MAX_PTS = 4000;
-      const stride  = Math.max(1, Math.ceil(total / MAX_PTS));
+      // 8k circles — glow filter makes each appear larger, so base radius stays tight
+      const SVG_CAP = 8000;
+      const stride  = Math.max(1, Math.ceil(total / SVG_CAP));
       const fovCot  = this.camera.projectionMatrix.elements[5];
       const baseR   = (this._points.material.size * fovCot * h * 0.5) / this.camera.position.z;
-      const r       = Math.max(1.2, baseR * Math.sqrt(stride)).toFixed(1);
+      const r       = Math.max(1.0, baseR * Math.sqrt(stride) * 0.75).toFixed(1);
       const op      = this._points.material.opacity.toFixed(2);
 
-      // Group by hue band so each colour family is independently selectable
+      // Group by hue band so each colour family is independently selectable in Figma/Illustrator
       const BANDS = 12;
       const buckets = Array.from({ length: BANDS }, () => []);
 
@@ -221,7 +257,6 @@ export class SoundRenderer {
         const cr = col[i * 3], cg = col[i * 3 + 1], cb = col[i * 3 + 2];
         const fill = `#${hex2(cr)}${hex2(cg)}${hex2(cb)}`;
 
-        // Approximate hue for bucketing
         const mx = Math.max(cr, cg, cb), mn = Math.min(cr, cg, cb), d = mx - mn;
         let hue = 0;
         if (d > 0.001) {
@@ -230,10 +265,11 @@ export class SoundRenderer {
           else                hue = (cr - cg) / d + 4;
         }
         buckets[Math.min(BANDS - 1, (hue / 6 * BANDS) | 0)]
-          .push(`    <circle cx="${sx}" cy="${sy}" r="${r}" fill="${fill}"/>`);
+          .push(`      <circle cx="${sx}" cy="${sy}" r="${r}" fill="${fill}"/>`);
       }
 
-      out.push('  <g id="particles" opacity="' + op + '">');
+      // mix-blend-mode:screen simulates additive blending; bloom filter adds the glow halo
+      out.push(`  <g id="particles" opacity="${op}" style="mix-blend-mode:screen;isolation:isolate" filter="url(#bloom)">`);
       for (let b = 0; b < BANDS; b++) {
         if (!buckets[b].length) continue;
         out.push(`    <g id="hue-band-${b}">`);
@@ -245,7 +281,7 @@ export class SoundRenderer {
 
     // ── Line modes (Lorenz / Timbre) ────────────────────────────────
     if (this._linesGroup.visible) {
-      out.push('  <g id="lines">');
+      out.push('  <g id="lines" style="mix-blend-mode:screen" filter="url(#bloom)">');
       let li = 0;
       for (const line of this._linesGroup.children) {
         if (!line.visible) continue;
