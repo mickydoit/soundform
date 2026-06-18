@@ -355,8 +355,11 @@ function bindExport() {
           document.body.removeChild(a);
           setTimeout(() => URL.revokeObjectURL(url), 3000);
         } else {
-          // PDF wraps as JPEG anyway; raster formats get 3× resolution for detail
-          const canvas = fmt === 'pdf' ? renderer.getCanvas() : renderer.getHighResCanvas(3);
+          // PNG gets transparent bg so it composites cleanly in Figma on any background
+          // JPG/WebP get dark bg (no alpha support); PDF uses display canvas (embeds as JPEG)
+          const canvas = fmt === 'pdf'  ? renderer.getCanvas()
+                       : fmt === 'png'  ? renderer.getHighResCanvas(3, true)
+                       :                  renderer.getHighResCanvas(3, false);
           await exportCanvas(canvas, fmt);
         }
       } catch (e) {
