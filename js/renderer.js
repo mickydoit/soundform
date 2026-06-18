@@ -24,7 +24,7 @@ export class SoundRenderer {
     this.camera = new THREE.PerspectiveCamera(50, w / h, 0.01, 100);
     this.camera.position.z = 4;
 
-    this.renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+    this.renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true, alpha: true });
     this.renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
     this.renderer.setSize(w, h);
     this.container.appendChild(this.renderer.domElement);
@@ -172,9 +172,13 @@ export class SoundRenderer {
   }
 
   // Render at scale× resolution for high-quality raster export, then restore display size.
-  getHighResCanvas(scale = 3) {
+  // transparent=true removes the dark background so the design composites cleanly in Figma.
+  getHighResCanvas(scale = 3, transparent = false) {
     const dw = this.container.clientWidth  || (window.innerWidth  - 272);
     const dh = this.container.clientHeight || window.innerHeight;
+
+    const prevBg = this.scene.background;
+    if (transparent) this.scene.background = null;
 
     this.renderer.setPixelRatio(scale);
     this.renderer.setSize(dw, dh, false);
@@ -188,6 +192,7 @@ export class SoundRenderer {
     dst.height = src.height;
     dst.getContext('2d').drawImage(src, 0, 0);
 
+    this.scene.background = prevBg;
     this.renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
     this.renderer.setSize(dw, dh, false);
     this.camera.updateProjectionMatrix();
