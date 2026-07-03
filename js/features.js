@@ -10,23 +10,57 @@ export function detectPitch(buf, sampleRate) {
 
   const minLag = Math.floor(sampleRate / 1000);   // 1000 Hz ceiling
   const maxLag = Math.min(Math.floor(sampleRate / 60), n - 1); // 60 Hz floor
-  let bestLag = -1, bestCorr = 0;
-  for (let lag = minLag; lag <= maxLag; lag++) {
-    let corr = 0, norm = 0;
+
+  // Pass 1: compute plain normalized autocorrelation (no sample-count
+  // scaling — that biased selection toward small lags and caused
+  // octave/subharmonic corruption). We also compute one lag beyond each
+  // end of the search range (where the buffer allows) so parabolic
+  // refinement at an edge lag has real neighbours; candidates themselves
+  // stay within [minLag, maxLag].
+  const loLag = Math.max(1, minLag - 1);
+  const hiLag = Math.min(n - 1, maxLag + 1);
+  const corr = new Float32Array(hiLag + 1);
+  let globalMax = 0;
+  for (let lag = loLag; lag <= hiLag; lag++) {
+    let c = 0, norm = 0;
     const nSamples = n - lag;
     for (let i = 0; i < nSamples; i++) {
-      corr += buf[i] * buf[i + lag];
+      c += buf[i] * buf[i + lag];
       norm += buf[i] * buf[i] + buf[i + lag] * buf[i + lag];
     }
-    // Normalize by sample count to prevent bias toward larger lags
-    const normCorr = norm > 0 ? (2 * corr) / norm * nSamples : 0;
-    if (normCorr > bestCorr) { bestCorr = normCorr; bestLag = lag; }
+    corr[lag] = norm > 0 ? (2 * c) / norm : 0;
+    if (lag >= minLag && lag <= maxLag && corr[lag] > globalMax) globalMax = corr[lag];
   }
-  if (bestLag < 0) return { freq: 0, confidence: 0 };
-  // Normalize confidence back to [0,1] by removing the sample count scaling
-  const confidence = bestCorr > 0 ? bestCorr / Math.max(1, n - bestLag) : 0;
-  if (confidence < 0.3) return { freq: 0, confidence };
-  return { freq: sampleRate / bestLag, confidence };
+  if (globalMax < 0.3) return { freq: 0, confidence: globalMax };
+
+  // Pass 2: pick the SMALLEST lag that is within 0.02 of the global max and
+  // is a local maximum. Since subharmonic multiples of the true period all
+  // score ~equally, taking the smallest such lag selects the fundamental
+  // (smallest period = highest frequency = shortest lag).
+  const at = lag => (lag < minLag || lag > maxLag) ? -Infinity : corr[lag];
+  let bestLag = -1;
+  for (let lag = minLag; lag <= maxLag; lag++) {
+    if (corr[lag] >= globalMax - 0.02 && corr[lag] >= at(lag - 1) && corr[lag] >= at(lag + 1)) {
+      bestLag = lag;
+      break;
+    }
+  }
+  if (bestLag < 0) return { freq: 0, confidence: globalMax };
+
+  // Parabolic refinement around the chosen lag for sub-sample precision.
+  // Neighbours use the extended range [loLag, hiLag] so refinement works
+  // at the edges of the search range too.
+  const cL = corr[bestLag];
+  const cPrev = bestLag - 1 >= loLag ? corr[bestLag - 1] : cL;
+  const cNext = bestLag + 1 <= hiLag ? corr[bestLag + 1] : cL;
+  const denom = cPrev - 2 * cL + cNext;
+  let delta = 0;
+  if (Math.abs(denom) > 1e-9) {
+    delta = 0.5 * (cPrev - cNext) / denom;
+    delta = Math.max(-0.5, Math.min(0.5, delta));
+  }
+  const confidence = Math.max(0, Math.min(1, cL));
+  return { freq: sampleRate / (bestLag + delta), confidence };
 }
 
 // Fold FFT magnitudes into 12 pitch classes (55 Hz – 4 kHz), max-normalised.

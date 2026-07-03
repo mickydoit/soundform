@@ -16,6 +16,15 @@ test('detectPitch finds 440 Hz', () => {
   assert.ok(confidence > 0.8);
 });
 
+test('detectPitch sweep: accurate across the 60-1000 Hz band', () => {
+  for (const f of [82, 110, 220, 440, 660, 950, 1000]) {
+    const { freq, confidence } = detectPitch(sine(f), SR);
+    const tol = Math.max(2, 0.01 * f);
+    assert.ok(Math.abs(freq - f) <= tol, `expected ~${f} Hz, got ${freq}`);
+    assert.ok(confidence > 0.85, `low confidence ${confidence} at ${f} Hz`);
+  }
+});
+
 test('detectPitch reports low confidence on noise', () => {
   const b = new Float32Array(2048);
   let s = 1; // deterministic LCG noise
