@@ -1,3 +1,5 @@
+import { detectPitch, chromaFromFFT, spectralFlux } from './features.js?v=18';
+
 export class AudioEngine {
   constructor() {
     this.ctx      = null;
@@ -53,41 +55,76 @@ export class AudioEngine {
     this.analyser.getByteFrequencyData(this.fftData);
     const d = this.fftData;
 
-    // 44100 Hz, fftSize=1024 → 512 bins, each ≈ 43 Hz wide
+    // 44100 Hz, fftSize=2048 → 1024 bins, each ≈ 21.5 Hz wide
     const avg = (a, b) => { let s = 0; for (let i = a; i < b; i++) s += d[i]; return s / ((b - a) * 255); };
 
-    const subBass = avg(0,   3);
-    const bass    = avg(3,   12);
-    const lowMid  = avg(12,  47);
-    const highMid = avg(47,  140);
-    const high    = avg(140, 300);
-    const volume  = avg(0,   200);
+    const subBass = avg(0,   6);
+    const bass    = avg(6,   24);
+    const lowMid  = avg(24,  94);
+    const highMid = avg(94,  280);
+    const high    = avg(280, 600);
+    const volume  = avg(0,   400);
 
     let maxIdx = 1, maxVal = 0;
-    for (let i = 1; i < 300; i++) if (d[i] > maxVal) { maxVal = d[i]; maxIdx = i; }
+    for (let i = 1; i < 600; i++) if (d[i] > maxVal) { maxVal = d[i]; maxIdx = i; }
 
     let wSum = 0, total = 0;
-    for (let i = 0; i < 300; i++) { wSum += i * d[i]; total += d[i]; }
+    for (let i = 0; i < 600; i++) { wSum += i * d[i]; total += d[i]; }
     const centroidBin = total > 0 ? wSum / total : 90;
 
     // Spectral spread: std dev of the frequency distribution (0 = pure tone, 1 = white noise)
     let spreadSq = 0;
-    for (let i = 0; i < 300; i++) spreadSq += (i - centroidBin) ** 2 * d[i];
+    for (let i = 0; i < 600; i++) spreadSq += (i - centroidBin) ** 2 * d[i];
     const spectralSpread = total > 0 ? Math.min(1, Math.sqrt(spreadSq / total) / 120) : 0.2;
 
     // Full 128-bin snapshot for the radial visualizer
     const fftSnapshot = new Float32Array(128);
     for (let i = 0; i < 128; i++) {
-      // Average 4 bins per snapshot bin
-      fftSnapshot[i] = (d[i*4] + d[i*4+1] + d[i*4+2] + d[i*4+3]) / (4 * 255);
+      // Average 8 bins per snapshot bin
+      fftSnapshot[i] = (d[i*8] + d[i*8+1] + d[i*8+2] + d[i*8+3] + d[i*8+4] + d[i*8+5] + d[i*8+6] + d[i*8+7]) / (8 * 255);
     }
 
     return {
       subBass, bass, lowMid, highMid, high, volume,
-      dominantFreq:     maxIdx / 300,
-      spectralCentroid: centroidBin / 300,
+      dominantFreq:     maxIdx / 600,
+      spectralCentroid: centroidBin / 600,
       spectralSpread,
       fftSnapshot,
+    };
+  }
+
+  // One musical-feature frame. Pitch runs every 2nd call (it's the heavy one).
+  getMusicalFrame() {
+    if (!this.analyser || !this.active) return null;
+    this.analyser.getFloatTimeDomainData(this.timeData);
+    this.analyser.getFloatFrequencyData(this.magData);
+
+    // dB → linear magnitude
+    const mag = new Float32Array(this.magData.length);
+    for (let i = 0; i < mag.length; i++) mag[i] = Math.pow(10, this.magData[i] / 20);
+
+    let rms = 0;
+    for (let i = 0; i < this.timeData.length; i++) rms += this.timeData[i] ** 2;
+    rms = Math.sqrt(rms / this.timeData.length);
+
+    if (this._frameNo++ % 2 === 0) {
+      this._lastPitch = detectPitch(this.timeData, this.ctx.sampleRate);
+    }
+    const chroma = chromaFromFFT(mag, this.ctx.sampleRate, this.analyser.fftSize);
+    const flux = spectralFlux(mag, this._prevMag);
+    this._prevMag.set(mag);
+
+    let wSum = 0, total = 0, spreadSq = 0;
+    for (let i = 0; i < 600 && i < mag.length; i++) { wSum += i * mag[i]; total += mag[i]; }
+    const cBin = total > 0 ? wSum / total : 180;
+    for (let i = 0; i < 600 && i < mag.length; i++) spreadSq += (i - cBin) ** 2 * mag[i];
+
+    return {
+      pitchHz: this._lastPitch.freq,
+      pitchConf: this._lastPitch.confidence,
+      chroma, flux, rms,
+      centroid: Math.min(1, cBin / 600),
+      spread: total > 0 ? Math.min(1, Math.sqrt(spreadSq / total) / 240) : 0.2,
     };
   }
 
@@ -95,9 +132,14 @@ export class AudioEngine {
     if (this.ctx) { if (this.ctx.state === 'suspended') await this.ctx.resume(); return; }
     this.ctx                            = new (window.AudioContext || window.webkitAudioContext)();
     this.analyser                       = this.ctx.createAnalyser();
-    this.analyser.fftSize               = 1024;
+    this.analyser.fftSize               = 2048;
     this.analyser.smoothingTimeConstant = 0.5;
     this.fftData                        = new Uint8Array(this.analyser.frequencyBinCount);
+    this.timeData                       = new Float32Array(2048);
+    this.magData                        = new Float32Array(this.analyser.frequencyBinCount);
+    this._prevMag                       = new Float32Array(this.analyser.frequencyBinCount);
+    this._frameNo                       = 0;
+    this._lastPitch                     = { freq: 0, confidence: 0 };
   }
 
   _stopSource() {
