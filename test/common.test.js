@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mulberry32, fnv1a, computeNormalization, applyNormalization,
-         replicateSymmetry, finalize, resamplePolyline } from '../js/generators/common.js';
+         replicateSymmetry, finalize, resamplePolyline, applyTwistArr } from '../js/generators/common.js';
 
 test('mulberry32 is deterministic in [0,1)', () => {
   const a = mulberry32(42), b = mulberry32(42);
@@ -46,4 +46,12 @@ test('resamplePolyline returns m points, keeps endpoints', () => {
   assert.equal(out.length, 15);
   assert.equal(out[0], 0);
   assert.ok(Math.abs(out[12] - 2) < 1e-5);
+});
+
+test('applyTwistArr rotates around Y proportionally to height', () => {
+  const arr = new Float32Array([1, 0, 0,   1, Math.PI / 2, 0]);
+  applyTwistArr(arr, 1); // y=0 → no rotation; y=π/2 → 90° rotation
+  assert.ok(Math.abs(arr[0] - 1) < 1e-6 && Math.abs(arr[2]) < 1e-6);
+  assert.ok(Math.abs(arr[3]) < 1e-6);       // x' = cos(π/2) = 0
+  assert.ok(Math.abs(arr[5] + 1) < 1e-6);   // z' = -sin(π/2) = -1
 });
