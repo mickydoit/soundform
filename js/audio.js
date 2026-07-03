@@ -70,12 +70,12 @@ export class AudioEngine {
 
     let wSum = 0, total = 0;
     for (let i = 0; i < 600; i++) { wSum += i * d[i]; total += d[i]; }
-    const centroidBin = total > 0 ? wSum / total : 90;
+    const centroidBin = total > 0 ? wSum / total : 180;
 
     // Spectral spread: std dev of the frequency distribution (0 = pure tone, 1 = white noise)
     let spreadSq = 0;
     for (let i = 0; i < 600; i++) spreadSq += (i - centroidBin) ** 2 * d[i];
-    const spectralSpread = total > 0 ? Math.min(1, Math.sqrt(spreadSq / total) / 120) : 0.2;
+    const spectralSpread = total > 0 ? Math.min(1, Math.sqrt(spreadSq / total) / 240) : 0.2;
 
     // Full 128-bin snapshot for the radial visualizer
     const fftSnapshot = new Float32Array(128);
