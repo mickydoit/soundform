@@ -1,0 +1,54 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { generate } from '../js/generators/index.js';
+
+export function testFingerprint(overrides = {}) {
+  const chroma = new Float32Array(12); chroma[0] = 1; chroma[4] = 0.8; chroma[7] = 0.7;
+  return Object.assign({
+    pitchMedian: 0.45, pitchRange: 0.3, contour: new Float32Array(8).fill(0.45),
+    pitchConfidence: 0.9, chroma, noteSet: [0, 4, 7], noteCount: 3,
+    consonance: 0.8, majorLeaning: true, velocity: 0.4,
+    volMean: 0.5, volVar: 0.3, attackSlope: 0.4, centroid: 0.4, spread: 0.3,
+    seed: 123456789,
+  }, overrides);
+}
+
+export const baseParams = { mode: 'attractor', density: 30000, complexity: 0.5, symmetry: 1, twist: 0, strandCount: 96 };
+
+function stats(positions) {
+  const n = positions.length / 3;
+  let maxAbs = 0; const mean = [0, 0, 0], sq = [0, 0, 0];
+  for (let i = 0; i < n; i++) for (let d = 0; d < 3; d++) {
+    const v = positions[i * 3 + d];
+    maxAbs = Math.max(maxAbs, Math.abs(v)); mean[d] += v / n; sq[d] += v * v / n;
+  }
+  return { maxAbs, std: sq.map((s, d) => Math.sqrt(Math.max(0, s - mean[d] ** 2))) };
+}
+
+export function checkGenerator(mode, fp = testFingerprint()) {
+  const params = { ...baseParams, mode };
+  const out = generate(fp, params);
+  assert.equal(out.positions.length % 3, 0);
+  assert.ok(out.positions.length / 3 >= params.density * 0.5, `${mode}: too few points`);
+  assert.equal(out.attr.length, out.positions.length / 3);
+  for (const v of out.attr) assert.ok(v >= 0 && v <= 1);
+  const { maxAbs, std } = stats(out.positions);
+  assert.ok(maxAbs <= 2.5, `${mode}: unbounded (${maxAbs})`);
+  assert.ok(std[0] + std[1] + std[2] > 0.15, `${mode}: degenerate`);
+  assert.ok(out.strands.length >= 24, `${mode}: needs strands`);
+  const out2 = generate(fp, params);
+  assert.deepEqual([...out.positions.slice(0, 300)], [...out2.positions.slice(0, 300)], `${mode}: not deterministic`);
+  return out;
+}
+
+test('attractor generator: bounded, dense, deterministic, strands', () => {
+  checkGenerator('attractor');
+});
+
+test('attractor: different fingerprints → different geometry', () => {
+  const a = generate(testFingerprint(), baseParams);
+  const b = generate(testFingerprint({ pitchMedian: 0.8, noteSet: [1, 2], noteCount: 2, consonance: 0.1, seed: 987 }), baseParams);
+  let diff = 0;
+  for (let i = 0; i < 300; i++) diff += Math.abs(a.positions[i] - b.positions[i]);
+  assert.ok(diff > 1, 'geometry should differ');
+});
