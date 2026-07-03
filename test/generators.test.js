@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { generate } from '../js/generators/index.js';
+import { pickSystem } from '../js/generators/attractor.js';
 
 export function testFingerprint(overrides = {}) {
   const chroma = new Float32Array(12); chroma[0] = 1; chroma[4] = 0.8; chroma[7] = 0.7;
@@ -51,4 +52,30 @@ test('attractor: different fingerprints → different geometry', () => {
   let diff = 0;
   for (let i = 0; i < 300; i++) diff += Math.abs(a.positions[i] - b.positions[i]);
   assert.ok(diff > 1, 'geometry should differ');
+});
+
+test('attractor: pickSystem routing table', () => {
+  assert.equal(pickSystem(testFingerprint({ consonance: 0.8, majorLeaning: true, noteCount: 3 })), 'thomas');
+  assert.equal(pickSystem(testFingerprint({ consonance: 0.8, majorLeaning: true, noteCount: 5, noteSet: [0, 2, 4, 7, 9] })), 'aizawa');
+  assert.equal(pickSystem(testFingerprint({ consonance: 0.8, majorLeaning: false })), 'halvorsen');
+  assert.equal(pickSystem(testFingerprint({ consonance: 0.1 })), 'dadras');
+  assert.equal(pickSystem(testFingerprint({ pitchConfidence: 0.2 })), 'sinemap');
+  assert.equal(pickSystem(testFingerprint({ velocity: 0.8 })), 'sinemap');
+});
+
+test('attractor: all five systems bounded, non-degenerate, deterministic', () => {
+  const routingFingerprints = {
+    thomas: testFingerprint({ consonance: 0.8, majorLeaning: true, noteCount: 3 }),
+    aizawa: testFingerprint({ consonance: 0.8, majorLeaning: true, noteCount: 5, noteSet: [0, 2, 4, 7, 9] }),
+    halvorsen: testFingerprint({ consonance: 0.8, majorLeaning: false }),
+    dadras: testFingerprint({ consonance: 0.1 }),
+    sinemap: testFingerprint({ pitchConfidence: 0.2 }),
+  };
+  const seeds = [1, 123456789, 987654321];
+  for (const [name, fp] of Object.entries(routingFingerprints)) {
+    assert.equal(pickSystem(fp), name, `routing fixture mismatch for ${name}`);
+    for (const seed of seeds) {
+      checkGenerator('attractor', { ...fp, seed });
+    }
+  }
 });

@@ -62,6 +62,35 @@ function cloudStdDev(pos, n) {
   return Math.sqrt(s[0] + s[1] + s[2]);
 }
 
+// Validate the FINALIZED (normalized) output: catches fat-tail outliers that
+// computeNormalization's r95 scaling can't see (a tight core with rare far
+// excursions still gets scale=1/r95, sending those excursions to huge maxAbs).
+// Stride-sampled for speed. NaN/Infinity fail both checks naturally (maxAbs
+// becomes NaN/Infinity, which is never <= 1.8; std sums to NaN, never >= 0.2).
+function validateFinalized(out) {
+  const n = out.positions.length / 3;
+  const stride = 7;
+  let count = 0;
+  let maxAbs = 0;
+  const m = [0, 0, 0], s = [0, 0, 0];
+  for (let i = 0; i < n; i += stride) {
+    for (let d = 0; d < 3; d++) {
+      const v = out.positions[i * 3 + d];
+      maxAbs = Math.max(maxAbs, Math.abs(v));
+      m[d] += v;
+    }
+    count++;
+  }
+  if (count === 0) return false;
+  for (let d = 0; d < 3; d++) m[d] /= count;
+  for (let i = 0; i < n; i += stride) {
+    for (let d = 0; d < 3; d++) s[d] += (out.positions[i * 3 + d] - m[d]) ** 2;
+  }
+  const std = [0, 1, 2].map(d => Math.sqrt(s[d] / count));
+  const stdSum = std[0] + std[1] + std[2];
+  return maxAbs <= 1.8 && stdSum >= 0.2;
+}
+
 export function generate(fp, params, onProgress) {
   const name = pickSystem(fp);
   const sys = SYSTEMS[name];
@@ -120,7 +149,10 @@ export function generate(fp, params, onProgress) {
       }
       strands.push(resamplePolyline(raw, sys.flow ? 400 : 240));
     }
-    return finalize(positions, attr, strands, params);
+
+    const out = finalize(positions, attr, strands, params);
+    if (!validateFinalized(out)) continue; // fat-tail collapse → retry
+    return out;
   }
   throw new Error('attractor: all retries degenerate');
 }
