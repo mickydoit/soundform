@@ -105,3 +105,7 @@ test('chladni generator: bounded, dense, deterministic, strands', () => {
 test('radial generator', () => {
   checkGenerator('radial');
 });
+
+test('spectral generator', () => {
+  checkGenerator('spectral');
+});
