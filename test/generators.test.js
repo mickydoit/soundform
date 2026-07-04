@@ -101,3 +101,7 @@ test('attractor: strand-phase escape repros stay finite after retry', () => {
 test('chladni generator: bounded, dense, deterministic, strands', () => {
   checkGenerator('chladni');
 });
+
+test('radial generator', () => {
+  checkGenerator('radial');
+});

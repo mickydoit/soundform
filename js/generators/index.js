@@ -1,7 +1,8 @@
 import * as attractor from './attractor.js';
 import * as chladni from './chladni.js';
+import * as radial from './radial.js';
 
-const REGISTRY = { attractor: attractor.generate, chladni: chladni.generate };
+const REGISTRY = { attractor: attractor.generate, chladni: chladni.generate, radial: radial.generate };
 // Tasks 8–11 add: chladni, radial, spectral, timbre
 
 export function generate(fp, params, onProgress) {
