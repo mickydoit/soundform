@@ -24,7 +24,7 @@ export function generate(fp, params, onProgress) {
     const tiltA = fp.consonance > 0.5 ? s * golden : rnd() * Math.PI * 2;
     const tiltB = fp.consonance > 0.5 ? tS * Math.PI * 0.8 : rnd() * Math.PI;
     const ca = Math.cos(tiltA), sa = Math.sin(tiltA), cb = Math.cos(tiltB), sb = Math.sin(tiltB);
-    const tube = 0.015 + fp.velocity * 0.05 + tS * 0.01;
+    const tube = 0.008 + fp.velocity * 0.03 + tS * 0.006;
     const phase = fp.contour[s % 8] * Math.PI * 2;
 
     const orbit = (t) => {
@@ -38,9 +38,15 @@ export function generate(fp, params, onProgress) {
 
     for (let i = 0; i < perShell; i++) {
       const [x, y, z] = orbit(rnd());
-      positions[w * 3] = x + (rnd() - 0.5) * tube * 2;
-      positions[w * 3 + 1] = y + (rnd() - 0.5) * tube * 2;
-      positions[w * 3 + 2] = z + (rnd() - 0.5) * tube * 2;
+      // Random direction + product-of-two-uniforms magnitude: bounded, and its
+      // density spikes near r=0 with a soft taper to the cap — a real bright
+      // core instead of the old flat cube scatter, without a heavy unbounded tail.
+      const u = rnd() * 2 - 1, phi2 = rnd() * Math.PI * 2;
+      const s2 = Math.sqrt(Math.max(0, 1 - u * u));
+      const m = rnd() * rnd() * 3 * tube;
+      positions[w * 3] = x + s2 * Math.cos(phi2) * m;
+      positions[w * 3 + 1] = y + s2 * Math.sin(phi2) * m;
+      positions[w * 3 + 2] = z + u * m;
       attr[w] = tS;
       w++;
     }

@@ -22,7 +22,7 @@ export function generate(fp, params, onProgress) {
   filaments.forEach((fil, fi) => {
     const angle0 = (fil.pc / 12) * Math.PI * 2;
     const braid = fp.consonance * 0.25; // consonant chords braid toward each other
-    const jitter = 0.02 + fp.velocity * 0.06;
+    const jitter = 0.01 + fp.velocity * 0.035;
     const path = (t) => {
       const y = (t - 0.5) * H + fil.oct * 0.12;
       const ang = angle0 + t * Math.PI * 2 * turns;
@@ -32,9 +32,15 @@ export function generate(fp, params, onProgress) {
     for (let i = 0; i < perFil; i++) {
       const t = rnd();
       const [x, y, z] = path(t);
-      positions[w * 3] = x + (rnd() - 0.5) * jitter;
-      positions[w * 3 + 1] = y + (rnd() - 0.5) * jitter;
-      positions[w * 3 + 2] = z + (rnd() - 0.5) * jitter;
+      // Random direction + product-of-two-uniforms magnitude: bounded, and its
+      // density spikes near r=0 with a soft taper to the cap — a real bright
+      // core instead of the old flat cube scatter, without a heavy unbounded tail.
+      const u = rnd() * 2 - 1, phi2 = rnd() * Math.PI * 2;
+      const s2 = Math.sqrt(Math.max(0, 1 - u * u));
+      const m = rnd() * rnd() * 3 * jitter;
+      positions[w * 3] = x + s2 * Math.cos(phi2) * m;
+      positions[w * 3 + 1] = y + s2 * Math.sin(phi2) * m;
+      positions[w * 3 + 2] = z + u * m;
       attr[w] = Math.min(1, fil.amp);
       w++;
     }
