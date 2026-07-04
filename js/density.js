@@ -71,12 +71,25 @@ export class DensityRenderer {
     this.group = new THREE.Group();
     this.scene.add(this.group);
 
-    try {
-      this.target = this._makeTarget(w * this.renderer.getPixelRatio(), h * this.renderer.getPixelRatio(), THREE.HalfFloatType);
-      this.renderer.setRenderTarget(this.target);
-      this.renderer.setRenderTarget(null);
-    } catch (e) {
+    // Capability probe: THREE r134 doesn't throw when a float render target is
+    // unsupported — it just renders broken. Check the extensions ourselves
+    // before attempting to create the target, keeping the try/catch as a
+    // second net for anything the probe misses.
+    const gl = this.renderer.getContext();
+    const hasFloatSupport = this.renderer.capabilities.isWebGL2
+      ? !!gl.getExtension('EXT_color_buffer_float')
+      : !!(gl.getExtension('OES_texture_half_float') && gl.getExtension('EXT_color_buffer_half_float'));
+
+    if (!hasFloatSupport) {
       this.fallback = true;
+    } else {
+      try {
+        this.target = this._makeTarget(w * this.renderer.getPixelRatio(), h * this.renderer.getPixelRatio(), THREE.HalfFloatType);
+        this.renderer.setRenderTarget(this.target);
+        this.renderer.setRenderTarget(null);
+      } catch (e) {
+        this.fallback = true;
+      }
     }
 
     this.splatMat = new THREE.ShaderMaterial({
