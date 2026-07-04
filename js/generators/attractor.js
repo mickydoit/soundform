@@ -91,6 +91,26 @@ function validateFinalized(out) {
   return maxAbs <= 1.8 && stdSum >= 0.2;
 }
 
+// Validate the FINALIZED strands: the trajectory continues for ~134k Euler
+// steps past the cloud (strandCount * stepsPer), and for polynomial flow
+// systems (halvorsen, dadras) that extension can escape the basin even when
+// the cloud itself validated clean (validateFinalized only ever saw the
+// cloud). Stride-sampled (every 5th value) per strand for speed, but every
+// strand is checked — a blowup only needs to hit one strand to poison the
+// render. NaN/Infinity fail the finite check naturally; a merely-large but
+// finite escape is caught by the |v| <= 2.5 bound (matches checkGenerator's
+// maxAbs <= 2.5 contract).
+function validateStrands(strands) {
+  const stride = 5;
+  for (const s of strands) {
+    for (let i = 0; i < s.length; i += stride) {
+      const v = s[i];
+      if (!Number.isFinite(v) || Math.abs(v) > 2.5) return false;
+    }
+  }
+  return true;
+}
+
 export function generate(fp, params, onProgress) {
   const name = pickSystem(fp);
   const sys = SYSTEMS[name];
@@ -152,6 +172,7 @@ export function generate(fp, params, onProgress) {
 
     const out = finalize(positions, attr, strands, params);
     if (!validateFinalized(out)) continue; // fat-tail collapse → retry
+    if (!validateStrands(out.strands)) continue; // strand-phase escape → retry
     return out;
   }
   throw new Error('attractor: all retries degenerate');

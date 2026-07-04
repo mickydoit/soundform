@@ -37,6 +37,7 @@ export function checkGenerator(mode, fp = testFingerprint()) {
   assert.ok(maxAbs <= 2.5, `${mode}: unbounded (${maxAbs})`);
   assert.ok(std[0] + std[1] + std[2] > 0.15, `${mode}: degenerate`);
   assert.ok(out.strands.length >= 24, `${mode}: needs strands`);
+  for (const s of out.strands) for (let i = 0; i < s.length; i += 1) assert.ok(Number.isFinite(s[i]), `${mode}: non-finite strand value`);
   const out2 = generate(fp, params);
   assert.deepEqual([...out.positions.slice(0, 300)], [...out2.positions.slice(0, 300)], `${mode}: not deterministic`);
   return out;
@@ -78,4 +79,21 @@ test('attractor: all five systems bounded, non-degenerate, deterministic', () =>
       checkGenerator('attractor', { ...fp, seed });
     }
   }
+});
+
+// Regression repros for the strand-finiteness fix: these coefficient/seed
+// combinations continue past a clean cloud into a strand-phase escape for
+// polynomial flow systems (halvorsen, dadras) — the cloud passes
+// validateFinalized, but the ~134k-Euler-step strand extension goes
+// non-finite. Before the fix: halvorsen-routing seed 143 → 50/96 non-finite
+// strands; dadras-routing seed 41 → 76/96 non-finite strands. checkGenerator
+// now asserts every strand value is finite, so these must pass post-fix.
+test('attractor: strand-phase escape repros stay finite after retry', () => {
+  const halvorsenEscape = testFingerprint({ consonance: 0.8, majorLeaning: false, pitchMedian: 0.431, seed: 143 });
+  assert.equal(pickSystem(halvorsenEscape), 'halvorsen');
+  checkGenerator('attractor', halvorsenEscape);
+
+  const dadrasEscape = testFingerprint({ consonance: 0.1, pitchMedian: 1, centroid: 0, spread: 0.904, volMean: 0.03, seed: 41 });
+  assert.equal(pickSystem(dadrasEscape), 'dadras');
+  checkGenerator('attractor', dadrasEscape);
 });
