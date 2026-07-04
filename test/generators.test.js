@@ -97,3 +97,7 @@ test('attractor: strand-phase escape repros stay finite after retry', () => {
   assert.equal(pickSystem(dadrasEscape), 'dadras');
   checkGenerator('attractor', dadrasEscape);
 });
+
+test('chladni generator: bounded, dense, deterministic, strands', () => {
+  checkGenerator('chladni');
+});
