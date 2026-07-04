@@ -59,9 +59,9 @@ export function exportStrandSVG({ strands, positions, mvp, width, height, stops,
 
   strands.forEach((strand, si) => {
     const { pts, depth } = projectStrand(strand, mvp, width, height);
-    if (pts.length < 4) return;
+    if (pts.length < 2) return;
     const simplified = rdp(pts, 1.4);
-    if (simplified.length < 4 || simplified.length > 300) return;
+    if (simplified.length < 2 || simplified.length > 300) return;
     // mean local 3D density along the strand
     let dSum = 0, dN = 0;
     for (let i = 0; i < strand.length; i += 30) {

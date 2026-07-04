@@ -86,7 +86,7 @@ function marchNodalContours(field, want) {
     }
     if (chain.length >= 4) chains.push(chain);
   }
-  // Pad by emitting all chains >= 6 points, then sort by length if needed
+  // Pad by emitting all chains >= 4 points, then sort by length if needed
   const out = [];
   for (const chain of chains) {
     const mapped = new Float32Array(chain.length * 3);
