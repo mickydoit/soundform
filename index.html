@@ -7,7 +7,7 @@
   <meta http-equiv="Pragma" content="no-cache">
   <meta http-equiv="Expires" content="0">
   <title>Soundform — Audio Design Tool</title>
-  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="style.css?v=19">
 </head>
 <body>
 <div id="app">
@@ -17,13 +17,22 @@
     <div id="top-bar">
       <span class="brand">SOUNDFORM</span>
       <div id="audio-controls">
-        <button id="btn-mic" class="btn-icon" title="Microphone">🎤</button>
-        <label id="lbl-file" class="btn-icon" title="Upload audio file">
-          📁<input type="file" id="file-input" accept="audio/*" hidden>
+        <button id="btn-mic" class="btn-icon" title="Microphone" aria-label="Record from microphone">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a3 3 0 0 1 3 3v5a3 3 0 0 1-6 0V6a3 3 0 0 1 3-3z"/><path d="M6.5 11.5a5.5 5.5 0 0 0 11 0"/><path d="M12 17v3.5"/></svg>
+        </button>
+        <label id="lbl-file" class="btn-icon" title="Upload audio file" aria-label="Upload audio file">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 7.5a2 2 0 0 1 2-2h3.2l2 2h7.8a2 2 0 0 1 2 2v6.5a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z"/></svg>
+          <input type="file" id="file-input" accept="audio/*" hidden>
         </label>
-        <button id="btn-stop"   class="btn-icon hidden" title="Stop recording">⏹</button>
-        <button id="btn-submit" class="btn-icon hidden btn-submit" title="Create design">✓</button>
-        <button id="btn-clear"  class="btn-icon hidden" title="Clear canvas">🗑️</button>
+        <button id="btn-stop" class="btn-icon hidden" title="Stop recording" aria-label="Stop recording">
+          <svg viewBox="0 0 24 24" fill="currentColor"><rect x="7" y="7" width="10" height="10" rx="2.5"/></svg>
+        </button>
+        <button id="btn-submit" class="btn-icon hidden btn-submit" title="Create design" aria-label="Create design">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>
+        </button>
+        <button id="btn-clear" class="btn-icon hidden btn-clear" title="Clear canvas" aria-label="Clear canvas">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 7h15"/><path d="M9.5 7V5.8A1.8 1.8 0 0 1 11.3 4h1.4a1.8 1.8 0 0 1 1.8 1.8V7"/><path d="M6.5 7l.7 10.7a2 2 0 0 0 2 1.8h5.6a2 2 0 0 0 2-1.8L17.5 7"/></svg>
+        </button>
       </div>
       <div id="export-btns">
         <button class="btn-export" data-fmt="png">PNG</button>
@@ -112,7 +121,7 @@
         <input type="range" id="sl-rot-speed" min="0" max="2" step="0.05" value="0.3"></div>
     </div>
 
-    <div class="panel-footer">🎤 Record → ⏹ Stop → ✓ Create · Drag to rotate · Same sound, same design</div>
+    <div class="panel-footer">Record → Stop → Create · Drag to rotate · Same sound, same design</div>
   </div>
 </div>
 
