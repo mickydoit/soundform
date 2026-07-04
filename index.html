@@ -50,91 +50,66 @@
     <div class="panel-section">
       <div class="section-title">Mode</div>
       <div id="mode-btns">
-        <button class="btn-mode active" data-mode="chladni">Chladni</button>
-        <button class="btn-mode" data-mode="radial">Radial</button>
-        <button class="btn-mode" data-mode="spectral">Spectral</button>
-        <button class="btn-mode" data-mode="timbre">Timbre</button>
-        <button class="btn-mode" data-mode="attractor">Attractor</button>
+        <button class="btn-mode active" data-mode="attractor">Attractor</button>
+        <button class="btn-mode" data-mode="chladni" disabled>Chladni</button>
+        <button class="btn-mode" data-mode="radial" disabled>Radial</button>
+        <button class="btn-mode" data-mode="spectral" disabled>Spectral</button>
+        <button class="btn-mode" data-mode="timbre" disabled>Timbre</button>
       </div>
     </div>
 
     <div class="panel-section">
-      <div class="section-title">Shape</div>
-
-      <!-- Chladni controls -->
-      <div class="sl-row chladni-only">
-        <div class="sl-label"><span>Detail</span><span id="val-complexity">48</span></div>
-        <input type="range" id="sl-complexity" min="4" max="120" step="1" value="48">
-      </div>
-      <!-- Chladni + Spectral (both use point clouds) -->
-      <div class="sl-row points-mode">
-        <div class="sl-label"><span>Particle Density</span><span id="val-density">80000</span></div>
-        <input type="range" id="sl-density" min="10000" max="250000" step="5000" value="80000">
-      </div>
-      <div class="sl-row points-mode">
-        <div class="sl-label"><span>Point Size</span><span id="val-point-size">2.0</span></div>
-        <input type="range" id="sl-point-size" min="0.5" max="6" step="0.5" value="2.0">
-      </div>
-      <!-- Radial controls -->
-      <div class="sl-row radial-only" style="display:none">
-        <div class="sl-label"><span>Rings</span><span id="val-layers">12</span></div>
-        <input type="range" id="sl-layers" min="4" max="48" step="1" value="12">
-      </div>
-      <div class="sl-row radial-only" style="display:none">
-        <div class="sl-label"><span>Ring Twist</span><span id="val-twist">0.5</span></div>
-        <input type="range" id="sl-twist" min="0" max="3" step="0.05" value="0.5">
-      </div>
-      <!-- Spectral controls -->
-      <div class="sl-row spectral-only" style="display:none">
-        <div class="sl-label"><span>Helix Turns</span><span id="val-helix">2</span></div>
-        <input type="range" id="sl-helix" min="0.5" max="5" step="0.1" value="2">
-      </div>
-
-      <div class="sl-row">
-        <div class="sl-label"><span>Scale</span><span id="val-scale">1.0</span></div>
-        <input type="range" id="sl-scale" min="0.2" max="2.5" step="0.05" value="1.0">
-      </div>
+      <div class="section-title">Form</div>
+      <div class="sl-row"><div class="sl-label"><span>Complexity</span><span id="val-complexity">0.5</span></div>
+        <input type="range" id="sl-complexity" min="0" max="1" step="0.05" value="0.5" data-regen></div>
+      <div class="sl-row"><div class="sl-label"><span>Symmetry</span><span id="val-symmetry">1</span></div>
+        <input type="range" id="sl-symmetry" min="1" max="8" step="1" value="1" data-regen></div>
+      <div class="sl-row"><div class="sl-label"><span>Twist</span><span id="val-twist">0</span></div>
+        <input type="range" id="sl-twist" min="-2" max="2" step="0.1" value="0" data-regen></div>
+      <div class="sl-row"><div class="sl-label"><span>Scale</span><span id="val-scale">1.0</span></div>
+        <input type="range" id="sl-scale" min="0.3" max="2.5" step="0.05" value="1.0"></div>
     </div>
 
     <div class="panel-section">
-      <div class="section-title">Capture</div>
-      <div class="sl-row">
-        <div class="sl-label"><span>Reactivity</span><span id="val-reactivity">0.7</span></div>
-        <input type="range" id="sl-reactivity" min="0" max="1" step="0.05" value="0.7">
-      </div>
-      <div class="sl-row">
-        <div class="sl-label"><span>Smoothing</span><span id="val-smoothing">0.5</span></div>
-        <input type="range" id="sl-smoothing" min="0" max="0.99" step="0.01" value="0.5">
-      </div>
-    </div>
-
-    <div class="panel-section">
-      <div class="section-title">Motion</div>
-      <div class="sl-row">
-        <div class="sl-label"><span>Rotation Speed</span><span id="val-rot-speed">0.3</span></div>
-        <input type="range" id="sl-rot-speed" min="0" max="2" step="0.05" value="0.3">
-      </div>
+      <div class="section-title">Texture</div>
+      <div class="sl-row"><div class="sl-label"><span>Density</span><span id="val-density">1500000</span></div>
+        <input type="range" id="sl-density" min="200000" max="4000000" step="100000" value="1500000" data-regen></div>
+      <div class="sl-row"><div class="sl-label"><span>Grain</span><span id="val-grain">1.0</span></div>
+        <input type="range" id="sl-grain" min="0.4" max="3" step="0.1" value="1.0"></div>
+      <div class="sl-row"><div class="sl-label"><span>Strands</span><span id="val-strands">48</span></div>
+        <input type="range" id="sl-strands" min="24" max="96" step="4" value="48"></div>
+      <div class="sl-row"><div class="sl-label"><span>Stroke Weight</span><span id="val-weight">1.0</span></div>
+        <input type="range" id="sl-weight" min="0.3" max="3" step="0.1" value="1.0"></div>
     </div>
 
     <div class="panel-section">
       <div class="section-title">Colour</div>
-      <label class="toggle-row">
-        Auto spectrum
-        <input type="checkbox" id="chk-auto-color" checked>
-      </label>
-      <div id="manual-colors" class="color-pickers faded">
-        <label class="color-pick-label">Primary<input type="color" id="col-primary" value="#00d4ff"></label>
-        <label class="color-pick-label">Secondary<input type="color" id="col-secondary" value="#b44dff"></label>
-        <label class="color-pick-label">Accent<input type="color" id="col-accent" value="#ff6644"></label>
-      </div>
       <div class="sl-row">
-        <div class="sl-label"><span>Brightness</span><span id="val-brightness">0.9</span></div>
-        <input type="range" id="sl-brightness" min="0.1" max="2.0" step="0.05" value="0.9">
+        <select id="sel-palette">
+          <option value="nebula" selected>Nebula</option>
+          <option value="ember">Ember</option>
+          <option value="aurora">Aurora</option>
+          <option value="glacier">Glacier</option>
+          <option value="rosegold">Rosé</option>
+          <option value="custom">Custom…</option>
+        </select>
       </div>
-      <div class="sl-row radial-only" style="display:none">
-        <div class="sl-label"><span>Glow</span><span id="val-glow">0.4</span></div>
-        <input type="range" id="sl-glow" min="0" max="1" step="0.05" value="0.4">
+      <div id="manual-colors" class="color-pickers faded">
+        <label class="color-pick-label">Low<input type="color" id="col-primary" value="#b8a7e0"></label>
+        <label class="color-pick-label">Mid<input type="color" id="col-secondary" value="#e8b4c8"></label>
+        <label class="color-pick-label">High<input type="color" id="col-accent" value="#fff2e0"></label>
       </div>
+      <label class="color-pick-label">Background<input type="color" id="col-background" value="#03040a"></label>
+      <div class="sl-row"><div class="sl-label"><span>Exposure</span><span id="val-exposure">30</span></div>
+        <input type="range" id="sl-exposure" min="2" max="200" step="1" value="30"></div>
+      <div class="sl-row"><div class="sl-label"><span>Contrast</span><span id="val-contrast">1.0</span></div>
+        <input type="range" id="sl-contrast" min="0.4" max="2.5" step="0.05" value="1.0"></div>
+    </div>
+
+    <div class="panel-section">
+      <div class="section-title">Motion</div>
+      <div class="sl-row"><div class="sl-label"><span>Auto-rotate</span><span id="val-rot-speed">0.3</span></div>
+        <input type="range" id="sl-rot-speed" min="0" max="2" step="0.05" value="0.3"></div>
     </div>
 
     <div class="panel-footer">🎤 Record → ⏹ Stop → ✓ Submit · Drag to rotate</div>
@@ -143,6 +118,6 @@
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r134/three.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
-<script type="module" src="js/main.js?v=17"></script>
+<script type="module" src="js/main.js?v=18"></script>
 </body>
 </html>

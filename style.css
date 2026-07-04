@@ -130,6 +130,11 @@ input[type="range"]::-moz-range-thumb {
   background: var(--accent); border: 2px solid var(--panel-bg); cursor: pointer;
 }
 
+#controls-panel select {
+  width: 100%; background: #10131f; color: #dde;
+  border: 1px solid #2a2f45; border-radius: 6px; padding: 6px;
+}
+
 /* Toggle */
 .toggle-row {
   display: flex; justify-content: space-between; align-items: center;

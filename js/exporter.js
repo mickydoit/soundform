@@ -47,3 +47,6 @@ function _dl(url, name) {
   a.click();
   document.body.removeChild(a);
 }
+
+// Temporary stub — real SVG strand exporter arrives in Task 13.
+export function exportStrandSVG() { throw new Error('SVG export arrives in a later task'); }
