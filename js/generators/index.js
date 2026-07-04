@@ -1,11 +1,10 @@
 import * as attractor from './attractor.js';
 import * as chladni from './chladni.js';
 import * as radial from './radial.js';
-import * as spectral from './spectral.js';
+import * as cymatics from './cymatics.js';
 import * as timbre from './timbre.js';
 
-const REGISTRY = { attractor: attractor.generate, chladni: chladni.generate, radial: radial.generate, spectral: spectral.generate, timbre: timbre.generate };
-// Tasks 8–11 add: chladni, radial, spectral, timbre
+const REGISTRY = { attractor: attractor.generate, chladni: chladni.generate, radial: radial.generate, cymatics: cymatics.generate, timbre: timbre.generate };
 
 export function generate(fp, params, onProgress) {
   const gen = REGISTRY[params.mode];

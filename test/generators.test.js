@@ -122,8 +122,8 @@ test('radial generator', () => {
   checkGenerator('radial');
 });
 
-test('spectral generator', () => {
-  checkGenerator('spectral');
+test('cymatics generator', () => {
+  checkGenerator('cymatics');
 });
 
 test('timbre generator', () => {
