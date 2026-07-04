@@ -7,7 +7,7 @@ const lerp = (a, b, t) => a + (b - a) * t;
 const SYSTEMS = {
   thomas: {
     dt: 0.06, flow: true,
-    coeffs: fp => ({ b: lerp(0.10, 0.19, 1 - fp.pitchMedian) }),
+    coeffs: fp => ({ b: lerp(0.10, 0.165, 1 - fp.pitchMedian) }),
     step: (p, c) => [Math.sin(p[1]) - c.b * p[0], Math.sin(p[2]) - c.b * p[1], Math.sin(p[0]) - c.b * p[2]],
   },
   halvorsen: {
@@ -26,13 +26,16 @@ const SYSTEMS = {
       c.d * p[0] + (p[2] - c.b) * p[1],
       c.c + c.a * p[2] - (p[2] ** 3) / 3 - (p[0] ** 2 + p[1] ** 2) * (1 + c.e * p[2]) + c.f * p[2] * p[0] ** 3],
   },
-  dadras: {
-    dt: 0.01, flow: true,
-    coeffs: fp => ({ a: lerp(2.0, 3.0, fp.pitchMedian), b: lerp(1.9, 2.7, fp.centroid), c: lerp(1.3, 1.7, fp.spread), d: lerp(1.2, 2.0, fp.volMean), e: 9 }),
+  // Lorenz butterfly — replaces Dadras, which was unstable under plain Euler
+  // (diverged or fell into limit cycles across most of its coefficient range).
+  // Lorenz is robustly chaotic for r ≈ 28–45 and integrates cleanly at this dt.
+  lorenz: {
+    dt: 0.007, flow: true,
+    coeffs: fp => ({ s: lerp(9, 11, fp.centroid), r: lerp(29, 44, fp.pitchMedian), b: 8 / 3 + fp.spread * 0.4 }),
     step: (p, c) => [
-      p[1] - c.a * p[0] + c.b * p[1] * p[2],
-      c.c * p[1] - p[0] * p[2] + p[2],
-      c.d * p[0] * p[1] - c.e * p[2]],
+      c.s * (p[1] - p[0]),
+      p[0] * (c.r - p[2]) - p[1],
+      p[0] * p[1] - c.b * p[2]],
   },
   sinemap: {
     flow: false, // discrete map, like the reference sine-map images
@@ -52,7 +55,7 @@ export function pickSystem(fp) {
   if (fp.pitchConfidence < 0.35 || fp.velocity > 0.75) return 'sinemap'; // percussive/noisy
   if (fp.consonance > 0.55 && fp.majorLeaning) return fp.noteCount <= 3 ? 'thomas' : 'aizawa';
   if (fp.consonance > 0.55) return 'halvorsen'; // minor
-  return 'dadras'; // dissonant
+  return 'lorenz'; // dissonant
 }
 
 function cloudStdDev(pos, n) {
@@ -109,6 +112,32 @@ function validateStrands(strands) {
     }
   }
   return true;
+}
+
+// Detect periodic collapse (limit cycles / low-dimensional loops) that the
+// bounded/std checks above miss: a 1D closed curve can still have plenty of
+// spread along its loop while occupying only a sliver of 3D space. Stride-
+// sample up to 20,000 points into a 20x20x20 grid over [-1.3, 1.3]^3 (the
+// finalized/normalized coordinate range) and count distinct occupied cells.
+// A limit cycle occupies ~50-200 cells; genuine chaotic clouds occupy
+// thousands, so reject below 400.
+function occupiedCellCount(positions) {
+  const n = positions.length / 3;
+  const stride = Math.max(1, Math.floor(n / 20000));
+  const grid = 20;
+  const lo = -1.3, span = 2.6;
+  const cells = new Set();
+  for (let i = 0; i < n; i += stride) {
+    const gx = Math.min(grid - 1, Math.max(0, Math.floor((positions[i * 3] - lo) / span * grid)));
+    const gy = Math.min(grid - 1, Math.max(0, Math.floor((positions[i * 3 + 1] - lo) / span * grid)));
+    const gz = Math.min(grid - 1, Math.max(0, Math.floor((positions[i * 3 + 2] - lo) / span * grid)));
+    cells.add((gx * grid + gy) * grid + gz);
+  }
+  return cells.size;
+}
+
+function validateOccupancy(out) {
+  return occupiedCellCount(out.positions) >= 400;
 }
 
 export function generate(fp, params, onProgress) {
@@ -173,6 +202,7 @@ export function generate(fp, params, onProgress) {
     const out = finalize(positions, attr, strands, params);
     if (!validateFinalized(out)) continue; // fat-tail collapse → retry
     if (!validateStrands(out.strands)) continue; // strand-phase escape → retry
+    if (!validateOccupancy(out)) continue; // periodic collapse (limit cycle) → retry
     return out;
   }
   throw new Error('attractor: all retries degenerate');

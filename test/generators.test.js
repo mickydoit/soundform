@@ -59,7 +59,7 @@ test('attractor: pickSystem routing table', () => {
   assert.equal(pickSystem(testFingerprint({ consonance: 0.8, majorLeaning: true, noteCount: 3 })), 'thomas');
   assert.equal(pickSystem(testFingerprint({ consonance: 0.8, majorLeaning: true, noteCount: 5, noteSet: [0, 2, 4, 7, 9] })), 'aizawa');
   assert.equal(pickSystem(testFingerprint({ consonance: 0.8, majorLeaning: false })), 'halvorsen');
-  assert.equal(pickSystem(testFingerprint({ consonance: 0.1 })), 'dadras');
+  assert.equal(pickSystem(testFingerprint({ consonance: 0.1 })), 'lorenz');
   assert.equal(pickSystem(testFingerprint({ pitchConfidence: 0.2 })), 'sinemap');
   assert.equal(pickSystem(testFingerprint({ velocity: 0.8 })), 'sinemap');
 });
@@ -69,7 +69,7 @@ test('attractor: all five systems bounded, non-degenerate, deterministic', () =>
     thomas: testFingerprint({ consonance: 0.8, majorLeaning: true, noteCount: 3 }),
     aizawa: testFingerprint({ consonance: 0.8, majorLeaning: true, noteCount: 5, noteSet: [0, 2, 4, 7, 9] }),
     halvorsen: testFingerprint({ consonance: 0.8, majorLeaning: false }),
-    dadras: testFingerprint({ consonance: 0.1 }),
+    lorenz: testFingerprint({ consonance: 0.1 }),
     sinemap: testFingerprint({ pitchConfidence: 0.2 }),
   };
   const seeds = [1, 123456789, 987654321];
@@ -83,19 +83,35 @@ test('attractor: all five systems bounded, non-degenerate, deterministic', () =>
 
 // Regression repros for the strand-finiteness fix: these coefficient/seed
 // combinations continue past a clean cloud into a strand-phase escape for
-// polynomial flow systems (halvorsen, dadras) — the cloud passes
-// validateFinalized, but the ~134k-Euler-step strand extension goes
-// non-finite. Before the fix: halvorsen-routing seed 143 → 50/96 non-finite
-// strands; dadras-routing seed 41 → 76/96 non-finite strands. checkGenerator
-// now asserts every strand value is finite, so these must pass post-fix.
+// polynomial flow systems — the cloud passes validateFinalized, but the
+// ~134k-Euler-step strand extension goes non-finite. Before the fix:
+// halvorsen-routing seed 143 → 50/96 non-finite strands; the dissonant-routing
+// seed-41 fixture originally hit this on the (since-replaced) dadras system and
+// now exercises the same guard on lorenz. checkGenerator asserts every strand
+// value is finite, so these must pass post-fix.
 test('attractor: strand-phase escape repros stay finite after retry', () => {
   const halvorsenEscape = testFingerprint({ consonance: 0.8, majorLeaning: false, pitchMedian: 0.431, seed: 143 });
   assert.equal(pickSystem(halvorsenEscape), 'halvorsen');
   checkGenerator('attractor', halvorsenEscape);
 
-  const dadrasEscape = testFingerprint({ consonance: 0.1, pitchMedian: 1, centroid: 0, spread: 0.904, volMean: 0.03, seed: 41 });
-  assert.equal(pickSystem(dadrasEscape), 'dadras');
-  checkGenerator('attractor', dadrasEscape);
+  const dissonantEscape = testFingerprint({ consonance: 0.1, pitchMedian: 1, centroid: 0, spread: 0.904, volMean: 0.03, seed: 41 });
+  assert.equal(pickSystem(dissonantEscape), 'lorenz');
+  checkGenerator('attractor', dissonantEscape);
+});
+
+test('attractor: low-pitch thomas routing does not collapse to a limit cycle', () => {
+  // pitchMedian 0 → max damping; pre-fix this yielded a single 1D loop
+  const fp = testFingerprint({ pitchMedian: 0, contour: new Float32Array(8) });
+  const out = generate(fp, { ...baseParams, density: 30000 });
+  const cells = new Set();
+  const n = out.positions.length / 3;
+  for (let i = 0; i < n; i++) {
+    const gx = Math.floor((out.positions[i*3]     + 1.3) / 2.6 * 20);
+    const gy = Math.floor((out.positions[i*3 + 1] + 1.3) / 2.6 * 20);
+    const gz = Math.floor((out.positions[i*3 + 2] + 1.3) / 2.6 * 20);
+    cells.add((gx * 20 + gy) * 20 + gz);
+  }
+  assert.ok(cells.size >= 400, `occupied cells ${cells.size} — looks like a limit cycle`);
 });
 
 test('chladni generator: bounded, dense, deterministic, strands', () => {
