@@ -109,3 +109,14 @@ test('radial generator', () => {
 test('spectral generator', () => {
   checkGenerator('spectral');
 });
+
+test('timbre generator', () => {
+  const fp = testFingerprint();
+  fp.trajectory = new Float32Array(300);
+  for (let i = 0; i < 100; i++) {
+    fp.trajectory[i * 3] = 0.3 + 0.2 * Math.sin(i / 9);
+    fp.trajectory[i * 3 + 1] = 0.2 + 0.15 * Math.sin(i / 5);
+    fp.trajectory[i * 3 + 2] = 0.3 + 0.1 * Math.cos(i / 7);
+  }
+  checkGenerator('timbre', fp);
+});

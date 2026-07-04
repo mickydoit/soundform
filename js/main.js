@@ -150,6 +150,12 @@ function bindAudio() {
   submitBtn.addEventListener('click', () => {
     if (frames.length === 0) { setStatus('No audio captured — try recording again'); return; }
     fingerprint = buildFingerprint(frames, (performance.now() - recordStart) / 1000);
+    fingerprint.trajectory = new Float32Array(frames.length * 3);
+    frames.forEach((f, i) => {
+      fingerprint.trajectory[i * 3] = f.centroid;
+      fingerprint.trajectory[i * 3 + 1] = f.rms;
+      fingerprint.trajectory[i * 3 + 2] = f.spread;
+    });
     appState = 'captured';
     submitBtn.classList.add('hidden');
     document.getElementById('btn-mic').classList.add('hidden');
