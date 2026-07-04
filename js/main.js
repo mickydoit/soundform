@@ -1,8 +1,8 @@
-import { AudioEngine } from './audio.js?v=21';
-import { buildFingerprint } from './features.js?v=21';
-import { DensityRenderer } from './density.js?v=21';
-import { PALETTES, buildLUT, customRamp, hexToRgb } from './palettes.js?v=21';
-import { exportCanvas, exportStrandSVG } from './exporter.js?v=21';
+import { AudioEngine } from './audio.js?v=22';
+import { buildFingerprint } from './features.js?v=22';
+import { DensityRenderer } from './density.js?v=22';
+import { PALETTES, buildLUT, customRamp, hexToRgb } from './palettes.js?v=22';
+import { exportCanvas, exportStrandSVG } from './exporter.js?v=22';
 
 const audio = new AudioEngine();
 let renderer = null;
@@ -37,11 +37,25 @@ window.addEventListener('DOMContentLoaded', () => {
   clearBtn = document.getElementById('btn-clear');
   submitBtn = document.getElementById('btn-submit');
   applyColorParams();
-  // Centre the design in the region not covered by the floating control panel
-  // (desktop: 300px panel + 2×16px insets = 332px). Mobile uses the full screen.
+  // Centre the design in the region not covered by chrome:
+  // desktop — 300px panel + 2×16px insets = 332px on the right;
+  // mobile  — the bottom sheet's height while it is open, so the design
+  //           shrinks and sits above the menu instead of hiding behind it.
   const mobileMQ = window.matchMedia('(max-width: 760px)');
-  const applyViewInset = () => renderer.setViewInset(mobileMQ.matches ? 0 : 332, 0);
+  const sheetCheck = document.getElementById('sheet-open');
+  const applyViewInset = () => {
+    if (mobileMQ.matches) {
+      const sheetPx = sheetCheck && sheetCheck.checked
+        ? Math.min(window.innerHeight * 0.44, 400)
+        : 0;
+      renderer.setViewInset(0, sheetPx);
+    } else {
+      renderer.setViewInset(332, 0);
+    }
+  };
   mobileMQ.addEventListener('change', applyViewInset);
+  if (sheetCheck) sheetCheck.addEventListener('change', applyViewInset);
+  window.addEventListener('resize', applyViewInset);
   applyViewInset();
   bindAudio();
   bindControls();
@@ -73,10 +87,10 @@ function regenerate() {
     design = out;
     renderer.setCloud(out.positions, out.attr);
     applyRenderParams();
-    setStatus('Design created — drag to rotate · adjust sliders · 🗑️ to reset');
+    setStatus('Design created — drag to rotate · adjust sliders');
   };
   try {
-    if (!worker) worker = new Worker('js/worker.js?v=21', { type: 'module' });
+    if (!worker) worker = new Worker('js/worker.js?v=22', { type: 'module' });
     worker.onmessage = (e) => {
       if (e.data.progress !== undefined) setStatus(`Generating… ${Math.round(e.data.progress * 100)}%`);
       else if (e.data.error) setStatus(`Generation error: ${e.data.error}`);
@@ -90,7 +104,7 @@ function regenerate() {
 }
 
 async function fallbackGenerate(onResult) {
-  const { generate } = await import('./generators/index.js?v=21');
+  const { generate } = await import('./generators/index.js?v=22');
   onResult(generate(fingerprint, { ...params, strandCount: 96 }));
 }
 
@@ -136,7 +150,7 @@ function bindAudio() {
       setStatus(`Loading ${file.name}…`);
       await audio.loadFile(file);
       enterRecording(btnStop);
-      setStatus(`Recording from "${file.name}" — press ⏹ when done`);
+      setStatus(`Recording "${file.name}" — press stop when done`);
     } catch (e) { setStatus(`File error: ${e.message}`); }
     fileInput.value = '';
   });
@@ -150,7 +164,7 @@ function bindAudio() {
     btnStop.classList.add('hidden');
     submitBtn.classList.remove('hidden');
     vuWrap.classList.add('hidden');
-    setStatus('Done — press ✓ to create design, or 🎤 to re-record');
+    setStatus('Done — tap the check to create, or the mic to re-record');
   });
 
   submitBtn.addEventListener('click', () => {
@@ -181,7 +195,7 @@ function bindAudio() {
     submitBtn.classList.add('hidden');
     clearBtn.classList.add('hidden');
     vuWrap.classList.add('hidden');
-    setStatus('Ready — press 🎤 to record or 📁 to upload');
+    setStatus('Ready — record or upload a sound');
   });
 }
 
@@ -195,7 +209,7 @@ function enterRecording(btnStop) {
   submitBtn.classList.add('hidden');
   clearBtn.classList.add('hidden');
   vuWrap.classList.remove('hidden');
-  setStatus('Recording… press ⏹ when done');
+  setStatus('Recording — press stop when done');
 }
 
 // ── Controls ──────────────────────────────────────────────────────

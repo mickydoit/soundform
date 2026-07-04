@@ -158,6 +158,10 @@ export class DensityRenderer {
       if (this.camera.view) this.camera.clearViewOffset();
       this.camera.aspect = w / h;
     }
+    // A bottom inset magnifies vertically by (h+b)/h; pull the camera back to
+    // compensate, plus a touch extra so the design sits comfortably above the
+    // sheet rather than clipping its edges.
+    this._insetZoomOut = b > 0 ? ((h + b) / h) * 1.12 : 1;
     this.camera.updateProjectionMatrix();
   }
 
@@ -225,7 +229,7 @@ export class DensityRenderer {
   }
 
   _renderFrame(target = null) {
-    this.camera.position.z = 3.2 / this._zoom;
+    this.camera.position.z = (3.2 / this._zoom) * (this._insetZoomOut || 1);
     this.group.rotation.set(this._rotX, this._rotY, 0);
     if (this.fallback || !this.points) {
       this.renderer.setClearColor(new THREE.Color(...this._params.background), 1);
@@ -261,10 +265,12 @@ export class DensityRenderer {
     const W = Math.floor(w * scaleFactor), H = Math.floor(h * scaleFactor);
     // Exports are centred: drop the chrome view-offset for the export render.
     const hadOffset = !!(this.camera.view && this.camera.view.enabled);
+    const savedInsetZoom = this._insetZoomOut;
     if (hadOffset) {
       this.camera.clearViewOffset();
       this.camera.aspect = w / h;
       this.camera.updateProjectionMatrix();
+      this._insetZoomOut = 1;
     }
     const bigDensity = this.fallback ? null : this._makeTarget(W, H, THREE.HalfFloatType);
     const bigOut = this._makeTarget(W, H, THREE.UnsignedByteType);
@@ -289,7 +295,7 @@ export class DensityRenderer {
     if (this.target) this.toneMat.uniforms.tDensity.value = this.target.texture;
     if (bigDensity) bigDensity.dispose();
     bigOut.dispose();
-    if (hadOffset) this._applyViewOffset();
+    if (hadOffset) { this._insetZoomOut = savedInsetZoom; this._applyViewOffset(); }
     // Flip Y into a 2D canvas
     const canvas = document.createElement('canvas');
     canvas.width = W; canvas.height = H;

@@ -386,39 +386,55 @@ input[type="color"]::-moz-color-swatch { border: none; border-radius: 50%; }
 #sheet-handle { display: none; }
 
 @media (max-width: 760px) {
-  /* Top bar wraps; comfortable touch targets */
-  #top-bar { flex-wrap: wrap; gap: 8px; }
-  #export-btns { margin-left: 0; max-width: 100%; overflow-x: auto; }
-  .btn-icon { width: 44px; height: 44px; }
-  .btn-icon svg { width: 20px; height: 20px; }
-  #audio-controls { padding: 3px; }
-  .brand, #export-btns { height: 44px; }
-  .btn-export { padding: 0 16px; }
-  #vu-wrap { top: 120px; }
+  :root { --sheet-h: min(44dvh, 400px); }
 
-  /* Status pill sits above the sheet handle */
+  /* Compact top bar: brand + record cluster on one slim row, exports below */
+  #top-bar { flex-wrap: wrap; gap: 8px; top: 12px; left: 12px; right: 12px; }
+  .brand { height: 38px; padding: 0 14px; font-size: 10.5px; }
+  #audio-controls { padding: 3px; }
+  .btn-icon { width: 40px; height: 40px; }
+  .btn-icon svg { width: 19px; height: 19px; }
+  #export-btns {
+    margin-left: 0;
+    height: 36px;
+    max-width: 100%;
+    overflow-x: auto;
+  }
+  .btn-export { padding: 0 13px; font-size: 11px; }
+  #vu-wrap { top: 108px; left: 12px; }
+
+  /* Status pill: full-width slim bar above the handle (no transform — the
+     rise-in animation would cancel a translateX centring). */
   #status-bar {
-    left: 50%;
-    transform: translateX(-50%);
-    bottom: calc(66px + env(safe-area-inset-bottom));
-    max-width: calc(100% - 32px);
+    animation: none;
+    left: 12px; right: 12px;
+    bottom: calc(70px + env(safe-area-inset-bottom));
+    max-width: none;
+    text-align: center;
+    font-size: 11.5px;
   }
 
-  /* Controls panel becomes a bottom sheet, collapsed by default.
+  /* Controls panel becomes a compact bottom sheet, collapsed by default.
      animation:none — the desktop rise-in's fill would pin the transform open. */
   #controls-panel {
     animation: none;
     top: auto; left: 0; right: 0; bottom: 0;
     width: 100%;
-    height: min(58dvh, 480px);
+    height: var(--sheet-h);
     border-radius: 20px 20px 0 0;
     border-left: none; border-right: none; border-bottom: none;
-    padding: 10px 20px calc(20px + env(safe-area-inset-bottom));
+    padding: 6px 20px calc(16px + env(safe-area-inset-bottom));
     transform: translateY(102%);
     transition: transform .38s cubic-bezier(.32, .72, 0, 1);
     z-index: 12;
   }
   #sheet-open:checked ~ #controls-panel { transform: translateY(0); }
+
+  /* Tighter section rhythm inside the compact sheet */
+  .panel-section { padding: 12px 0 10px; }
+  .section-title { margin-bottom: 10px; }
+  .sl-row { margin-bottom: 10px; }
+
 
   /* Grab handle: floating pill that rides atop the sheet */
   #sheet-handle {
@@ -453,7 +469,7 @@ input[type="color"]::-moz-color-swatch { border: none; border-radius: 50%; }
     transition: transform .3s ease;
   }
   #sheet-open:checked ~ #sheet-handle {
-    transform: translateX(-50%) translateY(calc(-1 * min(58dvh, 480px)));
+    transform: translateX(-50%) translateY(calc(-1 * var(--sheet-h)));
   }
   #sheet-open:checked ~ #sheet-handle::after {
     transform: rotate(45deg) translate(-1px, -1px);
