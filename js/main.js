@@ -37,6 +37,12 @@ window.addEventListener('DOMContentLoaded', () => {
   clearBtn = document.getElementById('btn-clear');
   submitBtn = document.getElementById('btn-submit');
   applyColorParams();
+  // Centre the design in the region not covered by the floating control panel
+  // (desktop: 300px panel + 2×16px insets = 332px). Mobile uses the full screen.
+  const mobileMQ = window.matchMedia('(max-width: 760px)');
+  const applyViewInset = () => renderer.setViewInset(mobileMQ.matches ? 0 : 332, 0);
+  mobileMQ.addEventListener('change', applyViewInset);
+  applyViewInset();
   bindAudio();
   bindControls();
   bindExport();

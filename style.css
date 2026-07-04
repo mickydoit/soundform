@@ -382,9 +382,84 @@ input[type="color"]::-moz-color-swatch { border: none; border-radius: 50%; }
   }
 }
 
-/* ── Small screens ──────────────────────────────────────────── */
+/* ── Mobile: bottom-sheet controls ──────────────────────────── */
+#sheet-handle { display: none; }
+
 @media (max-width: 760px) {
-  #controls-panel { width: 260px; top: 128px; }
-  #top-bar { flex-wrap: wrap; }
-  #export-btns { margin-left: 0; }
+  /* Top bar wraps; comfortable touch targets */
+  #top-bar { flex-wrap: wrap; gap: 8px; }
+  #export-btns { margin-left: 0; max-width: 100%; overflow-x: auto; }
+  .btn-icon { width: 44px; height: 44px; }
+  .btn-icon svg { width: 20px; height: 20px; }
+  #audio-controls { padding: 3px; }
+  .brand, #export-btns { height: 44px; }
+  .btn-export { padding: 0 16px; }
+  #vu-wrap { top: 120px; }
+
+  /* Status pill sits above the sheet handle */
+  #status-bar {
+    left: 50%;
+    transform: translateX(-50%);
+    bottom: calc(66px + env(safe-area-inset-bottom));
+    max-width: calc(100% - 32px);
+  }
+
+  /* Controls panel becomes a bottom sheet, collapsed by default.
+     animation:none — the desktop rise-in's fill would pin the transform open. */
+  #controls-panel {
+    animation: none;
+    top: auto; left: 0; right: 0; bottom: 0;
+    width: 100%;
+    height: min(58dvh, 480px);
+    border-radius: 20px 20px 0 0;
+    border-left: none; border-right: none; border-bottom: none;
+    padding: 10px 20px calc(20px + env(safe-area-inset-bottom));
+    transform: translateY(102%);
+    transition: transform .38s cubic-bezier(.32, .72, 0, 1);
+    z-index: 12;
+  }
+  #sheet-open:checked ~ #controls-panel { transform: translateY(0); }
+
+  /* Grab handle: floating pill that rides atop the sheet */
+  #sheet-handle {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    position: absolute;
+    left: 50%;
+    bottom: calc(14px + env(safe-area-inset-bottom));
+    transform: translateX(-50%);
+    z-index: 13;
+    height: 44px;
+    padding: 0 20px;
+    border-radius: 999px;
+    background: var(--glass-bg);
+    -webkit-backdrop-filter: blur(40px) saturate(1.8);
+    backdrop-filter: blur(40px) saturate(1.8);
+    border: 1px solid var(--edge);
+    box-shadow: 0 8px 32px rgba(0, 0, 0, .35);
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-1);
+    cursor: pointer;
+    transition: transform .38s cubic-bezier(.32, .72, 0, 1);
+  }
+  #sheet-handle::after {
+    content: '';
+    width: 8px; height: 8px;
+    border-right: 1.8px solid var(--text-2);
+    border-bottom: 1.8px solid var(--text-2);
+    transform: rotate(-135deg) translate(-1px, -1px);
+    transition: transform .3s ease;
+  }
+  #sheet-open:checked ~ #sheet-handle {
+    transform: translateX(-50%) translateY(calc(-1 * min(58dvh, 480px)));
+  }
+  #sheet-open:checked ~ #sheet-handle::after {
+    transform: rotate(45deg) translate(-1px, -1px);
+  }
+
+  @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+    #sheet-handle { background: rgba(28, 28, 32, .94); }
+  }
 }

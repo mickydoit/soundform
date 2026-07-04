@@ -129,10 +129,32 @@ export class DensityRenderer {
     const [w, h] = this._size();
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
+    this._applyViewOffset();
     this.renderer.setSize(w, h);
     const pr = this.renderer.getPixelRatio();
     if (this.target) this.target.setSize(Math.floor(w * pr), Math.floor(h * pr));
     this._dirty = true;
+  }
+
+  // Shift the projection so the design centres in the region NOT covered by
+  // floating chrome (right control panel / bottom sheet). Pure camera offset —
+  // no distortion, canvas stays full-bleed for the glass blur.
+  setViewInset(right = 0, bottom = 0) {
+    this._insetR = right;
+    this._insetB = bottom;
+    this._applyViewOffset();
+    this._dirty = true;
+  }
+
+  _applyViewOffset() {
+    const [w, h] = this._size();
+    const r = this._insetR || 0, b = this._insetB || 0;
+    if (r > 0 || b > 0) {
+      this.camera.setViewOffset(w + r, h + b, r, b, w, h);
+    } else if (this.camera.view) {
+      this.camera.clearViewOffset();
+    }
+    this.camera.updateProjectionMatrix();
   }
 
   setCloud(positions, attr) {
@@ -180,11 +202,17 @@ export class DensityRenderer {
   requestRender() { this._dirty = true; }
 
   getMVP() {
+    // Exports must be centred: compute the matrix with the chrome view-offset
+    // cleared, then restore it for on-screen rendering.
+    const hadOffset = !!(this.camera.view && this.camera.view.enabled);
+    if (hadOffset) { this.camera.clearViewOffset(); this.camera.updateProjectionMatrix(); }
     this.group.updateMatrixWorld(true);
     this.camera.updateMatrixWorld(true);
-    return new THREE.Matrix4()
+    const mvp = new THREE.Matrix4()
       .multiplyMatrices(this.camera.projectionMatrix, this.camera.matrixWorldInverse)
       .multiply(this.group.matrixWorld);
+    if (hadOffset) this._applyViewOffset();
+    return mvp;
   }
 
   _renderFrame(target = null) {
@@ -222,6 +250,9 @@ export class DensityRenderer {
   renderHiRes(scaleFactor = 3) {
     const [w, h] = this._size();
     const W = Math.floor(w * scaleFactor), H = Math.floor(h * scaleFactor);
+    // Exports are centred: drop the chrome view-offset for the export render.
+    const hadOffset = !!(this.camera.view && this.camera.view.enabled);
+    if (hadOffset) { this.camera.clearViewOffset(); this.camera.updateProjectionMatrix(); }
     const bigDensity = this.fallback ? null : this._makeTarget(W, H, THREE.HalfFloatType);
     const bigOut = this._makeTarget(W, H, THREE.UnsignedByteType);
     const savedTarget = this.target;
@@ -245,6 +276,7 @@ export class DensityRenderer {
     if (this.target) this.toneMat.uniforms.tDensity.value = this.target.texture;
     if (bigDensity) bigDensity.dispose();
     bigOut.dispose();
+    if (hadOffset) this._applyViewOffset();
     // Flip Y into a 2D canvas
     const canvas = document.createElement('canvas');
     canvas.width = W; canvas.height = H;
