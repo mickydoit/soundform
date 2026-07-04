@@ -24,7 +24,7 @@ export function generate(fp, params, onProgress) {
     const tiltA = fp.consonance > 0.5 ? s * golden : rnd() * Math.PI * 2;
     const tiltB = fp.consonance > 0.5 ? tS * Math.PI * 0.8 : rnd() * Math.PI;
     const ca = Math.cos(tiltA), sa = Math.sin(tiltA), cb = Math.cos(tiltB), sb = Math.sin(tiltB);
-    const tube = 0.008 + fp.velocity * 0.03 + tS * 0.006;
+    const tube = 0.007 + fp.velocity * 0.014 + tS * 0.005;
     const phase = fp.contour[s % 8] * Math.PI * 2;
 
     const orbit = (t) => {

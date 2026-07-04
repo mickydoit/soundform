@@ -35,7 +35,7 @@ export function generate(fp, params, onProgress) {
     const phi = rnd() * Math.PI * 2;
     const { f, domIdx } = field(theta, phi);
     if (rnd() > Math.exp(-((f / sigma) ** 2))) continue; // accept near nodes
-    const R = 1 + (rnd() - 0.5) * 0.012 * (1 + fp.velocity * 2); // shell thickness ← velocity
+    const R = 1 + (rnd() - 0.5) * 0.010 * (1 + fp.velocity); // shell thickness ← velocity
     const st = Math.sin(theta);
     positions[count * 3] = st * Math.cos(phi) * R;
     positions[count * 3 + 1] = Math.cos(theta) * R;

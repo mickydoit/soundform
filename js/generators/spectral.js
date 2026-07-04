@@ -22,7 +22,7 @@ export function generate(fp, params, onProgress) {
   filaments.forEach((fil, fi) => {
     const angle0 = (fil.pc / 12) * Math.PI * 2;
     const braid = fp.consonance * 0.25; // consonant chords braid toward each other
-    const jitter = 0.01 + fp.velocity * 0.035;
+    const jitter = 0.008 + fp.velocity * 0.017;
     const path = (t) => {
       const y = (t - 0.5) * H + fil.oct * 0.12;
       const ang = angle0 + t * Math.PI * 2 * turns;
