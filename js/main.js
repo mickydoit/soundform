@@ -251,8 +251,13 @@ function bindExport() {
         const fmt = btn.dataset.fmt;
         if (fmt === 'svg') {
           if (!design) { setStatus('Create a design first'); return; }
+          const all = design.strands;
+          const want = Math.min(params.strandCount * Math.max(1, Math.round(all.length / 96)), all.length);
+          const step = all.length / want;
+          const picked = [];
+          for (let i = 0; i < want; i++) picked.push(all[Math.floor(i * step)]);
           const svg = exportStrandSVG({
-            strands: design.strands.slice(0, params.strandCount),
+            strands: picked,
             positions: design.positions,
             mvp: renderer.getMVP().elements,
             width: 1600, height: 1200,
