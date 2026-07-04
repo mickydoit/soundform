@@ -150,9 +150,13 @@ export class DensityRenderer {
     const [w, h] = this._size();
     const r = this._insetR || 0, b = this._insetB || 0;
     if (r > 0 || b > 0) {
+      // With a view offset, aspect must match the VIRTUAL canvas or the
+      // sub-view is squeezed.
+      this.camera.aspect = (w + r) / (h + b);
       this.camera.setViewOffset(w + r, h + b, r, b, w, h);
-    } else if (this.camera.view) {
-      this.camera.clearViewOffset();
+    } else {
+      if (this.camera.view) this.camera.clearViewOffset();
+      this.camera.aspect = w / h;
     }
     this.camera.updateProjectionMatrix();
   }
@@ -205,7 +209,12 @@ export class DensityRenderer {
     // Exports must be centred: compute the matrix with the chrome view-offset
     // cleared, then restore it for on-screen rendering.
     const hadOffset = !!(this.camera.view && this.camera.view.enabled);
-    if (hadOffset) { this.camera.clearViewOffset(); this.camera.updateProjectionMatrix(); }
+    if (hadOffset) {
+      this.camera.clearViewOffset();
+      const [vw, vh] = this._size();
+      this.camera.aspect = vw / vh;
+      this.camera.updateProjectionMatrix();
+    }
     this.group.updateMatrixWorld(true);
     this.camera.updateMatrixWorld(true);
     const mvp = new THREE.Matrix4()
@@ -252,7 +261,11 @@ export class DensityRenderer {
     const W = Math.floor(w * scaleFactor), H = Math.floor(h * scaleFactor);
     // Exports are centred: drop the chrome view-offset for the export render.
     const hadOffset = !!(this.camera.view && this.camera.view.enabled);
-    if (hadOffset) { this.camera.clearViewOffset(); this.camera.updateProjectionMatrix(); }
+    if (hadOffset) {
+      this.camera.clearViewOffset();
+      this.camera.aspect = w / h;
+      this.camera.updateProjectionMatrix();
+    }
     const bigDensity = this.fallback ? null : this._makeTarget(W, H, THREE.HalfFloatType);
     const bigOut = this._makeTarget(W, H, THREE.UnsignedByteType);
     const savedTarget = this.target;
