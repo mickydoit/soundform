@@ -33,12 +33,24 @@ export function generate(fp, params, onProgress) {
   const positions = new Float32Array(N * 3);
   const attr = new Float32Array(N);
   for (let i = 0; i < N; i++) {
-    const t = Math.floor(rnd() * (M - 1));
-    const rad = (0.02 + dwell[t] * 0.14) * (0.6 + params.complexity);
-    positions[i * 3] = center[t * 3] + (rnd() - 0.5) * rad * 2;
-    positions[i * 3 + 1] = center[t * 3 + 1] + (rnd() - 0.5) * rad * 2;
-    positions[i * 3 + 2] = center[t * 3 + 2] + (rnd() - 0.5) * rad * 2;
-    attr[i] = t / (M - 1); // palette follows time
+    const tf = rnd() * (M - 1);
+    const i0 = Math.floor(tf), f = tf - i0;
+    const i1 = Math.min(M - 1, i0 + 1);
+    const cx = center[i0 * 3]     + (center[i1 * 3]     - center[i0 * 3])     * f;
+    const cy = center[i0 * 3 + 1] + (center[i1 * 3 + 1] - center[i0 * 3 + 1]) * f;
+    const cz = center[i0 * 3 + 2] + (center[i1 * 3 + 2] - center[i0 * 3 + 2]) * f;
+    const dw = dwell[i0] + (dwell[i1] - dwell[i0]) * f;
+    const rad = (0.012 + dw * 0.07) * (0.6 + params.complexity);
+    // Random direction + product-of-two-uniforms magnitude: bounded, and its
+    // density spikes near r=0 with a soft taper to the cap — a real bright
+    // core instead of the old flat cube scatter, without a heavy unbounded tail.
+    const u = rnd() * 2 - 1, phi = rnd() * Math.PI * 2;
+    const s = Math.sqrt(Math.max(0, 1 - u * u));
+    const m = rnd() * rnd() * 3 * rad;
+    positions[i * 3]     = cx + s * Math.cos(phi) * m;
+    positions[i * 3 + 1] = cy + s * Math.sin(phi) * m;
+    positions[i * 3 + 2] = cz + u * m;
+    attr[i] = tf / (M - 1); // palette follows time, now continuous
     if (onProgress && i % 300000 === 0) onProgress(i / N);
   }
 
@@ -51,7 +63,7 @@ export function generate(fp, params, onProgress) {
     const rs = resamplePolyline(center, 300);
     for (let i = 0; i < 300; i++) {
       const dw = dwell[Math.floor((i / 299) * (M - 1))];
-      const rad = (0.02 + dw * 0.14) * (0.6 + params.complexity);
+      const rad = (0.012 + dw * 0.07) * (0.6 + params.complexity);
       copy[i * 3] = rs[i * 3] + Math.cos(phase + i * 0.05 * freq) * rad;
       copy[i * 3 + 1] = rs[i * 3 + 1] + Math.sin(phase + i * 0.05 * freq) * rad;
       copy[i * 3 + 2] = rs[i * 3 + 2] + Math.cos(phase * 1.7 + i * 0.04 * freq) * rad;
