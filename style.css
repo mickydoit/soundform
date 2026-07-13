@@ -479,3 +479,19 @@ input[type="color"]::-moz-color-swatch { border: none; border-radius: 50%; }
     #sheet-handle { background: rgba(28, 28, 32, .94); }
   }
 }
+
+/* Motion animate toggle */
+#btn-motion {
+  width: 100%;
+  border: none;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-2);
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 500;
+  padding: 7px 2px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background .2s ease, color .2s ease;
+}
+#btn-motion:hover { color: var(--text-1); background: rgba(255, 255, 255, 0.1); }

@@ -7,7 +7,7 @@
   <meta http-equiv="Pragma" content="no-cache">
   <meta http-equiv="Expires" content="0">
   <title>Soundform — Audio Design Tool</title>
-  <link rel="stylesheet" href="style.css?v=23">
+  <link rel="stylesheet" href="style.css?v=24">
 </head>
 <body>
 <div id="app">
@@ -127,6 +127,10 @@
       <div class="section-title">Motion</div>
       <div class="sl-row"><div class="sl-label"><span>Auto-rotate</span><span id="val-rot-speed">0.3</span></div>
         <input type="range" id="sl-rot-speed" min="0" max="2" step="0.05" value="0.3"></div>
+      <div class="sl-row"><div class="sl-label"><span>Animate</span></div>
+        <button id="btn-motion" type="button">&#9654; Play</button></div>
+      <div class="sl-row"><div class="sl-label"><span>Loop (s)</span><span id="val-motion-period">8</span></div>
+        <input type="range" id="sl-motion-period" min="4" max="20" step="1" value="8"></div>
     </div>
 
     <div class="panel-footer">Record → Stop → Create · Drag to rotate · Same sound, same design</div>
@@ -135,6 +139,6 @@
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r134/three.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
-<script type="module" src="js/main.js?v=23"></script>
+<script type="module" src="js/main.js?v=24"></script>
 </body>
 </html>

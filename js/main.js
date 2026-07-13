@@ -1,8 +1,9 @@
-import { AudioEngine } from './audio.js?v=23';
-import { buildFingerprint } from './features.js?v=23';
-import { DensityRenderer } from './density.js?v=23';
-import { PALETTES, buildLUT, customRamp, hexToRgb } from './palettes.js?v=23';
-import { exportCanvas, exportStrandSVG } from './exporter.js?v=23';
+import { AudioEngine } from './audio.js?v=24';
+import { buildFingerprint } from './features.js?v=24';
+import { DensityRenderer } from './density.js?v=24';
+import { PALETTES, buildLUT, customRamp, hexToRgb } from './palettes.js?v=24';
+import { exportCanvas, exportStrandSVG } from './exporter.js?v=24';
+import { motionParams, displacePoint } from './motion.js?v=24';
 
 const audio = new AudioEngine();
 let renderer = null;
@@ -25,6 +26,7 @@ const params = {
   colorPrimary: '#b8a7e0', colorSecondary: '#e8b4c8', colorAccent: '#fff2e0',
   background: '#03040a',
   exposure: 30, contrast: 1.0, autoRotate: 0.3,
+  motionOn: false, motionPeriod: 8,
 };
 
 let statusEl, vuFill, vuWrap, clearBtn, submitBtn;
@@ -85,12 +87,13 @@ function regenerate() {
                               symmetry: params.symmetry, twist: params.twist, strandCount: 96 } };
   const onResult = (out) => {
     design = out;
+    renderer.setMotion(motionParams(fingerprint.seed));
     renderer.setCloud(out.positions, out.attr);
     applyRenderParams();
     setStatus('Design created — drag to rotate · adjust sliders');
   };
   try {
-    if (!worker) worker = new Worker('js/worker.js?v=23', { type: 'module' });
+    if (!worker) worker = new Worker('js/worker.js?v=24', { type: 'module' });
     worker.onmessage = (e) => {
       if (e.data.progress !== undefined) setStatus(`Generating… ${Math.round(e.data.progress * 100)}%`);
       else if (e.data.error) setStatus(`Generation error: ${e.data.error}`);
@@ -104,7 +107,7 @@ function regenerate() {
 }
 
 async function fallbackGenerate(onResult) {
-  const { generate } = await import('./generators/index.js?v=23');
+  const { generate } = await import('./generators/index.js?v=24');
   onResult(generate(fingerprint, { ...params, strandCount: 96 }));
 }
 
@@ -237,6 +240,16 @@ function bindControls() {
     ['sl-contrast', 'contrast', parseFloat, false],
     ['sl-rot-speed', 'autoRotate', parseFloat, false],
   ];
+  document.getElementById('btn-motion').addEventListener('click', () => {
+    params.motionOn = !params.motionOn;
+    renderer.setPlaying(params.motionOn);
+    document.getElementById('btn-motion').innerHTML = params.motionOn ? '&#10074;&#10074; Pause' : '&#9654; Play';
+  });
+  document.getElementById('sl-motion-period').addEventListener('input', (e) => {
+    params.motionPeriod = parseFloat(e.target.value);
+    document.getElementById('val-motion-period').textContent = params.motionPeriod;
+    renderer.setLoopPeriod(params.motionPeriod);
+  });
   sliders.forEach(([id, key, parse, regen]) => {
     const el = document.getElementById(id);
     const valEl = document.getElementById(id.replace('sl-', 'val-'));
@@ -276,9 +289,26 @@ function bindExport() {
           const step = all.length / want;
           const picked = [];
           for (let i = 0; i < want; i++) picked.push(all[Math.floor(i * step)]);
+          // Frame-accurate export: apply the shader's motion displacement
+          // (mirrored in js/motion.js) so the SVG matches the visible frame.
+          let expStrands = picked, expPositions = design.positions;
+          const mp = renderer.getActiveMotion();
+          if (mp) {
+            const t = renderer.getLoopPhase();
+            const displaceArr = (src) => {
+              const c = new Float32Array(src.length);
+              for (let i = 0; i < src.length; i += 3) {
+                const [x, y, z] = displacePoint(src[i], src[i + 1], src[i + 2], mp, t);
+                c[i] = x; c[i + 1] = y; c[i + 2] = z;
+              }
+              return c;
+            };
+            expStrands = picked.map(displaceArr);
+            expPositions = displaceArr(design.positions);
+          }
           const svg = exportStrandSVG({
-            strands: picked,
-            positions: design.positions,
+            strands: expStrands,
+            positions: expPositions,
             mvp: renderer.getMVP().elements,
             width: 1600, height: 1200,
             stops: activeStops(), background: params.background,
