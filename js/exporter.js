@@ -102,3 +102,56 @@ export function exportStrandSVG({ strands, positions, mvp, width, height, stops,
     '</svg>',
   ].join('\n');
 }
+
+// ── MP4 export ─────────────────────────────────────────────────────
+// One seamless loop: frame i renders at phase i/frames, so frame `frames`
+// would equal frame 0 — the file loops perfectly by construction.
+export function framePlan(periodSeconds, fps = 30) {
+  const frames = Math.max(2, Math.round(periodSeconds * fps));
+  return { frames, fps, phase: (i) => (i % frames) / frames };
+}
+
+// Deterministic offline encode: caller renders each frame (offscreen, fixed
+// phase), we push it through WebCodecs H.264 into an mp4-muxer container.
+export async function exportMP4({ renderFrame, fps, frames, onProgress, shouldCancel }) {
+  const { Muxer, ArrayBufferTarget } = window.Mp4Muxer;
+  const first = renderFrame(0);
+  const W = first.width & ~1, H = first.height & ~1; // H.264 needs even dims
+  const stage = document.createElement('canvas');
+  stage.width = W; stage.height = H;
+  const ctx = stage.getContext('2d');
+
+  const muxer = new Muxer({
+    target: new ArrayBufferTarget(),
+    video: { codec: 'avc', width: W, height: H },
+    fastStart: 'in-memory',
+  });
+  let encError = null;
+  const encoder = new VideoEncoder({
+    output: (chunk, meta) => muxer.addVideoChunk(chunk, meta),
+    error: (e) => { encError = e; },
+  });
+  let cfg = { codec: 'avc1.640028', width: W, height: H, bitrate: 12_000_000, framerate: fps };
+  if (!(await VideoEncoder.isConfigSupported(cfg)).supported) cfg = { ...cfg, codec: 'avc1.42001f' };
+  encoder.configure(cfg);
+
+  for (let i = 0; i < frames; i++) {
+    if (shouldCancel && shouldCancel()) { encoder.close(); return false; }
+    if (encError) throw encError;
+    ctx.drawImage(i === 0 ? first : renderFrame(i), 0, 0, W, H);
+    const frame = new VideoFrame(stage, {
+      timestamp: Math.round((i * 1e6) / fps),
+      duration: Math.round(1e6 / fps),
+    });
+    encoder.encode(frame, { keyFrame: i % (fps * 2) === 0 });
+    frame.close();
+    if (onProgress) onProgress((i + 1) / frames);
+    while (encoder.encodeQueueSize > 4) await new Promise((r) => setTimeout(r, 10));
+  }
+  await encoder.flush();
+  muxer.finalize();
+  const url = URL.createObjectURL(new Blob([muxer.target.buffer], { type: 'video/mp4' }));
+  _dl(url, 'soundform.mp4');
+  setTimeout(() => URL.revokeObjectURL(url), 3000);
+  return true;
+}

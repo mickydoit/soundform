@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { exportStrandSVG } from '../js/exporter.js';
+import { exportStrandSVG, framePlan } from '../js/exporter.js';
 
 const IDENTITY = [1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1];
 
@@ -42,4 +42,18 @@ test('exportStrandSVG: under 1MB budget', () => {
 
 test('exportStrandSVG: deterministic', () => {
   assert.equal(exportStrandSVG(fixture()), exportStrandSVG(fixture()));
+});
+
+test('framePlan: whole loop, phase wraps to zero, never reaches 1', () => {
+  const p = framePlan(8, 30);
+  assert.equal(p.frames, 240);
+  assert.equal(p.fps, 30);
+  assert.equal(p.phase(0), 0);
+  assert.equal(p.phase(p.frames), 0, 'frame N wraps to frame 0 — seamless');
+  assert.ok(p.phase(p.frames - 1) < 1);
+  for (let i = 1; i < p.frames; i++) assert.ok(p.phase(i) > p.phase(i - 1));
+});
+
+test('framePlan: minimum two frames', () => {
+  assert.ok(framePlan(0.01, 30).frames >= 2);
 });
