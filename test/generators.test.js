@@ -115,10 +115,6 @@ test('attractor: low-pitch thomas routing does not collapse to a limit cycle', (
   assert.ok(cells.size >= 400, `occupied cells ${cells.size} — looks like a limit cycle`);
 });
 
-test('chladni generator: bounded, dense, deterministic, strands', () => {
-  checkGenerator('chladni');
-});
-
 test('radial generator', () => {
   checkGenerator('radial');
 });
@@ -193,4 +189,8 @@ test('harmonic: pitch changes dominant degree → different geometry', () => {
 
 test('harmonic: registered in mode registry', () => {
   assert.ok(registeredModes().includes('harmonic'));
+});
+
+test('chladni mode is removed', () => {
+  assert.ok(!registeredModes().includes('chladni'));
 });

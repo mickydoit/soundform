@@ -1,11 +1,10 @@
 import * as attractor from './attractor.js';
-import * as chladni from './chladni.js';
 import * as radial from './radial.js';
 import * as cymatics from './cymatics.js';
 import * as timbre from './timbre.js';
 import * as harmonic from './harmonic.js';
 
-const REGISTRY = { attractor: attractor.generate, chladni: chladni.generate, radial: radial.generate, cymatics: cymatics.generate, timbre: timbre.generate, harmonic: harmonic.generate };
+const REGISTRY = { attractor: attractor.generate, radial: radial.generate, cymatics: cymatics.generate, timbre: timbre.generate, harmonic: harmonic.generate };
 
 export function generate(fp, params, onProgress) {
   const gen = REGISTRY[params.mode];
