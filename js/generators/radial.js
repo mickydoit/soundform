@@ -18,13 +18,13 @@ export function generate(fp, params, onProgress) {
 
   for (let s = 0; s < shells; s++) {
     const tS = s / Math.max(1, shells - 1);
-    const lobes = 2 + (fp.noteSet[s % fp.noteCount] % 5) + Math.round(params.complexity * 3);
+    const lobes = 2 + (fp.noteSet[s % fp.noteCount] % 3) + Math.round(params.complexity * 2);
     const baseR = 0.35 + tS * 0.75;
-    const wobble = 0.08 + fp.pitchRange * 0.3;
+    const wobble = 0.04 + fp.pitchRange * 0.12;
     const tiltA = fp.consonance > 0.5 ? s * golden : rnd() * Math.PI * 2;
     const tiltB = fp.consonance > 0.5 ? tS * Math.PI * 0.8 : rnd() * Math.PI;
     const ca = Math.cos(tiltA), sa = Math.sin(tiltA), cb = Math.cos(tiltB), sb = Math.sin(tiltB);
-    const tube = 0.007 + fp.velocity * 0.014 + tS * 0.005;
+    const tube = 0.005 + fp.velocity * 0.008 + tS * 0.003;
     const phase = fp.contour[s % 8] * Math.PI * 2;
 
     const orbit = (t) => {
@@ -63,7 +63,7 @@ export function generate(fp, params, onProgress) {
   while (strands.length < Math.min(96, params.strandCount || 96)) {
     const src = strands[strands.length % shells];
     const copy = src.slice();
-    for (let i = 0; i < copy.length; i++) copy[i] += (rnd() - 0.5) * 0.02;
+    for (let i = 0; i < copy.length; i++) copy[i] += (rnd() - 0.5) * 0.012;
     strands.push(copy);
   }
   return finalize(positions, attr, strands, params);
