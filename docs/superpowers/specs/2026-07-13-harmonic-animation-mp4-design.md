@@ -87,6 +87,11 @@ Each feature merges and ships independently:
 
 Cache-bust version bumped on each merge (currently ?v=22).
 
+## Addendum (2026-07-13, user request during planning)
+
+- **Remove Chladni mode** — delete the mode button, registry entry, generator file `js/generators/chladni.js`, and its tests. Attractor/Cymatics remain locked and untouched; any stored `mode: 'chladni'` state falls back to an "unknown mode" error, which is acceptable (mode is not URL-persisted).
+- **Soften Radial mode** — reduce wobble amplitude, lobe count range, and scatter tube so designs read calmer and more subtle. Constants-only change (no RNG call-order change → determinism preserved); final values confirmed by eye.
+
 ## Error handling
 
 - Unknown/unsupported WebCodecs codec config → try `avc1.42001f` baseline fallback, then surface a clear status-pill message.
