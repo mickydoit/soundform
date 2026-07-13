@@ -5,8 +5,13 @@ const SPLAT_VERT = `
 attribute float attrv;
 varying float vAttr;
 uniform float uSize;
+uniform float uTime, uFreq, uAmp;
+uniform vec3 uDir;
 void main() {
-  vec4 mv = modelViewMatrix * vec4(position, 1.0);
+  vec3 p = position;
+  float s = uAmp * sin(uFreq * dot(p, uDir) + 6.28318530718 * uTime);
+  p += (p / max(length(p), 1e-6)) * s;
+  vec4 mv = modelViewMatrix * vec4(p, 1.0);
   gl_Position = projectionMatrix * mv;
   gl_PointSize = uSize / max(0.1, -mv.z);
   vAttr = attrv;
@@ -49,6 +54,10 @@ export class DensityRenderer {
     this._dirty = true;
     this._rotY = 0; this._rotX = -0.2; this._zoom = 1;
     this._params = { exposure: 30, contrast: 1.0, grain: 1.0, background: [0.012, 0.016, 0.04], scale: 1, autoRotate: 0.3 };
+    this._playing = false;
+    this._loopPeriod = 8;
+    this._motion = null;
+    this._lastTick = 0;
     this._initGL();
     this._initDrag();
     this._loop();
@@ -94,7 +103,11 @@ export class DensityRenderer {
 
     this.splatMat = new THREE.ShaderMaterial({
       vertexShader: SPLAT_VERT, fragmentShader: SPLAT_FRAG,
-      uniforms: { uSize: { value: 3.0 } },
+      uniforms: {
+        uSize: { value: 3.0 },
+        uTime: { value: 0 }, uFreq: { value: 5 }, uAmp: { value: 0 },
+        uDir: { value: new THREE.Vector3(0, 1, 0) },
+      },
       blending: THREE.AdditiveBlending, depthTest: false, depthWrite: false, transparent: true,
     });
 
@@ -207,6 +220,28 @@ export class DensityRenderer {
     this._dirty = true;
   }
 
+  // ── Motion (seamless loop) — displacement mirrors js/motion.js ──
+  setMotion(mp) {
+    this._motion = mp;
+    this.splatMat.uniforms.uDir.value.set(mp.dir[0], mp.dir[1], mp.dir[2]);
+    this.splatMat.uniforms.uFreq.value = mp.freq;
+    if (this.splatMat.uniforms.uAmp.value > 0) this.splatMat.uniforms.uAmp.value = mp.amp;
+    this._dirty = true;
+  }
+  activateMotion() {
+    if (this._motion) this.splatMat.uniforms.uAmp.value = this._motion.amp;
+    this._dirty = true;
+  }
+  setPlaying(on) {
+    this._playing = !!on;
+    if (on) this.activateMotion();
+    this._dirty = true;
+  }
+  setLoopPeriod(sec) { this._loopPeriod = Math.max(1, sec); }
+  setLoopPhase(t) { this.splatMat.uniforms.uTime.value = t - Math.floor(t); this._dirty = true; }
+  getLoopPhase() { return this.splatMat.uniforms.uTime.value; }
+  getActiveMotion() { return this.splatMat.uniforms.uAmp.value > 0 ? this._motion : null; }
+
   requestRender() { this._dirty = true; }
 
   getMVP() {
@@ -253,6 +288,14 @@ export class DensityRenderer {
     if (this._params.autoRotate > 0 && this.points) {
       this._rotY += this._params.autoRotate * 0.004;
       this._dirty = true;
+    }
+    if (this._playing) {
+      const now = performance.now() / 1000;
+      const dt = Math.min(0.1, this._lastTick ? now - this._lastTick : 0);
+      this._lastTick = now;
+      this.setLoopPhase(this.splatMat.uniforms.uTime.value + dt / this._loopPeriod);
+    } else {
+      this._lastTick = 0;
     }
     if (!this._dirty) return; // render-on-demand: idle = zero draw calls
     this._dirty = false;
