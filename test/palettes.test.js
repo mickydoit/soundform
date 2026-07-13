@@ -26,3 +26,16 @@ test('all presets have valid ordered stops', () => {
     for (let i = 1; i < p.stops.length; i++) assert.ok(p.stops[i][0] > p.stops[i - 1][0]);
   }
 });
+
+test('muted palettes: ink/graphite/scope present and well-formed', () => {
+  for (const key of ['ink', 'graphite', 'scope']) {
+    const p = PALETTES[key];
+    assert.ok(p, `${key} missing`);
+    assert.equal(p.stops[0][0], 0);
+    assert.equal(p.stops[p.stops.length - 1][0], 1);
+    for (const [t, hex] of p.stops) {
+      assert.ok(t >= 0 && t <= 1);
+      assert.match(hex, /^#[0-9a-f]{6}$/i);
+    }
+  }
+});

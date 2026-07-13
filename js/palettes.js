@@ -7,6 +7,9 @@ export const PALETTES = {
   aurora:  { label: 'Aurora',  stops: [[0, '#071010'], [0.3, '#7fd8c4'], [0.6, '#c5b8f0'], [0.85, '#f4c6d7'], [1, '#ffffff']] },
   glacier: { label: 'Glacier', stops: [[0, '#040a14'], [0.3, '#1e4f8a'], [0.6, '#4fa8d8'], [0.85, '#bde8f5'], [1, '#ffffff']] },
   rosegold:{ label: 'Rosé',    stops: [[0, '#120a0e'], [0.3, '#8a4a5e'], [0.6, '#d891a0'], [0.85, '#f2d3b8'], [1, '#fff8f0']] },
+  ink:     { label: 'Ink',      stops: [[0, '#0b0b0a'], [0.35, '#4a463f'], [0.7, '#b3ada0'], [1, '#f2ede2']] },
+  graphite:{ label: 'Graphite', stops: [[0, '#0a0a0c'], [0.35, '#3d3f45'], [0.7, '#9a9da6'], [1, '#e8eaee']] },
+  scope:   { label: 'Scope',    stops: [[0, '#020604'], [0.35, '#14452b'], [0.7, '#5cb87e'], [1, '#d8f5e0']] },
 };
 
 export function hexToRgb(hex) {
