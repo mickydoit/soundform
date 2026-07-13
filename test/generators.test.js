@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { generate } from '../js/generators/index.js';
+import { generate, registeredModes } from '../js/generators/index.js';
 import { pickSystem } from '../js/generators/attractor.js';
+import { sphericalY } from '../js/generators/harmonic.js';
 
 export function testFingerprint(overrides = {}) {
   const chroma = new Float32Array(12); chroma[0] = 1; chroma[4] = 0.8; chroma[7] = 0.7;
@@ -168,4 +169,28 @@ test('timbre: points concentrate toward the centreline (gaussian core)', () => {
   const median = dists[Math.floor(dists.length * 0.5)];
   const p95 = dists[Math.floor(dists.length * 0.95)];
   assert.ok(median < 0.45 * p95, `median ${median.toFixed(4)} vs p95 ${p95.toFixed(4)}`);
+});
+
+test('harmonic generator: bounded, dense, deterministic, strands', () => {
+  checkGenerator('harmonic');
+});
+
+test('harmonic: sphericalY known values', () => {
+  // Y_0^0 = 1/(2√pI) everywhere
+  assert.ok(Math.abs(sphericalY(0, 0, 1.1, 2.2, 0) - 0.28209479) < 1e-6);
+  // m > l clamps to l, stays finite
+  assert.ok(Number.isFinite(sphericalY(3, 7, 0.5, 0.5, 0)));
+});
+
+test('harmonic: pitch changes dominant degree → different geometry', () => {
+  const params = { ...baseParams, mode: 'harmonic' };
+  const a = generate(testFingerprint({ pitchMedian: 0.1 }), params);
+  const b = generate(testFingerprint({ pitchMedian: 0.9 }), params);
+  let diff = 0;
+  for (let i = 0; i < 300; i++) diff += Math.abs(a.positions[i] - b.positions[i]);
+  assert.ok(diff > 1, 'pitch should change the form');
+});
+
+test('harmonic: registered in mode registry', () => {
+  assert.ok(registeredModes().includes('harmonic'));
 });
