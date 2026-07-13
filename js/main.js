@@ -1,9 +1,9 @@
-import { AudioEngine } from './audio.js?v=24';
-import { buildFingerprint } from './features.js?v=24';
-import { DensityRenderer } from './density.js?v=24';
-import { PALETTES, buildLUT, customRamp, hexToRgb } from './palettes.js?v=24';
-import { exportCanvas, exportStrandSVG } from './exporter.js?v=24';
-import { motionParams, displacePoint } from './motion.js?v=24';
+import { AudioEngine } from './audio.js?v=25';
+import { buildFingerprint } from './features.js?v=25';
+import { DensityRenderer } from './density.js?v=25';
+import { PALETTES, buildLUT, customRamp, hexToRgb } from './palettes.js?v=25';
+import { exportCanvas, exportStrandSVG, framePlan, exportMP4 } from './exporter.js?v=25';
+import { motionParams, displacePoint } from './motion.js?v=25';
 
 const audio = new AudioEngine();
 let renderer = null;
@@ -14,6 +14,7 @@ let frames = [];
 let recordStart = 0;
 let fingerprint = null;
 let design = null; // { positions, attr, strands }
+let mp4Busy = false, mp4Cancel = false;
 
 const isMobile = /Mobi|Android|iPhone|iPad/.test(navigator.userAgent);
 
@@ -93,7 +94,7 @@ function regenerate() {
     setStatus('Design created — drag to rotate · adjust sliders');
   };
   try {
-    if (!worker) worker = new Worker('js/worker.js?v=24', { type: 'module' });
+    if (!worker) worker = new Worker('js/worker.js?v=25', { type: 'module' });
     worker.onmessage = (e) => {
       if (e.data.progress !== undefined) setStatus(`Generating… ${Math.round(e.data.progress * 100)}%`);
       else if (e.data.error) setStatus(`Generation error: ${e.data.error}`);
@@ -107,7 +108,7 @@ function regenerate() {
 }
 
 async function fallbackGenerate(onResult) {
-  const { generate } = await import('./generators/index.js?v=24');
+  const { generate } = await import('./generators/index.js?v=25');
   onResult(generate(fingerprint, { ...params, strandCount: 96 }));
 }
 
@@ -318,6 +319,31 @@ function bindExport() {
           const a = Object.assign(document.createElement('a'), { href: url, download: 'soundform.svg' });
           document.body.appendChild(a); a.click(); document.body.removeChild(a);
           setTimeout(() => URL.revokeObjectURL(url), 3000);
+        } else if (fmt === 'mp4') {
+          if (!('VideoEncoder' in window)) { setStatus('MP4 export not supported in this browser'); return; }
+          if (!design) { setStatus('Create a design first'); return; }
+          if (mp4Busy) { mp4Cancel = true; setStatus('Cancelling…'); return; }
+          mp4Busy = true; mp4Cancel = false;
+          const wasPlaying = params.motionOn;
+          renderer.setPlaying(false);
+          renderer.activateMotion();
+          const savedPhase = renderer.getLoopPhase();
+          try {
+            const probe = renderer.renderHiRes(1);
+            const scale = 1080 / Math.max(probe.width, probe.height);
+            const plan = framePlan(params.motionPeriod, 30);
+            const ok = await exportMP4({
+              renderFrame: (i) => { renderer.setLoopPhase(plan.phase(i)); return renderer.renderHiRes(scale); },
+              fps: plan.fps, frames: plan.frames,
+              onProgress: (p) => setStatus(`MP4 ${Math.round(p * 100)}% — click MP4 again to cancel`),
+              shouldCancel: () => mp4Cancel,
+            });
+            setStatus(ok ? 'MP4 saved' : 'MP4 export cancelled');
+          } finally {
+            mp4Busy = false;
+            renderer.setLoopPhase(savedPhase);
+            renderer.setPlaying(wasPlaying);
+          }
         } else {
           const canvas = renderer.renderHiRes(fmt === 'pdf' ? 2 : 3);
           await exportCanvas(canvas, fmt);
