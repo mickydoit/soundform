@@ -109,3 +109,49 @@ export function generate(fp, params, onProgress) {
 
   return finalize(positions, attr, strands, params);
 }
+
+// Seeded 3D value noise: 256-permutation lattice + trilinear interpolation,
+// 3 fractal octaves. DOM-free and deterministic per rnd stream — this is the
+// "crumple" that roughens the displacement into a hand-drawn edge.
+export function makeValueNoise3(rnd) {
+  const vals = new Float32Array(256);
+  for (let i = 0; i < 256; i++) vals[i] = rnd();
+  const p = [...Array(256).keys()];
+  for (let i = 255; i > 0; i--) { const j = Math.floor(rnd() * (i + 1)); [p[i], p[j]] = [p[j], p[i]]; }
+  const perm = new Uint8Array(512);
+  for (let i = 0; i < 512; i++) perm[i] = p[i & 255];
+  const latt = (X, Y, Z) => vals[perm[(perm[(perm[X & 255] + (Y & 255)) & 255] + (Z & 255)) & 255]];
+  const smooth = t => t * t * (3 - 2 * t);
+  const lerp = (a, b, t) => a + (b - a) * t;
+  const noise = (x, y, z) => {
+    const X = Math.floor(x), Y = Math.floor(y), Z = Math.floor(z);
+    const fx = smooth(x - X), fy = smooth(y - Y), fz = smooth(z - Z);
+    return lerp(
+      lerp(lerp(latt(X, Y, Z),     latt(X + 1, Y, Z),     fx),
+           lerp(latt(X, Y + 1, Z), latt(X + 1, Y + 1, Z), fx), fy),
+      lerp(lerp(latt(X, Y, Z + 1),     latt(X + 1, Y, Z + 1),     fx),
+           lerp(latt(X, Y + 1, Z + 1), latt(X + 1, Y + 1, Z + 1), fx), fy),
+      fz);
+  };
+  const fractal = (x, y, z) =>
+    (noise(x, y, z) + 0.5 * noise(x * 2 + 17.3, y * 2 + 17.3, z * 2 + 17.3)
+                    + 0.25 * noise(x * 4 + 43.7, y * 4 + 43.7, z * 4 + 43.7)) / 1.75;
+  return { noise, fractal };
+}
+
+// Treatment allocation: how the density budget splits between the mesh
+// backbone (always ≥55%), percussion-driven burst rays, and noise-driven
+// dash fray. Pure so tests can assert the mix without generating geometry.
+export function recipe(fp, params) {
+  const N = Math.max(1000, Math.floor(params.density));
+  const burstW = fp.velocity > 0.12 ? Math.min(0.20, fp.velocity * 0.22 + fp.attackSlope * 0.06) : 0;
+  const dashW  = fp.spread > 0.15 ? Math.min(0.25, (fp.spread - 0.15) * 0.45) : 0;
+  const rings = 24 + Math.round((params.complexity || 0.5) * 24); // 24..48
+  const lons  = 16 + Math.round((params.complexity || 0.5) * 16); // 16..32
+  const nRays = burstW > 0 ? Math.min(120, Math.round(fp.velocity * 150)) : 0;
+  const rayPts  = nRays > 0 ? Math.floor(N * burstW) : 0;
+  const dashPts = dashW > 0 ? Math.floor(N * dashW) : 0;
+  const nDashes = Math.floor(dashPts / 12); // ~12 points per stroke
+  const meshPts = N - rayPts - dashPts;
+  return { rings, lons, nRays, nDashes, meshPts, rayPts, dashPts };
+}

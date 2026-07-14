@@ -2,7 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { generate, registeredModes } from '../js/generators/index.js';
 import { pickSystem } from '../js/generators/attractor.js';
-import { sphericalY } from '../js/generators/harmonic.js';
+import { sphericalY, makeValueNoise3, recipe } from '../js/generators/harmonic.js';
+import { mulberry32 } from '../js/generators/common.js';
 
 export function testFingerprint(overrides = {}) {
   const chroma = new Float32Array(12); chroma[0] = 1; chroma[4] = 0.8; chroma[7] = 0.7;
@@ -193,4 +194,37 @@ test('harmonic: registered in mode registry', () => {
 
 test('chladni mode is removed', () => {
   assert.ok(!registeredModes().includes('chladni'));
+});
+
+test('harmonic value noise: deterministic, bounded, finite at negatives', () => {
+  const a = makeValueNoise3(mulberry32(7));
+  const b = makeValueNoise3(mulberry32(7));
+  for (const [x, y, z] of [[0.3, 1.7, -2.4], [-9.1, 0.01, 4.4], [100.5, -50.2, 0]]) {
+    const v = a.fractal(x, y, z);
+    assert.equal(v, b.fractal(x, y, z), 'seeded noise must be deterministic');
+    assert.ok(v >= 0 && v <= 1 && Number.isFinite(v), `out of range: ${v}`);
+  }
+  const c = makeValueNoise3(mulberry32(8));
+  assert.notEqual(a.fractal(0.3, 1.7, -2.4), c.fractal(0.3, 1.7, -2.4), 'different seeds differ');
+});
+
+test('harmonic recipe: percussive audio gets rays, sustained gets none', () => {
+  const perc = recipe(testFingerprint({ velocity: 0.7, attackSlope: 0.8 }), baseParams);
+  assert.ok(perc.nRays > 20, `expected rays, got ${perc.nRays}`);
+  const hum = recipe(testFingerprint({ velocity: 0.05, attackSlope: 0.1 }), baseParams);
+  assert.equal(hum.nRays, 0, 'sustained hum must have no rays');
+});
+
+test('harmonic recipe: noisy timbre gets dashes, pure tone stays mesh', () => {
+  const noisy = recipe(testFingerprint({ spread: 0.8 }), baseParams);
+  assert.ok(noisy.nDashes > 50, `expected dashes, got ${noisy.nDashes}`);
+  const pure = recipe(testFingerprint({ spread: 0.05 }), baseParams);
+  assert.equal(pure.nDashes, 0, 'pure tone must have no dashes');
+});
+
+test('harmonic recipe: mesh always keeps >=55% of the point budget', () => {
+  const worst = recipe(testFingerprint({ velocity: 1, attackSlope: 1, spread: 1 }), baseParams);
+  assert.ok(worst.meshPts >= baseParams.density * 0.55, `mesh starved: ${worst.meshPts}`);
+  assert.ok(worst.rings >= 24 && worst.rings <= 48);
+  assert.ok(worst.lons >= 16 && worst.lons <= 32);
 });
