@@ -7,7 +7,7 @@
   <meta http-equiv="Pragma" content="no-cache">
   <meta http-equiv="Expires" content="0">
   <title>Soundform — Audio Design Tool</title>
-  <link rel="stylesheet" href="style.css?v=27">
+  <link rel="stylesheet" href="style.css?v=28">
 </head>
 <body>
 <div id="app">
@@ -133,6 +133,28 @@
         <input type="range" id="sl-motion-period" min="4" max="20" step="1" value="8"></div>
     </div>
 
+    <div class="panel-section">
+      <div class="section-title">Export</div>
+      <div class="sl-row">
+        <select id="sel-export-res">
+          <option value="std" selected>Standard res</option>
+          <option value="2k">2K (2400px)</option>
+          <option value="4k">4K (3840px)</option>
+          <option value="8k">8K Print (7680px)</option>
+        </select>
+      </div>
+      <div class="sl-row">
+        <select id="sel-video-dur">
+          <option value="0" selected>Video: 1 loop</option>
+          <option value="5">Video: ~5 s</option>
+          <option value="10">Video: ~10 s</option>
+          <option value="30">Video: ~30 s</option>
+          <option value="60">Video: ~60 s</option>
+        </select>
+      </div>
+      <label class="color-pick-label"><input type="checkbox" id="chk-transparent"> Transparent background</label>
+    </div>
+
     <div class="panel-footer">Record → Stop → Create · Drag to rotate · Same sound, same design</div>
   </div>
 </div>
@@ -140,6 +162,6 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r134/three.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <script src="js/vendor/mp4-muxer.min.js"></script>
-<script type="module" src="js/main.js?v=27"></script>
+<script type="module" src="js/main.js?v=28"></script>
 </body>
 </html>

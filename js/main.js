@@ -1,9 +1,9 @@
-import { AudioEngine } from './audio.js?v=27';
-import { buildFingerprint } from './features.js?v=27';
-import { DensityRenderer } from './density.js?v=27';
-import { PALETTES, buildLUT, customRamp, hexToRgb } from './palettes.js?v=27';
-import { exportCanvas, exportStrandSVG, framePlan, exportMP4 } from './exporter.js?v=27';
-import { motionParams, displacePoint } from './motion.js?v=27';
+import { AudioEngine } from './audio.js?v=28';
+import { buildFingerprint } from './features.js?v=28';
+import { DensityRenderer } from './density.js?v=28';
+import { PALETTES, buildLUT, customRamp, hexToRgb } from './palettes.js?v=28';
+import { exportCanvas, exportStrandSVG, framePlan, exportMP4, loopsForDuration } from './exporter.js?v=28';
+import { motionParams, displacePoint } from './motion.js?v=28';
 
 const audio = new AudioEngine();
 let renderer = null;
@@ -28,6 +28,7 @@ const params = {
   background: '#03040a',
   exposure: 30, contrast: 1.0, autoRotate: 0.3,
   motionOn: false, motionPeriod: 8,
+  exportRes: 'std', videoDur: 0, transparentBg: false,
 };
 
 let statusEl, vuFill, vuWrap, clearBtn, submitBtn;
@@ -94,7 +95,7 @@ function regenerate() {
     setStatus('Design created — drag to rotate · adjust sliders');
   };
   try {
-    if (!worker) worker = new Worker('js/worker.js?v=27', { type: 'module' });
+    if (!worker) worker = new Worker('js/worker.js?v=28', { type: 'module' });
     worker.onmessage = (e) => {
       if (e.data.progress !== undefined) setStatus(`Generating… ${Math.round(e.data.progress * 100)}%`);
       else if (e.data.error) setStatus(`Generation error: ${e.data.error}`);
@@ -108,7 +109,7 @@ function regenerate() {
 }
 
 async function fallbackGenerate(onResult) {
-  const { generate } = await import('./generators/index.js?v=27');
+  const { generate } = await import('./generators/index.js?v=28');
   onResult(generate(fingerprint, { ...params, strandCount: 96 }));
 }
 
@@ -251,6 +252,9 @@ function bindControls() {
     document.getElementById('val-motion-period').textContent = params.motionPeriod;
     renderer.setLoopPeriod(params.motionPeriod);
   });
+  document.getElementById('sel-export-res').addEventListener('change', (e) => { params.exportRes = e.target.value; });
+  document.getElementById('sel-video-dur').addEventListener('change', (e) => { params.videoDur = parseInt(e.target.value, 10); });
+  document.getElementById('chk-transparent').addEventListener('change', (e) => { params.transparentBg = e.target.checked; });
   sliders.forEach(([id, key, parse, regen]) => {
     const el = document.getElementById(id);
     const valEl = document.getElementById(id.replace('sl-', 'val-'));
@@ -312,7 +316,7 @@ function bindExport() {
             positions: expPositions,
             mvp: renderer.getMVP().elements,
             width: 1600, height: 1200,
-            stops: activeStops(), background: params.background,
+            stops: activeStops(), background: params.transparentBg ? null : params.background,
             weight: params.strokeWeight,
           });
           const url = URL.createObjectURL(new Blob([svg], { type: 'image/svg+xml' }));
@@ -329,12 +333,16 @@ function bindExport() {
           renderer.activateMotion();
           const savedPhase = renderer.getLoopPhase();
           try {
+            const RES_PX = { std: null, '2k': 2400, '4k': 3840, '8k': 7680 };
+            const vidPx = Math.min(RES_PX[params.exportRes] || 1080, 3840);
             const probe = renderer.renderHiRes(1);
-            const scale = 1080 / Math.max(probe.width, probe.height);
+            const scale = vidPx / Math.max(probe.width, probe.height);
             const plan = framePlan(params.motionPeriod, 30);
+            const loops = loopsForDuration(params.videoDur, params.motionPeriod);
             const ok = await exportMP4({
               renderFrame: (i) => { renderer.setLoopPhase(plan.phase(i)); return renderer.renderHiRes(scale); },
-              fps: plan.fps, frames: plan.frames,
+              fps: plan.fps, frames: plan.frames * loops,
+              bitrate: Math.min(50_000_000, Math.round(12_000_000 * (vidPx * vidPx) / (1920 * 1080))),
               onProgress: (p) => setStatus(`MP4 ${Math.round(p * 100)}% — click MP4 again to cancel`),
               shouldCancel: () => mp4Cancel,
             });
@@ -345,7 +353,14 @@ function bindExport() {
             renderer.setPlaying(wasPlaying);
           }
         } else {
-          const canvas = renderer.renderHiRes(fmt === 'pdf' ? 2 : 3);
+          const RES_PX = { std: null, '2k': 2400, '4k': 3840, '8k': 7680 };
+          const container = document.getElementById('renderer-container');
+          const target = RES_PX[params.exportRes];
+          const scale = fmt === 'pdf' ? 2
+            : (target ? target / Math.max(container.clientWidth || 800, container.clientHeight || 600) : 3);
+          const transparent = params.transparentBg && (fmt === 'png' || fmt === 'webp');
+          const canvas = renderer.renderHiRes(scale, { transparent });
+          if (renderer.exportNote) setStatus(renderer.exportNote);
           await exportCanvas(canvas, fmt);
         }
       } catch (e) { setStatus(`Export error: ${e.message}`); }
