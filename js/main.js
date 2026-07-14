@@ -1,9 +1,9 @@
-import { AudioEngine } from './audio.js?v=30';
-import { buildFingerprint } from './features.js?v=30';
-import { DensityRenderer } from './density.js?v=30';
-import { PALETTES, buildLUT, customRamp, hexToRgb } from './palettes.js?v=30';
-import { exportCanvas, exportStrandSVG, framePlan, exportMP4, loopsForDuration } from './exporter.js?v=30';
-import { motionParams, displacePoint } from './motion.js?v=30';
+import { AudioEngine } from './audio.js?v=31';
+import { buildFingerprint } from './features.js?v=31';
+import { DensityRenderer } from './density.js?v=31';
+import { PALETTES, buildLUT, customRamp, hexToRgb } from './palettes.js?v=31';
+import { exportCanvas, exportStrandSVG, framePlan, exportMP4, loopsForDuration } from './exporter.js?v=31';
+import { motionParams, displacePoint } from './motion.js?v=31';
 
 const audio = new AudioEngine();
 let renderer = null;
@@ -98,7 +98,7 @@ function regenerate() {
     setStatus('Design created — drag to rotate · adjust sliders');
   };
   try {
-    if (!worker) worker = new Worker('js/worker.js?v=30', { type: 'module' });
+    if (!worker) worker = new Worker('js/worker.js?v=31', { type: 'module' });
     worker.onmessage = (e) => {
       if (e.data.progress !== undefined) setStatus(`Generating… ${Math.round(e.data.progress * 100)}%`);
       else if (e.data.error) setStatus(`Generation error: ${e.data.error}`);
@@ -112,7 +112,7 @@ function regenerate() {
 }
 
 async function fallbackGenerate(onResult) {
-  const { generate } = await import('./generators/index.js?v=30');
+  const { generate } = await import('./generators/index.js?v=31');
   onResult(generate(fingerprint, { ...params, strandCount: 96 }));
 }
 
