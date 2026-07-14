@@ -12,12 +12,25 @@ export function generate(fp, params, onProgress) {
 
   const kBase = 6 + fp.pitchMedian * 10 + params.complexity * 8;
   const detune = (1 - fp.consonance) * 0.9;
+  // Atonal/spoken input (low consonance) loosens the modes: wavenumber and
+  // amplitude gain seeded variance, so speech reads wilder than sung tones.
+  const wild = 0.5 + (1 - (fp.consonance ?? 0.5));
   const modes = fp.noteSet.map((pc, idx) => ({
     m: 2 + (pc % 7) + Math.round(params.complexity * 3),
-    kr: kBase * (0.55 + 0.45 * ((idx + 1) / fp.noteCount)),
-    amp: Math.max(0.15, fp.chroma[pc]),
+    kr: kBase * (0.55 + 0.45 * ((idx + 1) / fp.noteCount)) * (1 + (rnd() - 0.5) * 0.15 * wild),
+    amp: Math.max(0.15, fp.chroma[pc]) * (1 + (rnd() - 0.5) * 0.4 * wild),
     phase: detune * rnd() * Math.PI * 2,
   }));
+
+  // Prosody envelope: the utterance's pitch contour shapes the membrane from
+  // centre to rim, so spoken phrases with different intonation read differently.
+  const contour = fp.contour && fp.contour.length >= 8 ? fp.contour : null;
+  const prosody = (r) => {
+    if (!contour) return 1;
+    const x = Math.min(6.999, Math.max(0, r * 7));
+    const i = Math.floor(x), f2 = x - i;
+    return 0.7 + (contour[i] + (contour[i + 1] - contour[i]) * f2) * 0.6;
+  };
 
   const field = (r, th) => {
     let f = 0;
@@ -25,7 +38,7 @@ export function generate(fp, params, onProgress) {
       f += md.amp * (Math.cos(md.kr * r - md.m * 0.5) / Math.sqrt(1 + md.kr * r * 0.5))
                   * Math.cos(md.m * th + md.phase);
     }
-    return f;
+    return f * prosody(r);
   };
 
   let fMax = 1e-6;
