@@ -1,9 +1,9 @@
-import { AudioEngine } from './audio.js?v=28';
-import { buildFingerprint } from './features.js?v=28';
-import { DensityRenderer } from './density.js?v=28';
-import { PALETTES, buildLUT, customRamp, hexToRgb } from './palettes.js?v=28';
-import { exportCanvas, exportStrandSVG, framePlan, exportMP4, loopsForDuration } from './exporter.js?v=28';
-import { motionParams, displacePoint } from './motion.js?v=28';
+import { AudioEngine } from './audio.js?v=29';
+import { buildFingerprint } from './features.js?v=29';
+import { DensityRenderer } from './density.js?v=29';
+import { PALETTES, buildLUT, customRamp, hexToRgb } from './palettes.js?v=29';
+import { exportCanvas, exportStrandSVG, framePlan, exportMP4, loopsForDuration } from './exporter.js?v=29';
+import { motionParams, displacePoint } from './motion.js?v=29';
 
 const audio = new AudioEngine();
 let renderer = null;
@@ -95,7 +95,7 @@ function regenerate() {
     setStatus('Design created — drag to rotate · adjust sliders');
   };
   try {
-    if (!worker) worker = new Worker('js/worker.js?v=28', { type: 'module' });
+    if (!worker) worker = new Worker('js/worker.js?v=29', { type: 'module' });
     worker.onmessage = (e) => {
       if (e.data.progress !== undefined) setStatus(`Generating… ${Math.round(e.data.progress * 100)}%`);
       else if (e.data.error) setStatus(`Generation error: ${e.data.error}`);
@@ -109,7 +109,7 @@ function regenerate() {
 }
 
 async function fallbackGenerate(onResult) {
-  const { generate } = await import('./generators/index.js?v=28');
+  const { generate } = await import('./generators/index.js?v=29');
   onResult(generate(fingerprint, { ...params, strandCount: 96 }));
 }
 
@@ -175,11 +175,14 @@ function bindAudio() {
   submitBtn.addEventListener('click', () => {
     if (frames.length === 0) { setStatus('No audio captured — try recording again'); return; }
     fingerprint = buildFingerprint(frames, (performance.now() - recordStart) / 1000);
-    fingerprint.trajectory = new Float32Array(frames.length * 3);
+    fingerprint.trajectory = new Float32Array(frames.length * 4);
+    fingerprint.trajectoryChannels = 4;
     frames.forEach((f, i) => {
-      fingerprint.trajectory[i * 3] = f.centroid;
-      fingerprint.trajectory[i * 3 + 1] = f.rms;
-      fingerprint.trajectory[i * 3 + 2] = f.spread;
+      fingerprint.trajectory[i * 4] = f.centroid;
+      fingerprint.trajectory[i * 4 + 1] = f.rms;
+      fingerprint.trajectory[i * 4 + 2] = f.spread;
+      fingerprint.trajectory[i * 4 + 3] = f.pitchHz > 0 && f.pitchConf > 0.5
+        ? Math.min(1, Math.max(0, Math.log2(f.pitchHz / 55) / 6)) : 0;
     });
     appState = 'captured';
     submitBtn.classList.add('hidden');

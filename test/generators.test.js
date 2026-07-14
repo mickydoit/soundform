@@ -124,50 +124,6 @@ test('cymatics generator', () => {
   checkGenerator('cymatics');
 });
 
-test('timbre generator', () => {
-  const fp = testFingerprint();
-  fp.trajectory = new Float32Array(300);
-  for (let i = 0; i < 100; i++) {
-    fp.trajectory[i * 3] = 0.3 + 0.2 * Math.sin(i / 9);
-    fp.trajectory[i * 3 + 1] = 0.2 + 0.15 * Math.sin(i / 5);
-    fp.trajectory[i * 3 + 2] = 0.3 + 0.1 * Math.cos(i / 7);
-  }
-  checkGenerator('timbre', fp);
-});
-
-test('timbre: points concentrate toward the centreline (gaussian core)', () => {
-  const fp = testFingerprint();
-  fp.trajectory = new Float32Array(300);
-  for (let i = 0; i < 100; i++) {
-    fp.trajectory[i * 3] = 0.3 + 0.2 * Math.sin(i / 9);
-    fp.trajectory[i * 3 + 1] = 0.2 + 0.15 * Math.sin(i / 5);
-    fp.trajectory[i * 3 + 2] = 0.3 + 0.1 * Math.cos(i / 7);
-  }
-  const out = generate(fp, { ...baseParams, mode: 'timbre', density: 30000 });
-  // Distance of each (subsampled) point to the nearest of a subsampled set of
-  // centreline stations (out.strands[0], 300 pts, same normalization as
-  // positions). A gaussian core clusters points near the centreline, so the
-  // median distance should be well under half the p95 distance; uniform cube
-  // scatter spreads points out flatly, keeping median close to p95.
-  const cl = out.strands[0];
-  const n = out.positions.length / 3;
-  const dists = [];
-  for (let i = 0; i < n; i += 7) {
-    const x = out.positions[i * 3], y = out.positions[i * 3 + 1], z = out.positions[i * 3 + 2];
-    let best = Infinity;
-    for (let j = 0; j < cl.length; j += 9) { // every 3rd station
-      const dx = x - cl[j], dy = y - cl[j + 1], dz = z - cl[j + 2];
-      const d = dx * dx + dy * dy + dz * dz;
-      if (d < best) best = d;
-    }
-    dists.push(Math.sqrt(best));
-  }
-  dists.sort((a, b) => a - b);
-  const median = dists[Math.floor(dists.length * 0.5)];
-  const p95 = dists[Math.floor(dists.length * 0.95)];
-  assert.ok(median < 0.45 * p95, `median ${median.toFixed(4)} vs p95 ${p95.toFixed(4)}`);
-});
-
 test('harmonic generator: bounded, dense, deterministic, strands', () => {
   checkGenerator('harmonic');
 });
@@ -286,4 +242,9 @@ test('oscillo: missing trajectory → finite smooth circles, no crash', () => {
   const out = generate(testFingerprint(), { ...baseParams, mode: 'oscillo' });
   for (let i = 0; i < 300; i++) assert.ok(Number.isFinite(out.positions[i]));
   assert.ok(out.strands.length >= 24);
+});
+
+test('timbre removed, oscillo registered', () => {
+  assert.ok(!registeredModes().includes('timbre'));
+  assert.ok(registeredModes().includes('oscillo'));
 });
