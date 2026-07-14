@@ -33,7 +33,7 @@ precision highp float;
 varying vec2 vUv;
 uniform sampler2D tDensity;
 uniform sampler2D tLUT;
-uniform float uExposure, uContrast, uPeak;
+uniform float uExposure, uContrast, uPeak, uTransparent;
 uniform vec3 uBackground;
 void main() {
   vec4 s = texture2D(tDensity, vUv);
@@ -42,7 +42,8 @@ void main() {
   t = pow(clamp(t, 0.0, 1.0), uContrast);
   float attr = s.g / max(s.r, 1e-5);
   vec3 col = texture2D(tLUT, vec2(clamp(t * 0.88 + attr * 0.12, 0.0, 1.0), 0.5)).rgb;
-  gl_FragColor = vec4(mix(uBackground, col, smoothstep(0.0, 0.08, t) * min(t * 1.4 + 0.25, 1.0)), 1.0);
+  float cov = smoothstep(0.0, 0.08, t) * min(t * 1.4 + 0.25, 1.0);
+  gl_FragColor = mix(vec4(mix(uBackground, col, cov), 1.0), vec4(col, cov), uTransparent);
 }`;
 
 const TONE_VERT = `varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }`;
@@ -122,6 +123,7 @@ export class DensityRenderer {
         tDensity: { value: this.target ? this.target.texture : null },
         tLUT: { value: this.lutTex },
         uExposure: { value: 30 }, uContrast: { value: 1.0 }, uPeak: { value: 60 },
+        uTransparent: { value: 0 },
         uBackground: { value: new THREE.Vector3(0.012, 0.016, 0.04) },
       },
     });
@@ -303,9 +305,16 @@ export class DensityRenderer {
   }
 
   // Hi-res export: render both passes into an offscreen RGBA8 target and read back.
-  renderHiRes(scaleFactor = 3) {
+  renderHiRes(scaleFactor = 3, { transparent = false } = {}) {
+    this.exportNote = null;
     const [w, h] = this._size();
-    const W = Math.floor(w * scaleFactor), H = Math.floor(h * scaleFactor);
+    const maxTex = this.renderer.capabilities.maxTextureSize || 8192;
+    let W = Math.floor(w * scaleFactor), H = Math.floor(h * scaleFactor);
+    if (Math.max(W, H) > maxTex) {
+      const clamp = maxTex / Math.max(w, h);
+      W = Math.floor(w * clamp); H = Math.floor(h * clamp);
+      this.exportNote = `Requested size exceeds this GPU (max ${maxTex}px) — exported at ${Math.max(W, H)}px`;
+    }
     // Exports are centred: drop the chrome view-offset for the export render.
     const hadOffset = !!(this.camera.view && this.camera.view.enabled);
     const savedInsetZoom = this._insetZoomOut;
@@ -315,23 +324,37 @@ export class DensityRenderer {
       this.camera.updateProjectionMatrix();
       this._insetZoomOut = 1;
     }
-    const bigDensity = this.fallback ? null : this._makeTarget(W, H, THREE.HalfFloatType);
-    const bigOut = this._makeTarget(W, H, THREE.UnsignedByteType);
+    let bigDensity = null, bigOut = null;
+    for (;;) {
+      try {
+        bigDensity = this.fallback ? null : this._makeTarget(W, H, THREE.HalfFloatType);
+        bigOut = this._makeTarget(W, H, THREE.UnsignedByteType);
+        break;
+      } catch (e) {
+        if (bigDensity) { bigDensity.dispose(); bigDensity = null; }
+        if (Math.max(W, H) <= 2000) throw e;
+        W = Math.floor(W / 2); H = Math.floor(H / 2);
+        this.exportNote = `High-res allocation failed — exported at ${Math.max(W, H)}px`;
+      }
+    }
+    if (transparent && !this.fallback) this.toneMat.uniforms.uTransparent.value = 1;
+    const effScale = W / Math.max(1, w);
     const savedTarget = this.target;
     if (bigDensity) {
       this.target = bigDensity;
       this.toneMat.uniforms.tDensity.value = bigDensity.texture;
       // splat count per pixel drops with area → compensate peak
       const savedPeak = this.toneMat.uniforms.uPeak.value;
-      this.toneMat.uniforms.uPeak.value = savedPeak / (scaleFactor * scaleFactor);
+      this.toneMat.uniforms.uPeak.value = savedPeak / (effScale * effScale);
       const savedSize = this.splatMat.uniforms.uSize.value;
-      this.splatMat.uniforms.uSize.value = savedSize * scaleFactor;
+      this.splatMat.uniforms.uSize.value = savedSize * effScale;
       this._renderFrame(bigOut);
       this.toneMat.uniforms.uPeak.value = savedPeak;
       this.splatMat.uniforms.uSize.value = savedSize;
     } else {
       this._renderFrame(bigOut);
     }
+    this.toneMat.uniforms.uTransparent.value = 0;
     const pixels = new Uint8Array(W * H * 4);
     this.renderer.readRenderTargetPixels(bigOut, 0, 0, W, H, pixels);
     this.target = savedTarget;
