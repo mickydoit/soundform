@@ -1,9 +1,9 @@
-import { AudioEngine } from './audio.js?v=29';
-import { buildFingerprint } from './features.js?v=29';
-import { DensityRenderer } from './density.js?v=29';
-import { PALETTES, buildLUT, customRamp, hexToRgb } from './palettes.js?v=29';
-import { exportCanvas, exportStrandSVG, framePlan, exportMP4, loopsForDuration } from './exporter.js?v=29';
-import { motionParams, displacePoint } from './motion.js?v=29';
+import { AudioEngine } from './audio.js?v=30';
+import { buildFingerprint } from './features.js?v=30';
+import { DensityRenderer } from './density.js?v=30';
+import { PALETTES, buildLUT, customRamp, hexToRgb } from './palettes.js?v=30';
+import { exportCanvas, exportStrandSVG, framePlan, exportMP4, loopsForDuration } from './exporter.js?v=30';
+import { motionParams, displacePoint } from './motion.js?v=30';
 
 const audio = new AudioEngine();
 let renderer = null;
@@ -29,12 +29,15 @@ const params = {
   exposure: 30, contrast: 1.0, autoRotate: 0.3,
   motionOn: false, motionPeriod: 8,
   exportRes: 'std', videoDur: 0, transparentBg: false,
+  flatView: true,
 };
 
 let statusEl, vuFill, vuWrap, clearBtn, submitBtn;
 
 window.addEventListener('DOMContentLoaded', () => {
   renderer = new DensityRenderer(document.getElementById('renderer-container'));
+  renderer.setProjection(params.flatView ? 'flat' : 'depth');
+  renderer.setOrientation(-Math.PI / 2, 0); // straight-on top-down: plate/mandala view
   statusEl = document.getElementById('status-bar');
   vuFill = document.getElementById('vu-fill');
   vuWrap = document.getElementById('vu-wrap');
@@ -95,7 +98,7 @@ function regenerate() {
     setStatus('Design created — drag to rotate · adjust sliders');
   };
   try {
-    if (!worker) worker = new Worker('js/worker.js?v=29', { type: 'module' });
+    if (!worker) worker = new Worker('js/worker.js?v=30', { type: 'module' });
     worker.onmessage = (e) => {
       if (e.data.progress !== undefined) setStatus(`Generating… ${Math.round(e.data.progress * 100)}%`);
       else if (e.data.error) setStatus(`Generation error: ${e.data.error}`);
@@ -109,7 +112,7 @@ function regenerate() {
 }
 
 async function fallbackGenerate(onResult) {
-  const { generate } = await import('./generators/index.js?v=29');
+  const { generate } = await import('./generators/index.js?v=30');
   onResult(generate(fingerprint, { ...params, strandCount: 96 }));
 }
 
@@ -258,6 +261,10 @@ function bindControls() {
   document.getElementById('sel-export-res').addEventListener('change', (e) => { params.exportRes = e.target.value; });
   document.getElementById('sel-video-dur').addEventListener('change', (e) => { params.videoDur = parseInt(e.target.value, 10); });
   document.getElementById('chk-transparent').addEventListener('change', (e) => { params.transparentBg = e.target.checked; });
+  document.getElementById('chk-flat').addEventListener('change', (e) => {
+    params.flatView = e.target.checked;
+    renderer.setProjection(params.flatView ? 'flat' : 'depth');
+  });
   sliders.forEach(([id, key, parse, regen]) => {
     const el = document.getElementById(id);
     const valEl = document.getElementById(id.replace('sl-', 'val-'));
