@@ -93,6 +93,9 @@ function regenerate() {
   const onResult = (out) => {
     design = out;
     renderer.setMotion(motionParams(fingerprint.seed));
+    // Every Create presents a perfect plate: re-assert top-down so prior
+    // drags or stale state can't leave a new design tilted.
+    if (params.flatView) renderer.setOrientation(-Math.PI / 2, 0);
     renderer.setCloud(out.positions, out.attr);
     applyRenderParams();
     setStatus('Design created — drag to rotate · adjust sliders');

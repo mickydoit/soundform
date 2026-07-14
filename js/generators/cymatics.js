@@ -21,6 +21,13 @@ export function generate(fp, params, onProgress) {
     amp: Math.max(0.15, fp.chroma[pc]) * (1 + (rnd() - 0.5) * 0.4 * wild),
     phase: detune * rnd() * Math.PI * 2,
   }));
+  // CymaScope intricacy: each note mode's second harmonic (finer petals,
+  // half strength; reuses the base phase — no extra rnd calls), plus a
+  // bullseye core of pure radial rings (m = 0).
+  for (const md of [...modes]) {
+    modes.push({ m: md.m, kr: md.kr * 2, amp: md.amp * 0.5, phase: md.phase });
+  }
+  modes.push({ m: 0, kr: kBase * 1.8, amp: 0.45, phase: 0 });
 
   // Prosody envelope: the utterance's pitch contour shapes the membrane from
   // centre to rim, so spoken phrases with different intonation read differently.
@@ -51,14 +58,19 @@ export function generate(fp, params, onProgress) {
   const spray = fp.velocity * 0.015;
   const positions = new Float32Array(N * 3);
   const attr = new Float32Array(N);
+  // Hairline interference striations: a fine radial carrier gates survival,
+  // so crests break into CymaScope-style fringes. Harder falloff + lower
+  // floor give the bold black voids of the reference photographs.
+  const kFine = 40 + fp.pitchMedian * 30;
   let count = 0, guard = 0;
-  while (count < N && guard < N * 30) {
+  while (count < N && guard < N * 60) {
     guard++;
     const r = Math.sqrt(rnd());
     const th = rnd() * Math.PI * 2;
     const f = field(r, th) / fMax;
-    const af = Math.min(1, Math.abs(f));
-    if (rnd() > Math.max(Math.pow(af, 1.4), 0.08)) continue;
+    const fine = 0.55 + 0.45 * Math.pow(Math.cos(kFine * r), 2);
+    const af = Math.min(1, Math.abs(f)) * fine;
+    if (rnd() > Math.max(Math.pow(af, 2.2), 0.03)) continue;
     positions[count * 3] = Math.cos(th) * r;
     positions[count * 3 + 1] = f * relief + (rnd() + rnd() - 1) * spray * af;
     positions[count * 3 + 2] = Math.sin(th) * r;
