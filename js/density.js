@@ -142,7 +142,7 @@ export class DensityRenderer {
 
   _onResize() {
     const [w, h] = this._size();
-    this.camera.aspect = w / h;
+    this._setAspect(w / h);
     this.camera.updateProjectionMatrix();
     this._applyViewOffset();
     this.renderer.setSize(w, h);
@@ -161,17 +161,45 @@ export class DensityRenderer {
     this._dirty = true;
   }
 
+  _setAspect(aspect) {
+    if (this.camera.isOrthographicCamera) {
+      const s = 1.325; // matches perspective framing: 3.2·tan(22.5°)
+      this.camera.left = -s * aspect; this.camera.right = s * aspect;
+      this.camera.top = s; this.camera.bottom = -s;
+    } else {
+      this.camera.aspect = aspect;
+    }
+  }
+
+  // Flat (orthographic) vs depth (perspective) projection. Additive: 'depth'
+  // rebuilds the exact constructor camera, so perspective output is unchanged.
+  setProjection(mode) {
+    const [w, h] = this._size();
+    if (mode === 'flat') {
+      const s = 1.325, aspect = w / h;
+      this.camera = new THREE.OrthographicCamera(-s * aspect, s * aspect, s, -s, 0.01, 50);
+    } else {
+      this.camera = new THREE.PerspectiveCamera(45, w / h, 0.01, 50);
+    }
+    this.camera.position.z = 3.2;
+    this._projection = mode;
+    this._applyViewOffset();
+    this._dirty = true;
+  }
+
+  setOrientation(rx, ry) { this._rotX = rx; this._rotY = ry; this._dirty = true; }
+
   _applyViewOffset() {
     const [w, h] = this._size();
     const r = this._insetR || 0, b = this._insetB || 0;
     if (r > 0 || b > 0) {
       // With a view offset, aspect must match the VIRTUAL canvas or the
       // sub-view is squeezed.
-      this.camera.aspect = (w + r) / (h + b);
+      this._setAspect((w + r) / (h + b));
       this.camera.setViewOffset(w + r, h + b, r, b, w, h);
     } else {
       if (this.camera.view) this.camera.clearViewOffset();
-      this.camera.aspect = w / h;
+      this._setAspect(w / h);
     }
     // A bottom inset magnifies vertically by (h+b)/h; pull the camera back to
     // compensate, plus a touch extra so the design sits comfortably above the
@@ -253,7 +281,7 @@ export class DensityRenderer {
     if (hadOffset) {
       this.camera.clearViewOffset();
       const [vw, vh] = this._size();
-      this.camera.aspect = vw / vh;
+      this._setAspect(vw / vh);
       this.camera.updateProjectionMatrix();
     }
     this.group.updateMatrixWorld(true);
@@ -266,7 +294,14 @@ export class DensityRenderer {
   }
 
   _renderFrame(target = null) {
-    this.camera.position.z = (3.2 / this._zoom) * (this._insetZoomOut || 1);
+    if (this.camera.isOrthographicCamera) {
+      // Ortho scale comes from the frustum, not distance: map zoom to camera.zoom.
+      this.camera.zoom = this._zoom / (this._insetZoomOut || 1);
+      this.camera.updateProjectionMatrix();
+      this.camera.position.z = 3.2;
+    } else {
+      this.camera.position.z = (3.2 / this._zoom) * (this._insetZoomOut || 1);
+    }
     this.group.rotation.set(this._rotX, this._rotY, 0);
     if (this.fallback || !this.points) {
       this.renderer.setClearColor(new THREE.Color(...this._params.background), 1);
@@ -320,7 +355,7 @@ export class DensityRenderer {
     const savedInsetZoom = this._insetZoomOut;
     if (hadOffset) {
       this.camera.clearViewOffset();
-      this.camera.aspect = w / h;
+      this._setAspect(w / h);
       this.camera.updateProjectionMatrix();
       this._insetZoomOut = 1;
     }
