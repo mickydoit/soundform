@@ -51,21 +51,21 @@ export function generate(fp, params, onProgress) {
     const phase = fp.chroma[(c * 5) % 12] * Math.PI * 2 + rnd() * 0.5;
     comps.push({ l, m, phase, amp: 0.5 / (c + 1) });
   }
-  const nWaves = 3 + Math.round(Math.min(1, fp.volVar + fp.velocity) * 3); // 3..6
+  const nWaves = 4 + Math.round(Math.min(1, fp.volVar + fp.velocity) * 3); // 4..7
   const waves = [];
   for (let w = 0; w < nWaves; w++) {
-    waves.push({ f: (w + 1) * 0.5 + (rnd() - 0.5) * 0.4, phase: rnd() * Math.PI * 2, amp: 0.6 / (w + 2) });
+    waves.push({ f: (w + 1) * 0.5 + (rnd() - 0.5) * 0.8, phase: rnd() * Math.PI * 2, amp: 0.9 / (w + 2) });
   }
   const vnoise = makeValueNoise3(rnd);
-  const crumple = 0.05 + fp.spread * 0.25;
-  const A = 0.25 + Math.min(1, fp.volMean + fp.velocity * 0.5) * 0.3; // 0.25..0.55
+  const crumple = 0.1 + fp.spread * 0.35;
+  const A = 0.35 + Math.min(1, fp.volMean + fp.velocity * 0.5) * 0.4; // 0.35..0.75
 
   const disp = (theta, phi) => {
     let d = 0;
     for (const c of comps) d += c.amp * sphericalY(c.l, c.m, theta, phi, c.phase);
     for (const w of waves) d += w.amp * Math.sin(w.f * phi * 3 + w.f * theta * 2 + w.phase);
     const st = Math.sin(theta);
-    d += (vnoise.fractal(st * Math.cos(phi) * 2.5, Math.cos(theta) * 2.5, st * Math.sin(phi) * 2.5) - 0.5) * crumple * 6;
+    d += (vnoise.fractal(st * Math.cos(phi) * 3.2, Math.cos(theta) * 3.2, st * Math.sin(phi) * 3.2) - 0.5) * crumple * 6;
     return d * A;
   };
   const surf = (theta, phi) => {
@@ -138,7 +138,7 @@ export function generate(fp, params, onProgress) {
       const s2 = Math.sqrt(Math.max(0, 1 - u * u));
       const dir = [s2 * Math.cos(az), u, s2 * Math.sin(az)];
       const theta = Math.acos(u), phi = Math.atan2(dir[2], dir[0]);
-      const end = Math.min(2.2, Math.max(0.4, 1 + disp(theta, phi)) * (1.2 + rnd() * 0.4));
+      const end = Math.min(2.2, Math.max(0.4, 1 + disp(theta, phi)) * (1.25 + rnd() * 0.55));
       for (let k = 0; k < perRay; k++) {
         const t = 0.08 + (k / (perRay - 1)) * (end - 0.08);
         push(dir[0] * t, dir[1] * t, dir[2] * t, 0.15);
@@ -222,10 +222,10 @@ export function makeValueNoise3(rnd) {
 export function recipe(fp, params) {
   const N = Math.max(1000, Math.floor(params.density));
   const burstW = fp.velocity > 0.12 ? Math.min(0.20, fp.velocity * 0.22 + fp.attackSlope * 0.06) : 0;
-  const dashW  = fp.spread > 0.15 ? Math.min(0.25, (fp.spread - 0.15) * 0.45) : 0;
+  const dashW  = fp.spread > 0.1 ? Math.min(0.25, (fp.spread - 0.1) * 0.6) : 0;
   const rings = 24 + Math.round((params.complexity || 0.5) * 24); // 24..48
   const lons  = 16 + Math.round((params.complexity || 0.5) * 16); // 16..32
-  const nRays = burstW > 0 ? Math.min(120, Math.round(fp.velocity * 150)) : 0;
+  const nRays = burstW > 0 ? Math.min(160, Math.round(fp.velocity * 220)) : 0;
   const rayPts  = nRays > 0 ? Math.floor(N * burstW) : 0;
   const dashPts = dashW > 0 ? Math.floor(N * dashW) : 0;
   const nDashes = Math.floor(dashPts / 12); // ~12 points per stroke
