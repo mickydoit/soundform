@@ -58,19 +58,29 @@ export function generate(fp, params, onProgress) {
   const spray = fp.velocity * 0.015;
   const positions = new Float32Array(N * 3);
   const attr = new Float32Array(N);
-  // Hairline interference striations: a fine radial carrier gates survival,
-  // so crests break into CymaScope-style fringes. Harder falloff + lower
-  // floor give the bold black voids of the reference photographs.
-  const kFine = 40 + fp.pitchMedian * 30;
+  // CymaScope survival: crests break into hairline fringes (fine radial
+  // carrier), voids stay truly BLACK (no acceptance floor), and a sampled
+  // acceptance normalisation keeps point counts healthy without lifting the
+  // voids — pBoost scales all probabilities equally, preserving contrast.
+  const kFine = 140 + fp.pitchMedian * 80;
+  const fringeAt = (r) => Math.pow(Math.abs(Math.cos(kFine * r)), 4);
+  const pOf = (af0, r) => Math.pow(af0, 2.5) * (0.15 + 0.85 * fringeAt(r));
+  let pSum = 0;
+  for (let i = 0; i < 4000; i++) {
+    const r = Math.sqrt(rnd());
+    const af0 = Math.min(1, Math.abs(field(r, rnd() * Math.PI * 2)) / fMax);
+    pSum += pOf(af0, r);
+  }
+  const pBoost = Math.min(6, 0.3 / Math.max(1e-4, pSum / 4000));
   let count = 0, guard = 0;
   while (count < N && guard < N * 60) {
     guard++;
     const r = Math.sqrt(rnd());
     const th = rnd() * Math.PI * 2;
     const f = field(r, th) / fMax;
-    const fine = 0.55 + 0.45 * Math.pow(Math.cos(kFine * r), 2);
-    const af = Math.min(1, Math.abs(f)) * fine;
-    if (rnd() > Math.max(Math.pow(af, 2.2), 0.03)) continue;
+    const af0 = Math.min(1, Math.abs(f));
+    const af = Math.min(1, af0 * (0.55 + 0.45 * fringeAt(r)) + 0.1);
+    if (rnd() > Math.min(1, pOf(af0, r) * pBoost)) continue;
     positions[count * 3] = Math.cos(th) * r;
     positions[count * 3 + 1] = f * relief + (rnd() + rnd() - 1) * spray * af;
     positions[count * 3 + 2] = Math.sin(th) * r;
