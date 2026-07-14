@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { exportStrandSVG, framePlan } from '../js/exporter.js';
+import { exportStrandSVG, framePlan, loopsForDuration } from '../js/exporter.js';
 
 const IDENTITY = [1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1];
 
@@ -56,4 +56,21 @@ test('framePlan: whole loop, phase wraps to zero, never reaches 1', () => {
 
 test('framePlan: minimum two frames', () => {
   assert.ok(framePlan(0.01, 30).frames >= 2);
+});
+
+test('loopsForDuration: rounds to whole loops, min 1, 0 means one loop', () => {
+  assert.equal(loopsForDuration(0, 8), 1);
+  assert.equal(loopsForDuration(undefined, 8), 1);
+  assert.equal(loopsForDuration(5, 8), 1);
+  assert.equal(loopsForDuration(10, 4), 3);
+  assert.equal(loopsForDuration(30, 8), 4);
+  assert.equal(loopsForDuration(60, 8), 8);
+});
+
+test('exportStrandSVG: null background omits the rect, keeps paths', () => {
+  const { strands, positions } = fixture();
+  const svg = exportStrandSVG({ strands, positions, mvp: IDENTITY, width: 800, height: 600,
+    stops: [[0, '#000000'], [1, '#ffffff']], background: null, weight: 1 });
+  assert.ok(!svg.includes('id="background"'), 'background rect must be absent');
+  assert.ok(svg.includes('<path'), 'paths must remain');
 });

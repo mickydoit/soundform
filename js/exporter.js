@@ -94,7 +94,7 @@ export function exportStrandSVG({ strands, positions, mvp, width, height, stops,
   return [
     '<?xml version="1.0" encoding="UTF-8"?>',
     `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">`,
-    `  <rect id="background" width="${width}" height="${height}" fill="${background}"/>`,
+    ...(background != null ? [`  <rect id="background" width="${width}" height="${height}" fill="${background}"/>`] : []),
     '  <defs>',
     ...defs,
     '  </defs>',
@@ -106,6 +106,12 @@ export function exportStrandSVG({ strands, positions, mvp, width, height, stops,
 // ── MP4 export ─────────────────────────────────────────────────────
 // One seamless loop: frame i renders at phase i/frames, so frame `frames`
 // would equal frame 0 — the file loops perfectly by construction.
+// Whole seamless loops that best match a requested duration (0 → one loop).
+export function loopsForDuration(targetSec, periodSec) {
+  if (!targetSec) return 1;
+  return Math.max(1, Math.round(targetSec / Math.max(0.5, periodSec)));
+}
+
 export function framePlan(periodSeconds, fps = 30) {
   const frames = Math.max(2, Math.round(periodSeconds * fps));
   return { frames, fps, phase: (i) => (i % frames) / frames };
@@ -113,7 +119,7 @@ export function framePlan(periodSeconds, fps = 30) {
 
 // Deterministic offline encode: caller renders each frame (offscreen, fixed
 // phase), we push it through WebCodecs H.264 into an mp4-muxer container.
-export async function exportMP4({ renderFrame, fps, frames, onProgress, shouldCancel }) {
+export async function exportMP4({ renderFrame, fps, frames, onProgress, shouldCancel, bitrate }) {
   const { Muxer, ArrayBufferTarget } = window.Mp4Muxer;
   const first = renderFrame(0);
   const W = first.width & ~1, H = first.height & ~1; // H.264 needs even dims
@@ -131,7 +137,7 @@ export async function exportMP4({ renderFrame, fps, frames, onProgress, shouldCa
     output: (chunk, meta) => muxer.addVideoChunk(chunk, meta),
     error: (e) => { encError = e; },
   });
-  let cfg = { codec: 'avc1.640028', width: W, height: H, bitrate: 12_000_000, framerate: fps };
+  let cfg = { codec: 'avc1.640028', width: W, height: H, bitrate: bitrate || 12_000_000, framerate: fps };
   if (!(await VideoEncoder.isConfigSupported(cfg)).supported) cfg = { ...cfg, codec: 'avc1.42001f' };
   encoder.configure(cfg);
 
