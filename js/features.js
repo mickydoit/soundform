@@ -8,7 +8,7 @@ export function detectPitch(buf, sampleRate) {
   rms = Math.sqrt(rms / n);
   if (rms < 0.01) return { freq: 0, confidence: 0 };
 
-  const minLag = Math.floor(sampleRate / 1000);   // 1000 Hz ceiling
+  const minLag = Math.floor(sampleRate / 3500);   // 3500 Hz ceiling — covers the whistle register
   const maxLag = Math.min(Math.floor(sampleRate / 60), n - 1); // 60 Hz floor
 
   // Pass 1: compute plain normalized autocorrelation (no sample-count
@@ -37,7 +37,10 @@ export function detectPitch(buf, sampleRate) {
   // is a local maximum. Since subharmonic multiples of the true period all
   // score ~equally, taking the smallest such lag selects the fundamental
   // (smallest period = highest frequency = shortest lag).
-  const at = lag => (lag < minLag || lag > maxLag) ? -Infinity : corr[lag];
+  // Neighbours for the local-max test come from the extended range
+  // [loLag, hiLag]: treating out-of-range as -Infinity made the boundary lag
+  // a spurious "local max" for low tones (corr at tiny lags is near 1).
+  const at = lag => (lag < loLag || lag > hiLag) ? -Infinity : corr[lag];
   let bestLag = -1;
   for (let lag = minLag; lag <= maxLag; lag++) {
     if (corr[lag] >= globalMax - 0.02 && corr[lag] >= at(lag - 1) && corr[lag] >= at(lag + 1)) {
@@ -105,10 +108,10 @@ export function buildFingerprint(frames, durationSec) {
   const voiced = frames.filter(f => f.pitchConf > 0.5 && f.pitchHz > 0);
   const pitchConfidence = clamp01(voiced.length / Math.max(1, frames.length));
 
-  const logs = voiced.map(f => Math.log2(f.pitchHz / 55) / 5); // 55 Hz–1760 Hz → 0..1
+  const logs = voiced.map(f => Math.log2(f.pitchHz / 55) / 6); // 55 Hz–3520 Hz → 0..1
   const pitchMedian = voiced.length ? clamp01(median(logs)) : 0.5;
   const pitchRange = voiced.length
-    ? clamp01((Math.max(...logs) - Math.min(...logs)) * 5 / 3)
+    ? clamp01((Math.max(...logs) - Math.min(...logs)) * 6 / 3)
     : 0;
 
   // Contour: 8 samples resampled over voiced frames (0.5 when unvoiced)

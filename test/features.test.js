@@ -16,13 +16,32 @@ test('detectPitch finds 440 Hz', () => {
   assert.ok(confidence > 0.8);
 });
 
-test('detectPitch sweep: accurate across the 60-1000 Hz band', () => {
-  for (const f of [82, 110, 220, 440, 660, 950, 1000]) {
+test('detectPitch sweep: accurate across the 60-3200 Hz band (incl. whistle register)', () => {
+  for (const f of [82, 110, 220, 440, 660, 950, 1000, 1200, 1500, 2000, 2500, 3200]) {
     const { freq, confidence } = detectPitch(sine(f), SR);
     const tol = Math.max(2, 0.01 * f);
     assert.ok(Math.abs(freq - f) <= tol, `expected ~${f} Hz, got ${freq}`);
     assert.ok(confidence > 0.85, `low confidence ${confidence} at ${f} Hz`);
   }
+});
+
+test('buildFingerprint: whistles at different pitches → distinct pitchMedian, no clamp', () => {
+  const mkFrames = (freq) => {
+    const frames = [];
+    for (let k = 0; k < 60; k++) {
+      const r = detectPitch(sine(freq), SR);
+      const chroma = new Float32Array(12); chroma[3] = 1;
+      frames.push({ pitchHz: r.freq, pitchConf: r.confidence, chroma,
+                    flux: 0.02, rms: 0.08, centroid: 0.55, spread: 0.12 });
+    }
+    return frames;
+  };
+  const lo = buildFingerprint(mkFrames(1200), 2);
+  const hi = buildFingerprint(mkFrames(2800), 2);
+  assert.ok(lo.pitchMedian < 1 && hi.pitchMedian < 1, 'whistle register must not clamp to 1.0');
+  assert.ok(hi.pitchMedian - lo.pitchMedian > 0.1,
+    `whistles an octave+ apart must differ (lo=${lo.pitchMedian.toFixed(3)}, hi=${hi.pitchMedian.toFixed(3)})`);
+  assert.notEqual(lo.seed, hi.seed);
 });
 
 test('detectPitch reports low confidence on noise', () => {
