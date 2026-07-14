@@ -58,20 +58,28 @@ export function generate(fp, params, onProgress) {
   const spray = fp.velocity * 0.015;
   const positions = new Float32Array(N * 3);
   const attr = new Float32Array(N);
-  // CymaScope survival: crests break into hairline fringes (fine radial
-  // carrier), voids stay truly BLACK (no acceptance floor), and a sampled
-  // acceptance normalisation keeps point counts healthy without lifting the
-  // voids — pBoost scales all probabilities equally, preserving contrast.
+  // Style: how the field renders. 'auto' lets the sound pick — deterministic
+  // per seed — spreading designs across three physically real cymatics looks:
+  //  scope  — luminous fringed crests, true-black voids (CymaScope imaging)
+  //  sand   — grains gathered along the STILL nodal lines (Chladni plate)
+  //  relief — the classic smooth water-mandala rendering
+  const STYLES = ['scope', 'sand', 'relief'];
+  const style = STYLES.includes(params.cymStyle) ? params.cymStyle : STYLES[fp.seed % 3];
+
   const kFine = 140 + fp.pitchMedian * 80;
   const fringeAt = (r) => Math.pow(Math.abs(Math.cos(kFine * r)), 4);
-  const pOf = (af0, r) => Math.pow(af0, 2.5) * (0.15 + 0.85 * fringeAt(r));
+  const pOf = style === 'scope' ? (af0, r) => Math.pow(af0, 2.5) * (0.15 + 0.85 * fringeAt(r))
+            : style === 'sand'  ? (af0)    => Math.exp(-Math.pow(af0 / 0.12, 2))
+            :                     (af0)    => Math.max(Math.pow(af0, 1.4), 0.08);
+  // Sampled acceptance normalisation: keeps density healthy for the sparse
+  // styles without lifting their voids (uniform scaling preserves contrast).
   let pSum = 0;
   for (let i = 0; i < 4000; i++) {
     const r = Math.sqrt(rnd());
     const af0 = Math.min(1, Math.abs(field(r, rnd() * Math.PI * 2)) / fMax);
     pSum += pOf(af0, r);
   }
-  const pBoost = Math.min(6, 0.3 / Math.max(1e-4, pSum / 4000));
+  const pBoost = style === 'relief' ? 1 : Math.min(6, 0.3 / Math.max(1e-4, pSum / 4000));
   let count = 0, guard = 0;
   while (count < N && guard < N * 60) {
     guard++;
@@ -79,12 +87,23 @@ export function generate(fp, params, onProgress) {
     const th = rnd() * Math.PI * 2;
     const f = field(r, th) / fMax;
     const af0 = Math.min(1, Math.abs(f));
-    const af = Math.min(1, af0 * (0.55 + 0.45 * fringeAt(r)) + 0.1);
     if (rnd() > Math.min(1, pOf(af0, r) * pBoost)) continue;
-    positions[count * 3] = Math.cos(th) * r;
-    positions[count * 3 + 1] = f * relief + (rnd() + rnd() - 1) * spray * af;
-    positions[count * 3 + 2] = Math.sin(th) * r;
-    attr[count] = af;
+    let x = Math.cos(th) * r, z = Math.sin(th) * r, y, a;
+    if (style === 'sand') {
+      x += (rnd() - 0.5) * 0.008; z += (rnd() - 0.5) * 0.008; // grain scatter
+      y = (rnd() + rnd() - 1) * 0.012;                        // nodes are still: flat plate
+      a = 0.7 + (rnd() - 0.5) * 0.3;                          // sandy white grain
+    } else if (style === 'scope') {
+      y = f * relief + (rnd() + rnd() - 1) * spray * af0;
+      a = Math.min(1, af0 * (0.55 + 0.45 * fringeAt(r)) + 0.1);
+    } else {
+      y = f * relief + (rnd() + rnd() - 1) * spray * af0;
+      a = af0;
+    }
+    positions[count * 3] = x;
+    positions[count * 3 + 1] = y;
+    positions[count * 3 + 2] = z;
+    attr[count] = a;
     count++;
     if (onProgress && count % 250000 === 0) onProgress(count / N);
   }

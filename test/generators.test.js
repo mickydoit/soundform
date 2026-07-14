@@ -266,3 +266,28 @@ test('cymatics: atonal input (low consonance) → different mode character', () 
   for (let i = 0; i < 300; i++) diff += Math.abs(atonal.positions[i] - tonal.positions[i]);
   assert.ok(diff > 1, `consonance must change mode character (diff=${diff})`);
 });
+
+test('cymatics styles: scope/sand/relief are completely different, all valid', () => {
+  const fp = testFingerprint();
+  const outs = {};
+  for (const style of ['scope', 'sand', 'relief']) {
+    const out = generate(fp, { ...baseParams, mode: 'cymatics', cymStyle: style });
+    assert.ok(out.positions.length / 3 >= baseParams.density * 0.5, `${style}: too few points`);
+    for (let i = 0; i < 300; i++) assert.ok(Number.isFinite(out.positions[i]), `${style}: non-finite`);
+    for (const v of out.attr.slice(0, 300)) assert.ok(v >= 0 && v <= 1, `${style}: attr out of range`);
+    outs[style] = out;
+  }
+  const pairs = [['scope', 'sand'], ['sand', 'relief'], ['scope', 'relief']];
+  for (const [a, b] of pairs) {
+    let diff = 0;
+    for (let i = 0; i < 300; i++) diff += Math.abs(outs[a].positions[i] - outs[b].positions[i]);
+    assert.ok(diff > 1, `${a} vs ${b} must differ (diff=${diff})`);
+  }
+});
+
+test('cymatics style auto: deterministic seed-based pick', () => {
+  const fp = testFingerprint();
+  const a = generate(fp, { ...baseParams, mode: 'cymatics', cymStyle: 'auto' });
+  const b = generate(fp, { ...baseParams, mode: 'cymatics', cymStyle: 'auto' });
+  assert.deepEqual([...a.positions.slice(0, 300)], [...b.positions.slice(0, 300)]);
+});

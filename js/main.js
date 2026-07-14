@@ -29,7 +29,7 @@ const params = {
   exposure: 30, contrast: 1.0, autoRotate: 0.3,
   motionOn: false, motionPeriod: 8,
   exportRes: 'std', videoDur: 0, transparentBg: false,
-  flatView: true,
+  flatView: true, cymStyle: 'auto',
 };
 
 let statusEl, vuFill, vuWrap, clearBtn, submitBtn;
@@ -89,7 +89,8 @@ function regenerate() {
   setStatus('Generating…');
   const payload = { fingerprint: { ...fingerprint, chroma: fingerprint.chroma, contour: fingerprint.contour },
                     params: { mode: params.mode, density: params.density, complexity: params.complexity,
-                              symmetry: params.symmetry, twist: params.twist, strandCount: 96 } };
+                              symmetry: params.symmetry, twist: params.twist, strandCount: 96,
+                              cymStyle: params.cymStyle } };
   const onResult = (out) => {
     design = out;
     renderer.setMotion(motionParams(fingerprint.seed));
@@ -267,6 +268,10 @@ function bindControls() {
   document.getElementById('chk-flat').addEventListener('change', (e) => {
     params.flatView = e.target.checked;
     renderer.setProjection(params.flatView ? 'flat' : 'depth');
+  });
+  document.getElementById('sel-cym-style').addEventListener('change', (e) => {
+    params.cymStyle = e.target.value;
+    if (appState === 'captured' && params.mode === 'cymatics') regenerate();
   });
   sliders.forEach(([id, key, parse, regen]) => {
     const el = document.getElementById(id);
