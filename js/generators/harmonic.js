@@ -52,13 +52,28 @@ export function generate(fp, params, onProgress) {
     comps.push({ l, m, phase, amp: 0.5 / (c + 1) });
   }
   const nWaves = 4 + Math.round(Math.min(1, fp.volVar + fp.velocity) * 3); // 4..7
+  const wild = 0.5 + (1 - (fp.consonance ?? 0.5)); // 0.5 (consonant) .. 1.5 (atonal/speech)
   const waves = [];
   for (let w = 0; w < nWaves; w++) {
-    waves.push({ f: (w + 1) * 0.5 + (rnd() - 0.5) * 0.8, phase: rnd() * Math.PI * 2, amp: 0.9 / (w + 2) });
+    waves.push({
+      f: (w + 1) * 0.5 + (rnd() - 0.5) * 0.8 * wild,
+      phase: rnd() * Math.PI * 2,
+      amp: (0.9 / (w + 2)) * (1 + (rnd() - 0.5) * 0.6 * wild),
+    });
   }
   const vnoise = makeValueNoise3(rnd);
   const crumple = 0.1 + fp.spread * 0.35;
   const A = 0.35 + Math.min(1, fp.volMean + fp.velocity * 0.5) * 0.4; // 0.35..0.75
+
+  // Prosody envelope: the utterance's pitch contour shapes the form pole-to-
+  // pole, so spoken phrases with different intonation read differently.
+  const contour = fp.contour && fp.contour.length >= 8 ? fp.contour : null;
+  const prosody = (theta) => {
+    if (!contour) return 1;
+    const x = Math.min(6.999, Math.max(0, (theta / Math.PI) * 7));
+    const i = Math.floor(x), f = x - i;
+    return 0.7 + (contour[i] + (contour[i + 1] - contour[i]) * f) * 0.6;
+  };
 
   const disp = (theta, phi) => {
     let d = 0;
@@ -66,7 +81,7 @@ export function generate(fp, params, onProgress) {
     for (const w of waves) d += w.amp * Math.sin(w.f * phi * 3 + w.f * theta * 2 + w.phase);
     const st = Math.sin(theta);
     d += (vnoise.fractal(st * Math.cos(phi) * 3.2, Math.cos(theta) * 3.2, st * Math.sin(phi) * 3.2) - 0.5) * crumple * 6;
-    return d * A;
+    return d * A * prosody(theta);
   };
   const surf = (theta, phi) => {
     const r = Math.max(0.05, 1 + disp(theta, phi));

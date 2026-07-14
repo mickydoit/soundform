@@ -248,3 +248,21 @@ test('timbre removed, oscillo registered', () => {
   assert.ok(!registeredModes().includes('timbre'));
   assert.ok(registeredModes().includes('oscillo'));
 });
+
+test('harmonic: speech prosody (contour) shapes the form', () => {
+  const params = { ...baseParams, mode: 'harmonic' };
+  const speech = generate(testFingerprint({ contour: Float32Array.from([0.1, 0.9, 0.2, 0.8, 0.1, 0.9, 0.2, 0.8]) }), params);
+  const flat = generate(testFingerprint({ contour: new Float32Array(8).fill(0.45) }), params);
+  let diff = 0;
+  for (let i = 0; i < 300; i++) diff += Math.abs(speech.positions[i] - flat.positions[i]);
+  assert.ok(diff > 1, `contour must shape the form (diff=${diff})`);
+});
+
+test('harmonic: atonal input (low consonance) → different wave character', () => {
+  const params = { ...baseParams, mode: 'harmonic' };
+  const atonal = generate(testFingerprint({ consonance: 0.05 }), params);
+  const tonal = generate(testFingerprint({ consonance: 0.95 }), params);
+  let diff = 0;
+  for (let i = 0; i < 300; i++) diff += Math.abs(atonal.positions[i] - tonal.positions[i]);
+  assert.ok(diff > 1, `consonance must change wave character (diff=${diff})`);
+});
