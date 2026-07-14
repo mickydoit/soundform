@@ -253,3 +253,37 @@ test('harmonic generate: organic — no rotational symmetry', () => {
   }
   assert.ok(asym / (n / 2) > 0.02, `form too symmetric (asym=${(asym / (n / 2)).toFixed(4)})`);
 });
+
+function testTrajectory({ rms = 0.2, pitch = 0.5, n = 120 } = {}) {
+  const t = new Float32Array(n * 4);
+  for (let i = 0; i < n; i++) { t[i * 4] = 0.4; t[i * 4 + 1] = rms; t[i * 4 + 2] = 0.15; t[i * 4 + 3] = pitch; }
+  return t;
+}
+
+test('oscillo generator: bounded, dense, deterministic, strands', () => {
+  checkGenerator('oscillo', testFingerprint({ trajectory: testTrajectory(), trajectoryChannels: 4 }));
+});
+
+test('oscillo: loud vs quiet trajectory → different geometry', () => {
+  const params = { ...baseParams, mode: 'oscillo' };
+  const loud = generate(testFingerprint({ trajectory: testTrajectory({ rms: 0.35 }), trajectoryChannels: 4 }), params);
+  const quiet = generate(testFingerprint({ trajectory: testTrajectory({ rms: 0.02 }), trajectoryChannels: 4 }), params);
+  let diff = 0;
+  for (let i = 0; i < 300; i++) diff += Math.abs(loud.positions[i] - quiet.positions[i]);
+  assert.ok(diff > 0.5, `loudness must shape the rings (diff=${diff})`);
+});
+
+test('oscillo: pitch changes ring wave count → different geometry', () => {
+  const params = { ...baseParams, mode: 'oscillo' };
+  const lo = generate(testFingerprint({ trajectory: testTrajectory({ pitch: 0.1 }), trajectoryChannels: 4 }), params);
+  const hi = generate(testFingerprint({ trajectory: testTrajectory({ pitch: 0.9 }), trajectoryChannels: 4 }), params);
+  let diff = 0;
+  for (let i = 0; i < 300; i++) diff += Math.abs(lo.positions[i] - hi.positions[i]);
+  assert.ok(diff > 0.5, 'pitch must change the wave pattern');
+});
+
+test('oscillo: missing trajectory → finite smooth circles, no crash', () => {
+  const out = generate(testFingerprint(), { ...baseParams, mode: 'oscillo' });
+  for (let i = 0; i < 300; i++) assert.ok(Number.isFinite(out.positions[i]));
+  assert.ok(out.strands.length >= 24);
+});

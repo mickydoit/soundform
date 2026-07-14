@@ -3,8 +3,9 @@ import * as radial from './radial.js';
 import * as cymatics from './cymatics.js';
 import * as timbre from './timbre.js';
 import * as harmonic from './harmonic.js';
+import * as oscillo from './oscillo.js';
 
-const REGISTRY = { attractor: attractor.generate, radial: radial.generate, cymatics: cymatics.generate, timbre: timbre.generate, harmonic: harmonic.generate };
+const REGISTRY = { attractor: attractor.generate, radial: radial.generate, cymatics: cymatics.generate, timbre: timbre.generate, harmonic: harmonic.generate, oscillo: oscillo.generate };
 
 export function generate(fp, params, onProgress) {
   const gen = REGISTRY[params.mode];
