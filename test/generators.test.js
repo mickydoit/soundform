@@ -228,3 +228,28 @@ test('harmonic recipe: mesh always keeps >=55% of the point budget', () => {
   assert.ok(worst.rings >= 24 && worst.rings <= 48);
   assert.ok(worst.lons >= 16 && worst.lons <= 32);
 });
+
+test('harmonic generate: percussive fp emits ray strands beyond the mesh', () => {
+  const params = { ...baseParams, mode: 'harmonic' };
+  const perc = generate(testFingerprint({ velocity: 0.7, attackSlope: 0.8 }), params);
+  const hum = generate(testFingerprint({ velocity: 0.05, attackSlope: 0.1 }), params);
+  const plan = recipe(testFingerprint({ velocity: 0.7, attackSlope: 0.8 }), params);
+  assert.equal(perc.strands.length - hum.strands.length >= plan.nRays - 5, true,
+    `ray strands missing: perc=${perc.strands.length} hum=${hum.strands.length} rays=${plan.nRays}`);
+});
+
+test('harmonic generate: organic — no rotational symmetry', () => {
+  // The old vase was near-symmetric under phi -> phi + pi. Interference + noise
+  // must break that: sample the displacement via strand radii at opposite phi.
+  const out = generate(testFingerprint(), { ...baseParams, mode: 'harmonic' });
+  const s = out.strands[Math.floor(out.strands.length / 4)]; // a mid-latitude ring
+  const n = s.length / 3;
+  let asym = 0;
+  for (let i = 0; i < n / 2; i++) {
+    const j = i + Math.floor(n / 2);
+    const ri = Math.hypot(s[i * 3], s[i * 3 + 1], s[i * 3 + 2]);
+    const rj = Math.hypot(s[j * 3], s[j * 3 + 1], s[j * 3 + 2]);
+    asym += Math.abs(ri - rj);
+  }
+  assert.ok(asym / (n / 2) > 0.02, `form too symmetric (asym=${(asym / (n / 2)).toFixed(4)})`);
+});
