@@ -20,11 +20,12 @@ void main() {
 const SPLAT_FRAG = `
 precision highp float;
 varying float vAttr;
+uniform float uWeight;
 void main() {
   vec2 uv = gl_PointCoord - 0.5;
   float r2 = dot(uv, uv);
   if (r2 > 0.25) discard;
-  float w = exp(-r2 * 10.0);
+  float w = exp(-r2 * 10.0) * uWeight;
   gl_FragColor = vec4(w, w * vAttr, 0.0, 1.0);
 }`;
 
@@ -68,6 +69,28 @@ export class DensityRenderer {
     return [this.container.clientWidth || 800, this.container.clientHeight || 600];
   }
 
+  // Per-cloud splat material. Copies current uniform values (size, motion,
+  // phase) so a crossfade's incoming cloud moves in step with the outgoing.
+  _makeSplatMat() {
+    const src = this.splatMat ? this.splatMat.uniforms : null;
+    return new THREE.ShaderMaterial({
+      vertexShader: SPLAT_VERT, fragmentShader: SPLAT_FRAG,
+      uniforms: {
+        uSize: { value: src ? src.uSize.value : 3.0 },
+        uTime: { value: src ? src.uTime.value : 0 },
+        uFreq: { value: src ? src.uFreq.value : 5 },
+        uAmp:  { value: src ? src.uAmp.value : 0 },
+        uDir:  { value: src ? src.uDir.value.clone() : new THREE.Vector3(0, 1, 0) },
+        uWeight: { value: 1 },
+      },
+      blending: THREE.AdditiveBlending, depthTest: false, depthWrite: false, transparent: true,
+    });
+  }
+
+  _splatMats() {
+    return this._fading ? [this.splatMat, this._fading.mat] : [this.splatMat];
+  }
+
   _initGL() {
     const [w, h] = this._size();
     this.renderer = new THREE.WebGLRenderer({ antialias: false });
@@ -102,15 +125,7 @@ export class DensityRenderer {
       }
     }
 
-    this.splatMat = new THREE.ShaderMaterial({
-      vertexShader: SPLAT_VERT, fragmentShader: SPLAT_FRAG,
-      uniforms: {
-        uSize: { value: 3.0 },
-        uTime: { value: 0 }, uFreq: { value: 5 }, uAmp: { value: 0 },
-        uDir: { value: new THREE.Vector3(0, 1, 0) },
-      },
-      blending: THREE.AdditiveBlending, depthTest: false, depthWrite: false, transparent: true,
-    });
+    this.splatMat = this._makeSplatMat();
 
     this.lutTex = new THREE.DataTexture(new Uint8Array(256 * 4).fill(255), 256, 1, THREE.RGBAFormat);
     this.lutTex.needsUpdate = true;
@@ -209,6 +224,7 @@ export class DensityRenderer {
   }
 
   setCloud(positions, attr) {
+    this._disposeFading();
     if (this.points) { this.group.remove(this.points); this.points.geometry.dispose(); }
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
@@ -226,6 +242,7 @@ export class DensityRenderer {
     const [w, h] = this._size();
     this.toneMat.uniforms.uPeak.value = Math.max(8, (n / (w * h)) * 550);
     this._dirty = true;
+    this.splatMat.uniforms.uWeight.value = 1;
   }
 
   setPalette(lutBytes) {
@@ -240,12 +257,13 @@ export class DensityRenderer {
     this.toneMat.uniforms.uContrast.value = this._params.contrast;
     const bg = this._params.background;
     this.toneMat.uniforms.uBackground.value.set(bg[0], bg[1], bg[2]);
-    this.splatMat.uniforms.uSize.value = 3.0 * this._params.grain;
+    for (const m of this._splatMats()) m.uniforms.uSize.value = 3.0 * this._params.grain;
     this.group.scale.setScalar(this._params.scale);
     this._dirty = true;
   }
 
   clear() {
+    this._disposeFading();
     if (this.points) { this.group.remove(this.points); this.points.geometry.dispose(); this.points = null; }
     this._dirty = true;
   }
@@ -253,13 +271,17 @@ export class DensityRenderer {
   // ── Motion (seamless loop) — displacement mirrors js/motion.js ──
   setMotion(mp) {
     this._motion = mp;
-    this.splatMat.uniforms.uDir.value.set(mp.dir[0], mp.dir[1], mp.dir[2]);
-    this.splatMat.uniforms.uFreq.value = mp.freq;
-    if (this.splatMat.uniforms.uAmp.value > 0) this.splatMat.uniforms.uAmp.value = mp.amp;
+    for (const m of this._splatMats()) {
+      m.uniforms.uDir.value.set(mp.dir[0], mp.dir[1], mp.dir[2]);
+      m.uniforms.uFreq.value = mp.freq;
+      if (m.uniforms.uAmp.value > 0) m.uniforms.uAmp.value = mp.amp;
+    }
     this._dirty = true;
   }
   activateMotion() {
-    if (this._motion) this.splatMat.uniforms.uAmp.value = this._motion.amp;
+    if (this._motion) {
+      for (const m of this._splatMats()) m.uniforms.uAmp.value = this._motion.amp;
+    }
     this._dirty = true;
   }
   setPlaying(on) {
@@ -268,9 +290,53 @@ export class DensityRenderer {
     this._dirty = true;
   }
   setLoopPeriod(sec) { this._loopPeriod = Math.max(1, sec); }
-  setLoopPhase(t) { this.splatMat.uniforms.uTime.value = t - Math.floor(t); this._dirty = true; }
+  setLoopPhase(t) {
+    const v = t - Math.floor(t);
+    for (const m of this._splatMats()) m.uniforms.uTime.value = v;
+    this._dirty = true;
+  }
   getLoopPhase() { return this.splatMat.uniforms.uTime.value; }
   getActiveMotion() { return this.splatMat.uniforms.uAmp.value > 0 ? this._motion : null; }
+
+  // Live drive: direct wave amplitude/frequency, bypassing motionParams.
+  setWave(amp, freq) {
+    for (const m of this._splatMats()) {
+      m.uniforms.uAmp.value = amp;
+      m.uniforms.uFreq.value = freq;
+    }
+    this._dirty = true;
+  }
+
+  // Dissolve the current cloud into a new one over dur seconds.
+  crossfadeTo(positions, attr, dur = 1.0) {
+    if (!this.points || this.fallback) { this.setCloud(positions, attr); return; }
+    this._disposeFading();                       // a still-running fade completes instantly
+    this._fading = { points: this.points, mat: this.points.material, t: 0, dur };
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    geo.setAttribute('attrv', new THREE.BufferAttribute(attr, 1));
+    const mat = this._makeSplatMat();
+    mat.uniforms.uWeight.value = 0;
+    this.splatMat = mat;
+    this.points = new THREE.Points(geo, mat);
+    this.points.frustumCulled = false;
+    this.group.add(this.points);
+    this._peakFrom = this.toneMat.uniforms.uPeak.value;
+    const n = positions.length / 3;
+    const [w, h] = this._size();
+    this._peakTo = Math.max(8, (n / (w * h)) * 550);
+    this._dirty = true;
+  }
+
+  _disposeFading() {
+    if (!this._fading) return;
+    this.group.remove(this._fading.points);
+    this._fading.points.geometry.dispose();
+    this._fading.mat.dispose();
+    this._fading = null;
+    if (this.points) this.points.material.uniforms.uWeight.value = 1;
+    if (this._peakTo !== undefined) this.toneMat.uniforms.uPeak.value = this._peakTo;
+  }
 
   requestRender() { this._dirty = true; }
 
@@ -334,6 +400,20 @@ export class DensityRenderer {
     } else {
       this._lastTick = 0;
     }
+    if (this._fading) {
+      const nowF = performance.now() / 1000;
+      const dtF = Math.min(0.1, this._fadeTick ? nowF - this._fadeTick : 0.016);
+      this._fadeTick = nowF;
+      this._fading.t += dtF;
+      const k = Math.min(1, this._fading.t / this._fading.dur);
+      this._fading.mat.uniforms.uWeight.value = 1 - k;
+      this.splatMat.uniforms.uWeight.value = k;
+      this.toneMat.uniforms.uPeak.value = this._peakFrom + (this._peakTo - this._peakFrom) * k;
+      this._dirty = true;
+      if (k >= 1) this._disposeFading();
+    } else {
+      this._fadeTick = 0;
+    }
     if (!this._dirty) return; // render-on-demand: idle = zero draw calls
     this._dirty = false;
     this._renderFrame();
@@ -382,10 +462,10 @@ export class DensityRenderer {
       const savedPeak = this.toneMat.uniforms.uPeak.value;
       this.toneMat.uniforms.uPeak.value = savedPeak / (effScale * effScale);
       const savedSize = this.splatMat.uniforms.uSize.value;
-      this.splatMat.uniforms.uSize.value = savedSize * effScale;
+      for (const m of this._splatMats()) m.uniforms.uSize.value = savedSize * effScale;
       this._renderFrame(bigOut);
       this.toneMat.uniforms.uPeak.value = savedPeak;
-      this.splatMat.uniforms.uSize.value = savedSize;
+      for (const m of this._splatMats()) m.uniforms.uSize.value = savedSize;
     } else {
       this._renderFrame(bigOut);
     }
