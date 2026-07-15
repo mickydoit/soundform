@@ -495,3 +495,7 @@ input[type="color"]::-moz-color-swatch { border: none; border-radius: 50%; }
   transition: background .2s ease, color .2s ease;
 }
 #btn-motion:hover { color: var(--text-1); background: rgba(255, 255, 255, 0.1); }
+
+/* ── Live mode ── */
+.live-suspended { opacity: 0.35; pointer-events: none; }
+.live-suspended select, .live-suspended input { pointer-events: none; }

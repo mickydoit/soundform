@@ -4,12 +4,13 @@ import { DensityRenderer } from './density.js?v=31';
 import { PALETTES, buildLUT, customRamp, hexToRgb } from './palettes.js?v=31';
 import { exportCanvas, exportStrandSVG, framePlan, exportMP4, loopsForDuration } from './exporter.js?v=31';
 import { motionParams, displacePoint } from './motion.js?v=31';
+import { LiveConductor } from './live.js?v=31';
 
 const audio = new AudioEngine();
 let renderer = null;
 let worker = null;
 
-let appState = 'blank'; // 'blank' | 'recording' | 'recorded' | 'captured'
+let appState = 'blank'; // 'blank' | 'recording' | 'recorded' | 'captured' | 'live'
 let frames = [];
 let recordStart = 0;
 let fingerprint = null;
@@ -17,6 +18,10 @@ let design = null; // { positions, attr, strands }
 let mp4Busy = false, mp4Cancel = false;
 
 const isMobile = /Mobi|Android|iPhone|iPad/.test(navigator.userAgent);
+
+let conductor = null;
+let liveWorker = null;
+const LIVE_DENSITY = isMobile ? 120000 : 250000;
 
 const params = {
   mode: 'attractor',
@@ -120,6 +125,58 @@ async function fallbackGenerate(onResult) {
   onResult(generate(fingerprint, { ...params, strandCount: 96 }));
 }
 
+// Promise wrapper around a dedicated live worker (regenerate() owns the other
+// one and rebinds onmessage per call — sharing would clobber handlers).
+function workerGenerate(fingerprint, params) {
+  return new Promise((resolve) => {
+    try {
+      if (!liveWorker) liveWorker = new Worker('js/worker.js?v=31', { type: 'module' });
+      liveWorker.onmessage = (e) => {
+        if (e.data.done) resolve(e.data);
+        else if (e.data.error) resolve(null);
+      };
+      liveWorker.onerror = () => { liveWorker = null; resolve(null); };
+      liveWorker.postMessage({ fingerprint: { ...fingerprint, chroma: fingerprint.chroma, contour: fingerprint.contour }, params });
+    } catch { resolve(null); }
+  });
+}
+
+async function liveGenerate(fp, p) {
+  const out = await workerGenerate(fp, p);
+  if (out) return out;
+  const { generate } = await import('./generators/index.js?v=31');
+  return generate(fp, p);
+}
+
+function makeConductor() {
+  return new LiveConductor({
+    audio, renderer,
+    generate: liveGenerate,
+    applyStops: (stops) => renderer.setPalette(buildLUT(stops)),
+    getParams: () => ({ mode: params.mode, complexity: params.complexity,
+                        symmetry: params.symmetry, twist: params.twist,
+                        cymStyle: params.cymStyle, liveDensity: LIVE_DENSITY,
+                        exposure: params.exposure, scale: params.scale, grain: params.grain }),
+    onVu: (rms) => { if (vuFill) vuFill.style.height = Math.min(100, rms * 300) + '%'; },
+  });
+}
+
+// Palette + exposure are sound-driven while live; suspend their controls.
+function setLiveSuspended(on) {
+  for (const id of ['sel-palette', 'manual-colors', 'sl-exposure']) {
+    document.getElementById(id).classList.toggle('live-suspended', on);
+  }
+}
+
+function stopLive() {
+  if (!conductor) return;
+  conductor.stop();
+  conductor = null;
+  audio.stop();
+  setLiveSuspended(false);
+  renderer.setWave(0, 5);
+}
+
 // ── Params → renderer ─────────────────────────────────────────────
 function activeStops() {
   return params.palette === 'custom'
@@ -155,6 +212,15 @@ function bindAudio() {
     } catch (e) { setStatus(`Microphone error: ${e.message}`); }
   });
 
+  const btnLive = document.getElementById('btn-live');
+  btnLive.addEventListener('click', async () => {
+    try {
+      setStatus('Requesting microphone…');
+      await audio.startMic();
+      enterLive();
+    } catch (e) { setStatus(`Microphone error: ${e.message}`); }
+  });
+
   fileInput.addEventListener('change', async () => {
     const file = fileInput.files[0];
     if (!file) return;
@@ -176,10 +242,36 @@ function bindAudio() {
     btnStop.classList.add('hidden');
     submitBtn.classList.remove('hidden');
     vuWrap.classList.add('hidden');
+    document.getElementById('btn-live').classList.remove('hidden');
     setStatus('Done — tap the check to create, or the mic to re-record');
   });
 
   submitBtn.addEventListener('click', () => {
+    if (appState === 'live') {
+      const out = conductor ? conductor.freeze() : null;
+      // freeze() returns null (before stopping itself) when there is too
+      // little sound — the conductor is still running, so just report and stay live.
+      if (!out) { setStatus('Not enough sound yet — keep going'); return; }
+      stopLive();
+      fingerprint = out.fingerprint;
+      params.palette = 'custom';
+      params.background     = out.stops[0][1];
+      params.colorPrimary   = out.stops[1][1];
+      params.colorSecondary = out.stops[2][1];
+      params.colorAccent    = out.stops[3][1];
+      document.getElementById('sel-palette').value = 'custom';
+      document.getElementById('col-background').value = params.background;
+      document.getElementById('col-primary').value = params.colorPrimary;
+      document.getElementById('col-secondary').value = params.colorSecondary;
+      document.getElementById('col-accent').value = params.colorAccent;
+      document.getElementById('manual-colors').classList.remove('faded');
+      appState = 'captured';
+      submitBtn.classList.add('hidden');
+      vuWrap.classList.add('hidden');
+      applyColorParams();     // restores user exposure/scale/grain too (applyRenderParams)
+      regenerate();
+      return;
+    }
     if (frames.length === 0) { setStatus('No audio captured — try recording again'); return; }
     fingerprint = buildFingerprint(frames, (performance.now() - recordStart) / 1000);
     fingerprint.trajectory = buildTrajectory(frames);
@@ -193,6 +285,8 @@ function bindAudio() {
   });
 
   clearBtn.addEventListener('click', () => {
+    stopLive();
+    document.getElementById('btn-live').classList.remove('hidden');
     fingerprint = null; design = null; frames = [];
     appState = 'blank';
     audio.stop();
@@ -207,12 +301,28 @@ function bindAudio() {
   });
 }
 
+function enterLive() {
+  appState = 'live';
+  frames = []; fingerprint = null; design = null;
+  renderer.clear();
+  ['btn-mic', 'lbl-file', 'btn-stop', 'btn-live'].forEach(id =>
+    document.getElementById(id).classList.add('hidden'));
+  submitBtn.classList.remove('hidden');
+  clearBtn.classList.remove('hidden');
+  vuWrap.classList.remove('hidden');
+  setLiveSuspended(true);
+  conductor = makeConductor();
+  conductor.start();
+  setStatus('Live — listening');
+}
+
 function enterRecording(btnStop) {
   appState = 'recording';
   frames = [];
   recordStart = performance.now();
   document.getElementById('btn-mic').classList.add('hidden');
   document.getElementById('lbl-file').classList.add('hidden');
+  document.getElementById('btn-live').classList.add('hidden');
   btnStop.classList.remove('hidden');
   submitBtn.classList.add('hidden');
   clearBtn.classList.add('hidden');
@@ -228,6 +338,7 @@ function bindControls() {
       params.mode = btn.dataset.mode;
       document.querySelectorAll('.btn-mode').forEach(b => b.classList.toggle('active', b === btn));
       if (appState === 'captured') regenerate();
+      else if (appState === 'live' && conductor) conductor.forceMorph();
     });
   });
 
@@ -275,7 +386,10 @@ function bindControls() {
       if (!regen) applyRenderParams();
     });
     // regen sliders rebuild geometry only on release (change), not on drag
-    if (regen) el.addEventListener('change', () => { if (appState === 'captured') regenerate(); });
+    if (regen) el.addEventListener('change', () => {
+      if (appState === 'captured') regenerate();
+      else if (appState === 'live' && conductor) conductor.forceMorph();
+    });
   });
 
   document.getElementById('sel-palette').addEventListener('change', (e) => {
