@@ -163,7 +163,7 @@ function makeConductor() {
 
 // Palette + exposure are sound-driven while live; suspend their controls.
 function setLiveSuspended(on) {
-  for (const id of ['sel-palette', 'manual-colors', 'sl-exposure', 'col-background']) {
+  for (const id of ['sel-palette', 'manual-colors', 'sl-exposure', 'col-background', 'btn-motion', 'sl-motion-period']) {
     document.getElementById(id).classList.toggle('live-suspended', on);
   }
 }
@@ -175,6 +175,8 @@ function stopLive() {
   audio.stop();
   setLiveSuspended(false);
   renderer.setWave(0, 5);
+  renderer.setLoopPeriod(params.motionPeriod);
+  renderer.setPlaying(params.motionOn);
   if (liveWorker) { liveWorker.terminate(); liveWorker = null; }
 }
 
