@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { detectPitch, chromaFromFFT, spectralFlux, buildFingerprint } from '../js/features.js';
+import { detectPitch, chromaFromFFT, spectralFlux, buildFingerprint, bestTriad, buildTrajectory } from '../js/features.js';
 
 const SR = 44100;
 
@@ -85,4 +85,33 @@ test('buildFingerprint: C major triad → consonant, major, 3 notes, determinist
   const fp2 = buildFingerprint(fakeFrames(), 2.0);
   assert.equal(fp.seed, fp2.seed);
   assert.deepEqual([...fp.contour], [...fp2.contour]);
+});
+
+test('bestTriad finds C major from a C-E-G chroma', () => {
+  const chroma = new Float32Array(12);
+  chroma[0] = 1; chroma[4] = 0.8; chroma[7] = 0.9; // C E G
+  const t = bestTriad(chroma);
+  assert.equal(t.root, 0);
+  assert.equal(t.major, true);
+  assert.ok(t.score > 0.5);
+});
+
+test('bestTriad finds A minor from an A-C-E chroma', () => {
+  const chroma = new Float32Array(12);
+  chroma[9] = 1; chroma[0] = 0.85; chroma[4] = 0.9; // A C E
+  const t = bestTriad(chroma);
+  assert.equal(t.root, 9);
+  assert.equal(t.major, false);
+});
+
+test('buildTrajectory packs 4 channels and zeroes unvoiced pitch', () => {
+  const frames = [
+    { centroid: 0.3, rms: 0.2, spread: 0.5, pitchHz: 220, pitchConf: 0.9 },
+    { centroid: 0.6, rms: 0.1, spread: 0.2, pitchHz: 220, pitchConf: 0.1 },
+  ];
+  const t = buildTrajectory(frames);
+  assert.equal(t.length, 8);
+  assert.ok(Math.abs(t[0] - 0.3) < 1e-6);
+  assert.ok(Math.abs(t[3] - Math.log2(220 / 55) / 6) < 1e-6);
+  assert.equal(t[7], 0); // low confidence → 0
 });

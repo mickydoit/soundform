@@ -1,5 +1,5 @@
 import { AudioEngine } from './audio.js?v=31';
-import { buildFingerprint } from './features.js?v=31';
+import { buildFingerprint, buildTrajectory } from './features.js?v=31';
 import { DensityRenderer } from './density.js?v=31';
 import { PALETTES, buildLUT, customRamp, hexToRgb } from './palettes.js?v=31';
 import { exportCanvas, exportStrandSVG, framePlan, exportMP4, loopsForDuration } from './exporter.js?v=31';
@@ -182,15 +182,8 @@ function bindAudio() {
   submitBtn.addEventListener('click', () => {
     if (frames.length === 0) { setStatus('No audio captured — try recording again'); return; }
     fingerprint = buildFingerprint(frames, (performance.now() - recordStart) / 1000);
-    fingerprint.trajectory = new Float32Array(frames.length * 4);
+    fingerprint.trajectory = buildTrajectory(frames);
     fingerprint.trajectoryChannels = 4;
-    frames.forEach((f, i) => {
-      fingerprint.trajectory[i * 4] = f.centroid;
-      fingerprint.trajectory[i * 4 + 1] = f.rms;
-      fingerprint.trajectory[i * 4 + 2] = f.spread;
-      fingerprint.trajectory[i * 4 + 3] = f.pitchHz > 0 && f.pitchConf > 0.5
-        ? Math.min(1, Math.max(0, Math.log2(f.pitchHz / 55) / 6)) : 0;
-    });
     appState = 'captured';
     submitBtn.classList.add('hidden');
     document.getElementById('btn-mic').classList.add('hidden');

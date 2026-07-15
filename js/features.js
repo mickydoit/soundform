@@ -101,6 +101,20 @@ const TRIADS = (() => {
   return t;
 })();
 
+// Best major/minor triad template match for a 12-bin chroma.
+export function bestTriad(chroma) {
+  let best = { root: 0, major: true, score: -1 };
+  for (const t of TRIADS) {
+    let inSum = 0, outSum = 0;
+    for (let i = 0; i < 12; i++) {
+      if (t.pcs.includes(i)) inSum += chroma[i]; else outSum += chroma[i];
+    }
+    const score = inSum / 3 - (outSum / 9) * 0.5;
+    if (score > best.score) best = { root: t.root, major: t.major, score };
+  }
+  return best;
+}
+
 const clamp01 = v => Math.max(0, Math.min(1, v));
 const median = a => { const s = [...a].sort((x, y) => x - y); return s[s.length >> 1] ?? 0; };
 
@@ -139,15 +153,7 @@ export function buildFingerprint(frames, durationSec) {
   const noteCount = noteSet.length;
 
   // Harmony: best triad-template match
-  let best = { score: -1, major: true };
-  for (const t of TRIADS) {
-    let inSum = 0, outSum = 0;
-    for (let i = 0; i < 12; i++) {
-      if (t.pcs.includes(i)) inSum += chroma[i]; else outSum += chroma[i];
-    }
-    const score = inSum / 3 - (outSum / 9) * 0.5;
-    if (score > best.score) best = { score, major: t.major };
-  }
+  const best = bestTriad(chroma);
   const consonance = clamp01(best.score * 1.4);
   const majorLeaning = best.major;
 
@@ -183,4 +189,17 @@ export function buildFingerprint(frames, durationSec) {
   return { pitchMedian, pitchRange, contour, pitchConfidence, chroma, noteSet, noteCount,
            consonance, majorLeaning, velocity, volMean, volVar, attackSlope,
            centroid, spread, seed };
+}
+
+// 4-channel per-frame trajectory: centroid, rms, spread, pitchNorm (0 when unvoiced).
+export function buildTrajectory(frames) {
+  const t = new Float32Array(frames.length * 4);
+  frames.forEach((f, i) => {
+    t[i * 4]     = f.centroid;
+    t[i * 4 + 1] = f.rms;
+    t[i * 4 + 2] = f.spread;
+    t[i * 4 + 3] = f.pitchHz > 0 && f.pitchConf > 0.5
+      ? Math.min(1, Math.max(0, Math.log2(f.pitchHz / 55) / 6)) : 0;
+  });
+  return t;
 }
