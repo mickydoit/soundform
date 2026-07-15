@@ -52,3 +52,92 @@ test('fingerprintDelta crosses the morph threshold on a real change', () => {
   const near = { ...a, pitchMedian: 0.32 };
   assert.ok(fingerprintDelta(a, near) < MORPH_THRESHOLD);
 });
+
+import { LiveConductor, LIVE_MIN_FRAMES } from '../js/live.js';
+
+const mkFrame = (o = {}) => ({
+  pitchHz: 220, pitchConf: 0.9, rms: 0.15, flux: 0.002,
+  centroid: 0.4, spread: 0.3,
+  chroma: (() => { const c = new Float32Array(12); c[0] = 1; c[4] = 0.8; c[7] = 0.9; return c; })(),
+  ...o,
+});
+
+function harness({ frame = mkFrame(), genDelay = 0 } = {}) {
+  const log = { xfades: 0, waves: [], stops: [] };
+  const conductor = new LiveConductor({
+    audio: { getMusicalFrame: () => frame.current ?? frame },
+    renderer: {
+      setWave: (a, f) => log.waves.push([a, f]),
+      setParams: () => {}, setPlaying: () => {}, setLoopPeriod: () => {},
+      crossfadeTo: () => { log.xfades++; },
+    },
+    generate: async () => ({ positions: new Float32Array(3), attr: new Float32Array(1), strands: [] }),
+    applyStops: (s) => log.stops.push(s),
+    getParams: () => ({ mode: 'attractor', complexity: 0.5, symmetry: 1, twist: 0,
+                        cymStyle: 'auto', liveDensity: 1000, exposure: 30, scale: 1, grain: 1 }),
+  });
+  return { conductor, log };
+}
+
+const settle = () => new Promise(r => setImmediate(r));
+
+test('conductor morphs once on first sound, then respects min interval', async () => {
+  const { conductor, log } = harness();
+  for (let i = 0; i < 70; i++) conductor.tick(i / 30);   // ~2.3s of steady C major
+  await settle();
+  assert.equal(log.xfades, 1);                            // first morph only —
+  await settle();                                         // same sound → no second
+  assert.equal(log.xfades, 1);
+  assert.ok(log.waves.length > 0);
+  assert.ok(log.stops.length > 0);
+});
+
+test('conductor morphs again when the sound really changes', async () => {
+  const frame = { current: mkFrame() };
+  const { conductor, log } = harness({ frame });
+  for (let i = 0; i < 70; i++) conductor.tick(i / 30);
+  await settle();
+  assert.equal(log.xfades, 1);
+  const c2 = new Float32Array(12); c2[2] = 1; c2[6] = 0.85; c2[9] = 0.9; // D major, up an octave
+  frame.current = mkFrame({ pitchHz: 880, chroma: c2 });
+  for (let i = 70; i < 220; i++) conductor.tick(i / 30);  // 5 more seconds
+  await settle();
+  assert.ok(log.xfades >= 2);
+});
+
+test('silence: no morphs fire, wave amp decays toward 0', async () => {
+  const { conductor, log } = harness({ frame: mkFrame({ rms: 0.001, pitchConf: 0, flux: 0 }) });
+  for (let i = 0; i < 150; i++) conductor.tick(i / 30);
+  await settle();
+  assert.equal(log.xfades, 0);
+  const [lastAmp] = log.waves[log.waves.length - 1];
+  assert.ok(lastAmp < 0.005);
+});
+
+test('forceMorph regenerates without threshold', async () => {
+  const { conductor, log } = harness();
+  for (let i = 0; i < 70; i++) conductor.tick(i / 30);
+  await settle();
+  conductor.forceMorph();
+  for (let i = 70; i < 160; i++) conductor.tick(i / 30);
+  await settle();
+  assert.equal(log.xfades, 2);
+});
+
+test('freeze returns a full fingerprint with 4-channel trajectory and hex stops', () => {
+  const { conductor } = harness();
+  for (let i = 0; i < 70; i++) conductor.tick(i / 30);
+  const out = conductor.freeze();
+  assert.ok(out);
+  assert.equal(out.fingerprint.trajectoryChannels, 4);
+  assert.ok(out.fingerprint.trajectory.length >= LIVE_MIN_FRAMES * 4);
+  assert.ok(typeof out.fingerprint.seed === 'number');
+  assert.equal(out.stops.length, 4);
+  assert.match(out.stops[1][1], /^#[0-9a-f]{6}$/);
+});
+
+test('freeze with too little sound returns null', () => {
+  const { conductor } = harness();
+  for (let i = 0; i < 5; i++) conductor.tick(i / 30);
+  assert.equal(conductor.freeze(), null);
+});
