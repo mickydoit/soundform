@@ -127,9 +127,8 @@ Replaces the grow/draw-in entry points with a paint buffer API:
 
 ## Error handling
 
-- Worker failure on reveal generation → retry once, else status message and
-  paint mode falls back to the orbit brush only for attractor-routed sounds /
-  stays idle otherwise with a status hint.
+- Worker failure on a reveal generation → retry once; on repeated failure the
+  brush stays resting with a status message (next sound window retries).
 - Stale generations discarded by id (mode/growth switch, Clear).
 - Stagnation guard as above.
 
