@@ -132,3 +132,21 @@ export function resamplePolyline(arr, m) {
   }
   return out;
 }
+
+// Live form-family selector: buckets the sound's CHARACTER into one of three
+// archetypes (0 tonal-smooth, 1 bright-piercing, 2 rough-noisy) and derives a
+// continuous wildness range-widener. Pure function of the fingerprint and
+// deliberately seed-free: a steady sound keeps its archetype across morphs;
+// speech vs whistle vs music land in different ones.
+export function formArchetype(fp) {
+  const cons = fp.consonance ?? 0.5;
+  const tonal  = cons * (1 - fp.spread) * (1 - fp.centroid * 0.5);
+  const bright = fp.centroid * (0.4 + 0.6 * fp.pitchMedian);
+  const rough  = (1 - cons) * (0.5 + fp.spread) + fp.velocity * 0.3;
+  const scores = [tonal, bright, rough];
+  let index = 0;
+  for (let i = 1; i < 3; i++) if (scores[i] > scores[index]) index = i;
+  const wildness = Math.max(0, Math.min(1,
+    0.45 * (1 - cons) + 0.3 * (fp.volVar ?? 0) + 0.25 * (fp.attackSlope ?? 0)));
+  return { index, wildness };
+}

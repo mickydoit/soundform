@@ -291,3 +291,36 @@ test('cymatics style auto: deterministic seed-based pick', () => {
   const b = generate(fp, { ...baseParams, mode: 'cymatics', cymStyle: 'auto' });
   assert.deepEqual([...a.positions.slice(0, 300)], [...b.positions.slice(0, 300)]);
 });
+
+// ── Live form families ────────────────────────────────────────────
+import { formArchetype } from '../js/generators/common.js';
+
+// Character fixtures: a sung major chord, a whistle, and plain speech.
+const FP_MUSIC = () => testFingerprint(); // defaults: consonant, mid centroid
+const FP_WHISTLE = () => testFingerprint({
+  pitchMedian: 0.85, centroid: 0.75, spread: 0.1, consonance: 0.8,
+  velocity: 0.2, noteSet: [9], noteCount: 1,
+});
+const FP_SPEECH = () => testFingerprint({
+  pitchMedian: 0.3, centroid: 0.5, spread: 0.45, consonance: 0.3,
+  velocity: 0.5, pitchConfidence: 0.3,
+});
+
+test('formArchetype: deterministic and seed-independent', () => {
+  const a = formArchetype(FP_MUSIC());
+  const b = formArchetype(testFingerprint({ seed: 42 })); // only seed differs
+  assert.deepEqual(a, b);
+});
+
+test('formArchetype: music, whistle, speech land in distinct archetypes', () => {
+  assert.equal(formArchetype(FP_MUSIC()).index, 0);   // tonal-smooth
+  assert.equal(formArchetype(FP_WHISTLE()).index, 1); // bright-piercing
+  assert.equal(formArchetype(FP_SPEECH()).index, 2);  // rough-noisy
+});
+
+test('formArchetype: wildness bounded and rises with dissonance', () => {
+  const calm = formArchetype(FP_MUSIC()).wildness;
+  const wild = formArchetype(FP_SPEECH()).wildness;
+  assert.ok(calm >= 0 && calm <= 1 && wild >= 0 && wild <= 1);
+  assert.ok(wild > calm);
+});
