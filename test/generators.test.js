@@ -348,3 +348,17 @@ test('radial: live archetypes produce measurably different geometry', () => {
   assert.ok(shapeDistance('radial', FP_MUSIC(), FP_WHISTLE()) > 0.15);
   checkGenerator('radial', testFingerprint()); // sanity: no flag still valid
 });
+
+test('harmonic recipe: live archetypes reshape the treatment mix', () => {
+  const params = { ...baseParams, mode: 'harmonic', density: 20000, liveVariance: true };
+  const spiky = recipe(FP_WHISTLE(), params);
+  assert.ok(spiky.nRays >= 80, 'bright archetype forces burst rays');
+  const net = recipe(FP_SPEECH(), params);
+  const base = recipe(FP_SPEECH(), { ...params, liveVariance: false });
+  assert.ok(net.rings < base.rings && net.lons < base.lons, 'rough archetype sparsifies the net');
+});
+
+test('harmonic: live archetypes produce measurably different geometry', () => {
+  assert.ok(shapeDistance('harmonic', FP_MUSIC(), FP_WHISTLE()) > 0.12);
+  checkGenerator('harmonic', testFingerprint());
+});

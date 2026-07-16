@@ -1,4 +1,4 @@
-import { mulberry32, finalize, resamplePolyline } from './common.js';
+import { mulberry32, finalize, resamplePolyline, formArchetype } from './common.js';
 
 // Analogue wireframe sphere deformed by real spherical harmonics: fine
 // lat/long rings whose radius is displaced by a stack of Y_l^m terms, so the
@@ -40,6 +40,7 @@ export function sphericalY(l, m, theta, phi, phase = 0) {
 export function generate(fp, params, onProgress) {
   const rnd = mulberry32(fp.seed);
   const plan = recipe(fp, params);
+  const arch = params.liveVariance ? formArchetype(fp) : null;
 
   // ── Displacement field: Y_l^m backbone + interference waves + crumple ──
   const lMain = 3 + Math.round(fp.pitchMedian * 6); // pitch → dominant degree
@@ -51,14 +52,26 @@ export function generate(fp, params, onProgress) {
     const phase = fp.chroma[(c * 5) % 12] * Math.PI * 2 + rnd() * 0.5;
     comps.push({ l, m, phase, amp: 0.5 / (c + 1) });
   }
+  let waveAmpMul = 1;
+  let crumple = 0.1 + fp.spread * 0.35;
+  let A = 0.35 + Math.min(1, fp.volMean + fp.velocity * 0.5) * 0.4; // 0.35..0.75
+  if (arch) {
+    if (arch.index === 0) {        // smooth shell: near-pure Y_l^m body
+      crumple *= 0.2; waveAmpMul = 0.5; A = Math.min(A, 0.45);
+    } else if (arch.index === 1) { // spiky crumple: pushed far beyond caps
+      crumple = (0.5 + fp.spread * 0.5) * (1.6 + 1.4 * arch.wildness);
+      A = 0.75 + 0.2 * arch.wildness;
+    } else {                       // open petal net: interference dominates
+      crumple *= 0.6; waveAmpMul = 2.2 + 1.5 * arch.wildness;
+    }
+  }
   const nWaves = 4 + Math.round(Math.min(1, fp.volVar + fp.velocity) * 3); // 4..7
   const waves = [];
   for (let w = 0; w < nWaves; w++) {
-    waves.push({ f: (w + 1) * 0.5 + (rnd() - 0.5) * 0.8, phase: rnd() * Math.PI * 2, amp: 0.9 / (w + 2) });
+    waves.push({ f: (w + 1) * 0.5 + (rnd() - 0.5) * 0.8, phase: rnd() * Math.PI * 2,
+                 amp: (0.9 / (w + 2)) * waveAmpMul });
   }
   const vnoise = makeValueNoise3(rnd);
-  const crumple = 0.1 + fp.spread * 0.35;
-  const A = 0.35 + Math.min(1, fp.volMean + fp.velocity * 0.5) * 0.4; // 0.35..0.75
 
   const disp = (theta, phi) => {
     let d = 0;
@@ -223,11 +236,23 @@ export function recipe(fp, params) {
   const N = Math.max(1000, Math.floor(params.density));
   const burstW = fp.velocity > 0.12 ? Math.min(0.20, fp.velocity * 0.22 + fp.attackSlope * 0.06) : 0;
   const dashW  = fp.spread > 0.1 ? Math.min(0.25, (fp.spread - 0.1) * 0.6) : 0;
-  const rings = 24 + Math.round((params.complexity || 0.5) * 24); // 24..48
-  const lons  = 16 + Math.round((params.complexity || 0.5) * 16); // 16..32
-  const nRays = burstW > 0 ? Math.min(160, Math.round(fp.velocity * 220)) : 0;
-  const rayPts  = nRays > 0 ? Math.floor(N * burstW) : 0;
+  let rings = 24 + Math.round((params.complexity || 0.5) * 24); // 24..48
+  let lons  = 16 + Math.round((params.complexity || 0.5) * 16); // 16..32
+  let nRays = burstW > 0 ? Math.min(160, Math.round(fp.velocity * 220)) : 0;
+  let rayPts  = nRays > 0 ? Math.floor(N * burstW) : 0;
   const dashPts = dashW > 0 ? Math.floor(N * dashW) : 0;
+  if (params.liveVariance) {
+    const arch = formArchetype(fp);
+    if (arch.index === 1) {
+      // Spiky crumple: burst rays always on, and plentiful.
+      nRays = Math.max(nRays, 80 + Math.round(80 * arch.wildness));
+      rayPts = Math.max(rayPts, Math.floor(N * 0.18));
+    } else if (arch.index === 2) {
+      // Open petal net: sparse coarse mesh so interference holes show.
+      rings = Math.max(8, Math.round(rings * 0.45));
+      lons = Math.max(6, Math.round(lons * 0.45));
+    }
+  }
   const nDashes = Math.floor(dashPts / 12); // ~12 points per stroke
   const meshPts = N - rayPts - dashPts;
   return { rings, lons, nRays, nDashes, meshPts, rayPts, dashPts };
