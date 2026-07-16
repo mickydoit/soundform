@@ -1,4 +1,4 @@
-import { mulberry32, finalize, resamplePolyline } from './common.js';
+import { mulberry32, finalize, resamplePolyline, formArchetype } from './common.js';
 
 // Water-mandala cymatics: standing waves on a circular membrane.
 // Each detected note = one (m petals, ring wavenumber) mode; modes superpose
@@ -7,6 +7,7 @@ import { mulberry32, finalize, resamplePolyline } from './common.js';
 // cosine — a visually faithful stand-in for Bessel J_m modes.
 export function generate(fp, params, onProgress) {
   const rnd = mulberry32(fp.seed);
+  const arch = params.liveVariance ? formArchetype(fp) : null;
   const k = Math.max(1, Math.round(params.symmetry || 1));
   const N = Math.max(1000, Math.floor(params.density / k));
 
@@ -14,7 +15,7 @@ export function generate(fp, params, onProgress) {
   const detune = (1 - fp.consonance) * 0.9;
   // Atonal/spoken input (low consonance) loosens the modes: wavenumber and
   // amplitude gain seeded variance, so speech reads wilder than sung tones.
-  const wild = 0.5 + (1 - (fp.consonance ?? 0.5));
+  const wild = (0.5 + (1 - (fp.consonance ?? 0.5))) * (arch ? 1 + arch.wildness : 1);
   const modes = fp.noteSet.map((pc, idx) => ({
     m: 2 + (pc % 7) + Math.round(params.complexity * 3),
     kr: kBase * (0.55 + 0.45 * ((idx + 1) / fp.noteCount)) * (1 + (rnd() - 0.5) * 0.15 * wild),
@@ -64,7 +65,10 @@ export function generate(fp, params, onProgress) {
   //  sand   — grains gathered along the STILL nodal lines (Chladni plate)
   //  relief — the classic smooth water-mandala rendering
   const STYLES = ['scope', 'sand', 'relief'];
-  const style = STYLES.includes(params.cymStyle) ? params.cymStyle : STYLES[fp.seed % 3];
+  const ARCH_STYLE = ['relief', 'scope', 'sand']; // tonal, bright, rough
+  const style = STYLES.includes(params.cymStyle) ? params.cymStyle
+              : arch ? ARCH_STYLE[arch.index]
+              : STYLES[fp.seed % 3];
 
   const kFine = 140 + fp.pitchMedian * 80;
   const fringeAt = (r) => Math.pow(Math.abs(Math.cos(kFine * r)), 4);

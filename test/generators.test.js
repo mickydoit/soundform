@@ -369,3 +369,21 @@ test('oscillo: live archetypes produce measurably different geometry', () => {
   assert.ok(shapeDistance('oscillo', FP_MUSIC(), FP_SPEECH()) > 0.12);
   checkGenerator('oscillo', testFingerprint());
 });
+
+test('cymatics: live auto style follows the sound character', () => {
+  const params = { ...baseParams, mode: 'cymatics', density: 15000,
+                   liveVariance: true, cymStyle: 'auto' };
+  const ySpan = (out) => {
+    let lo = Infinity, hi = -Infinity;
+    for (let i = 1; i < out.positions.length; i += 3) {
+      lo = Math.min(lo, out.positions[i]); hi = Math.max(hi, out.positions[i]);
+    }
+    return hi - lo;
+  };
+  const sandy = generate(FP_SPEECH(), params);   // rough → sand: flat plate
+  const relief = generate(FP_MUSIC(), params);   // tonal → relief: raised
+  assert.ok(ySpan(sandy) < ySpan(relief) * 0.6, 'sand is flat, relief is raised');
+  // Explicit style still wins over the archetype.
+  const forced = generate(FP_SPEECH(), { ...params, cymStyle: 'relief' });
+  assert.ok(ySpan(forced) > ySpan(sandy), 'explicit cymStyle overrides archetype');
+});
