@@ -265,3 +265,119 @@ export function generate(fp, params, onProgress) {
   if (arch) return generate(fp, { ...params, liveVariance: false }, onProgress);
   throw new Error('attractor: all retries degenerate');
 }
+
+// Paint mode's streaming brush: the attractor orbit IS the brush stroke.
+// Points are emitted through a normalization transform calibrated up front
+// (the batch path normalizes after the fact; a stream can't), coefficients
+// glide toward each steer() target so the ribbons bend rather than jump,
+// and a stagnation guard jolts the orbit out of collapsed loops.
+export function createOrbitBrush(fp, params = {}) {
+  const name = pickSystem(fp);
+  const sys = SYSTEMS[name];
+  const rnd = mulberry32(fp.seed);
+  const complexity = params.complexity ?? 0.5;
+
+  const coeffsFor = (f) => {
+    const c = sys.coeffs(f, rnd);
+    const axes = liveAxes(f);
+    if (sys.flow) {
+      const excursion = 0.5 + complexity;
+      for (const key of Object.keys(c)) {
+        if (typeof c[key] === 'number' && key !== 'e') {
+          c[key] = c[key] * lerp(0.92, 1.08, (excursion * 7) % 1);
+        }
+      }
+    } else {
+      const arch = formArchetype(f);
+      c.a = lerp(1.2, 4.2, 0.5 * f.contour[1] + 0.5 * axes[0]);
+      c.b = lerp(1.2, 4.2, 0.5 * f.contour[3] + 0.5 * axes[1]);
+      c.c = lerp(1.2, 4.2, 0.5 * f.contour[5] + 0.5 * axes[3]);
+      c.g = axes[0] * Math.PI * 2;
+      c.h = axes[1] * Math.PI * 2;
+      c.i = axes[3] * Math.PI * 2;
+      const hi = 0.9 + 0.4 * arch.wildness;
+      c.d = lerp(0.4, hi, axes[0]);
+      c.e = lerp(0.4, hi, axes[1]);
+      c.f = lerp(0.4, hi, axes[3]);
+    }
+    return c;
+  };
+
+  let c = coeffsFor(fp);
+  let cTarget = { ...c };
+  let p = [rnd() - 0.5, rnd() - 0.5, rnd() - 0.5];
+  const stepOnce = () => {
+    const d = sys.step(p, c);
+    p = sys.flow ? [p[0] + d[0] * sys.dt, p[1] + d[1] * sys.dt, p[2] + d[2] * sys.dt] : d;
+  };
+
+  // Calibrate: 3000 warmup steps onto the attractor, then 2000 probe steps
+  // to fix centre + r95 scale for the whole painting.
+  for (let i = 0; i < 3000; i++) stepOnce();
+  const probe = [];
+  for (let i = 0; i < 2000; i++) { stepOnce(); probe.push(p[0], p[1], p[2]); }
+  let cx = 0, cy = 0, cz = 0;
+  for (let i = 0; i < 2000; i++) { cx += probe[i * 3] / 2000; cy += probe[i * 3 + 1] / 2000; cz += probe[i * 3 + 2] / 2000; }
+  const radii = [];
+  for (let i = 0; i < 2000; i++) {
+    radii.push(Math.hypot(probe[i * 3] - cx, probe[i * 3 + 1] - cy, probe[i * 3 + 2] - cz));
+  }
+  radii.sort((a, b) => a - b);
+  const r95 = radii[Math.floor(radii.length * 0.95)] || 1;
+  const scale = r95 > 1e-6 ? 1 / r95 : 1;
+
+  let speedMax = 1e-6;
+  let batchN = 0, bx = 0, by = 0, bz = 0, bxx = 0, byy = 0, bzz = 0; // stagnation stats
+  const jolt = (n) => {
+    p = [rnd() - 0.5, rnd() - 0.5, rnd() - 0.5];
+    const nudged = { ...fp, pitchMedian: (fp.pitchMedian + 0.618 * n) % 1,
+                     contour: fp.contour.map(v => (v + 0.618 * n) % 1) };
+    cTarget = coeffsFor(nudged);
+    for (let i = 0; i < 500; i++) stepOnce(); // settle back onto an attractor
+  };
+  let joltCount = 0;
+
+  return {
+    system: name,
+
+    steer(newFp) { cTarget = coeffsFor(newFp); },
+
+    next(k, dt) {
+      // coefficient glide toward the steer target (τ = 3s)
+      const g = 1 - Math.exp(-(dt || 1 / 60) / 3);
+      for (const key of Object.keys(c)) {
+        if (typeof c[key] === 'number' && typeof cTarget[key] === 'number') {
+          c[key] += (cTarget[key] - c[key]) * g;
+        }
+      }
+      const positions = new Float32Array(k * 3);
+      const attr = new Float32Array(k);
+      for (let i = 0; i < k; i++) {
+        const prev = p;
+        stepOnce();
+        const sp = Math.hypot(p[0] - prev[0], p[1] - prev[1], p[2] - prev[2]);
+        if (sp > speedMax) speedMax = sp;
+        let x = (p[0] - cx) * scale, y = (p[1] - cy) * scale, z = (p[2] - cz) * scale;
+        if (Math.abs(x) > 2.2 || Math.abs(y) > 2.2 || Math.abs(z) > 2.2) {
+          // steering pushed the orbit out of the calibrated frame — re-enter
+          x = Math.max(-2.2, Math.min(2.2, x));
+          y = Math.max(-2.2, Math.min(2.2, y));
+          z = Math.max(-2.2, Math.min(2.2, z));
+          p = [rnd() - 0.5, rnd() - 0.5, rnd() - 0.5];
+        }
+        positions[i * 3] = x; positions[i * 3 + 1] = y; positions[i * 3 + 2] = z;
+        attr[i] = Math.max(0, Math.min(1, 1 - sp / speedMax));
+        // stagnation stats over 2000-point batches
+        bx += x; by += y; bz += z; bxx += x * x; byy += y * y; bzz += z * z; batchN++;
+        if (batchN >= 2000) {
+          const vx = bxx / batchN - (bx / batchN) ** 2;
+          const vy = byy / batchN - (by / batchN) ** 2;
+          const vz = bzz / batchN - (bz / batchN) ** 2;
+          if (Math.sqrt(Math.max(0, vx + vy + vz)) < 0.05) jolt(++joltCount);
+          batchN = 0; bx = by = bz = bxx = byy = bzz = 0;
+        }
+      }
+      return { positions, attr };
+    },
+  };
+}
