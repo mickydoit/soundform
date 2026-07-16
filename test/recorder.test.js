@@ -24,7 +24,8 @@ test('FrameGate: ~30 of 60 rAF ticks pass, timestamps monotonic 33.3ms apart', (
   }
   assert.ok(accepted.length >= 29 && accepted.length <= 31, `got ${accepted.length}`);
   for (let i = 1; i < accepted.length; i++) {
-    assert.equal(accepted[i] - accepted[i - 1], Math.round(1e6 / 30));
+    const gap = accepted[i] - accepted[i - 1];
+    assert.ok(Math.abs(gap - 1e6 / 30) <= 1, `gap ${gap} not ~33333µs`); // integer rounding alternates 33333/33334
   }
 });
 
