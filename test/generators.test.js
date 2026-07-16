@@ -328,7 +328,7 @@ test('formArchetype: wildness bounded and rises with dissonance', () => {
 // Shared helper: mean L1 distance between two clouds' radial histograms —
 // a cheap "different shape" metric for the live-variance tests.
 export function shapeDistance(mode, fpA, fpB) {
-  const params = { ...baseParams, mode, density: 15000, liveVariance: true };
+  const params = { ...baseParams, mode, density: 30000, liveVariance: true };
   const a = generate(fpA, params), b = generate(fpB, params);
   const hist = (out) => {
     const h = new Float64Array(16); const n = out.positions.length / 3;
@@ -390,8 +390,8 @@ test('cymatics: live auto style follows the sound character', () => {
 
 test('attractor: liveVariance output valid and differs from non-live', () => {
   const fp = FP_SPEECH(); // high wildness
-  const live = generate(fp, { ...baseParams, density: 15000, liveVariance: true });
-  const base = generate(fp, { ...baseParams, density: 15000 });
+  const live = generate(fp, { ...baseParams, density: 30000, liveVariance: true });
+  const base = generate(fp, { ...baseParams, density: 30000 });
   let maxAbs = 0, s = 0;
   const n = live.positions.length / 3;
   for (let i = 0; i < live.positions.length; i++) maxAbs = Math.max(maxAbs, Math.abs(live.positions[i]));
@@ -406,27 +406,47 @@ test('attractor: liveVariance output valid and differs from non-live', () => {
 // Live attractor variety: speech-like and percussive windows must not
 // collapse into the same sinemap web (root cause of "two designs swapping").
 test('attractor live: percussive vs speech windows differ in shape', () => {
+  // Same system (sinemap), so radial histograms are blind to the difference —
+  // compare 3D cell occupancy instead. Steady-sound pairs overlap ~0.95;
+  // genuinely different characters must fall well below that.
+  const cellsOf = (fp) => {
+    const out = generate(fp, { ...baseParams, density: 30000, liveVariance: true });
+    const s = new Set(); const n = out.positions.length / 3;
+    for (let i = 0; i < n; i++) {
+      const gx = Math.min(19, Math.max(0, Math.floor((out.positions[i * 3] + 1.3) / 2.6 * 20)));
+      const gy = Math.min(19, Math.max(0, Math.floor((out.positions[i * 3 + 1] + 1.3) / 2.6 * 20)));
+      const gz = Math.min(19, Math.max(0, Math.floor((out.positions[i * 3 + 2] + 1.3) / 2.6 * 20)));
+      s.add((gx * 20 + gy) * 20 + gz);
+    }
+    return s;
+  };
   const talk = testFingerprint({ pitchConfidence: 0.3, consonance: 0.3, pitchMedian: 0.3,
                                  centroid: 0.5, spread: 0.45, velocity: 0.5, seed: 111 });
   const claps = testFingerprint({ pitchConfidence: 0.2, consonance: 0.4, velocity: 0.85,
                                   centroid: 0.6, spread: 0.5, seed: 666 });
-  assert.ok(shapeDistance('attractor', talk, claps) > 0.15);
+  const a = cellsOf(talk), b = cellsOf(claps);
+  let inter = 0; for (const v of a) if (b.has(v)) inter++;
+  const jaccard = inter / (a.size + b.size - inter);
+  assert.ok(jaccard < 0.85, `talk and claps webs overlap too much (jaccard ${jaccard.toFixed(3)})`);
 });
 
-test('attractor live: varied windows visit at least 3 systems worth of shapes', () => {
-  // Distinct shapes are a proxy for distinct systems/coefficient regions:
-  // every pair of these five character-varied windows must differ visibly.
+test('attractor live: five distinct sound characters produce five distinct shapes', () => {
+  // Five genuinely different characters (speech, high whistle, low minor hum,
+  // percussion, bright complex chord). Similar sounds looking similar is the
+  // POINT of the smooth mapping — so every fixture here differs in character,
+  // and every pair must differ visibly.
   const fps = [
     testFingerprint({ pitchConfidence: 0.3, pitchMedian: 0.3, centroid: 0.5, spread: 0.45, consonance: 0.3, velocity: 0.5, seed: 1 }),
-    testFingerprint({ pitchConfidence: 0.9, pitchMedian: 0.7, centroid: 0.3, spread: 0.2, consonance: 0.8, velocity: 0.25, seed: 2 }),
+    testFingerprint({ pitchConfidence: 0.9, pitchMedian: 0.85, centroid: 0.7, spread: 0.1, consonance: 0.8, velocity: 0.2, noteSet: [9], noteCount: 1, seed: 2 }),
     testFingerprint({ pitchConfidence: 0.85, pitchMedian: 0.2, centroid: 0.2, spread: 0.15, consonance: 0.7, majorLeaning: false, velocity: 0.2, seed: 3 }),
-    testFingerprint({ pitchConfidence: 0.2, velocity: 0.85, centroid: 0.65, spread: 0.5, consonance: 0.4, seed: 4 }),
-    testFingerprint({ pitchConfidence: 0.9, pitchMedian: 0.55, centroid: 0.45, spread: 0.3, consonance: 0.85, velocity: 0.45, seed: 5 }),
+    testFingerprint({ pitchConfidence: 0.2, velocity: 0.85, centroid: 0.65, spread: 0.5, consonance: 0.4, volMean: 0.75, seed: 4 }),
+    testFingerprint({ pitchConfidence: 0.9, pitchMedian: 0.55, centroid: 0.45, spread: 0.3, consonance: 0.85, velocity: 0.45,
+                      noteSet: [0, 2, 4, 7, 9], noteCount: 5, seed: 5 }),
   ];
   for (let i = 0; i < fps.length; i++) {
     for (let j = i + 1; j < fps.length; j++) {
       assert.ok(shapeDistance('attractor', fps[i], fps[j]) > 0.12,
-        `windows ${i} and ${j} produced near-identical attractors`);
+        `characters ${i} and ${j} produced near-identical attractors`);
     }
   }
 });
@@ -435,7 +455,7 @@ test('attractor live: loudness drives size', () => {
   const quiet = testFingerprint({ volMean: 0.1 });
   const loud = testFingerprint({ volMean: 0.95 });
   const r95 = (fp) => {
-    const out = generate(fp, { ...baseParams, density: 15000, liveVariance: true });
+    const out = generate(fp, { ...baseParams, density: 30000, liveVariance: true });
     const radii = [];
     for (let i = 0; i < out.positions.length; i += 3) {
       radii.push(Math.hypot(out.positions[i], out.positions[i + 1], out.positions[i + 2]));
@@ -444,4 +464,35 @@ test('attractor live: loudness drives size', () => {
     return radii[Math.floor(radii.length * 0.95)];
   };
   assert.ok(r95(loud) > r95(quiet) * 1.25, 'loud designs should be visibly larger');
+});
+
+// Regression: the sound→design map must be LOCAL — consecutive windows of a
+// steady sound (tiny feature drift) may not jump to a different design.
+// (The v=34 liveMix hash broke this: ±2% drift teleported across systems.)
+test('attractor live: steady sound keeps a stable design across morphs', () => {
+  const drift = (i, amp = 0.02) => amp * Math.sin(i * 2.399);
+  const params = { ...baseParams, density: 30000, liveVariance: true };
+  const hist = (out) => {
+    const h = new Float64Array(16); const n = out.positions.length / 3;
+    for (let i = 0; i < n; i++) {
+      const r = Math.hypot(out.positions[i * 3], out.positions[i * 3 + 1], out.positions[i * 3 + 2]);
+      h[Math.min(15, Math.floor(r / 1.5 * 16))] += 1 / n;
+    }
+    return h;
+  };
+  let prev = null, maxD = 0;
+  for (let i = 0; i < 6; i++) {
+    const fp = testFingerprint({
+      pitchConfidence: 0.3, consonance: 0.32 + drift(i), pitchMedian: 0.3 + drift(i + 1),
+      centroid: 0.5 + drift(i + 2), spread: 0.45 + drift(i + 3), velocity: 0.5 + drift(i + 4),
+      seed: 1000 + i,
+    });
+    const h = hist(generate(fp, params));
+    if (prev) {
+      let d = 0; for (let k = 0; k < 16; k++) d += Math.abs(prev[k] - h[k]);
+      maxD = Math.max(maxD, d);
+    }
+    prev = h;
+  }
+  assert.ok(maxD < 0.15, `steady sound jumped designs (max consecutive distance ${maxD.toFixed(3)})`);
 });

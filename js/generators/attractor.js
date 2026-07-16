@@ -51,15 +51,22 @@ const SYSTEMS = {
   },
 };
 
-// Fine-grained deterministic hash of the fingerprint's continuous channels:
-// tiny sound differences land far apart in [0,1), so live windows sweep the
-// whole system/coefficient space instead of clustering into one or two looks.
-// Seed-free, like formArchetype — the same sound still gives the same design.
-function liveMix(fp) {
-  const x = fp.pitchMedian * 12.9898 + fp.centroid * 78.233 + fp.spread * 37.719
-          + fp.velocity * 53.987 + (fp.consonance ?? 0.5) * 95.4307
-          + (fp.volMean ?? 0.5) * 15.731;
-  return x - Math.floor(x);
+// Smooth, LOCALITY-PRESERVING character axes for live variance: each axis is
+// a clamped linear blend of continuous fingerprint channels, so similar
+// sounds land on nearby coefficients (steady sound = stable design) while
+// different sound characters still sweep the whole range. Seed-free.
+// (A fract-hash was tried here first and reverted: it made ±2% window drift
+// teleport across the design space — designs read as random, not
+// sound-driven.)
+function liveAxes(fp) {
+  const clamp01 = (x) => Math.max(0, Math.min(1, x));
+  const cons = fp.consonance ?? 0.5;
+  return [
+    clamp01(0.6 * fp.pitchMedian + 0.4 * fp.centroid),                        // brightness
+    clamp01(0.5 * (1 - cons) + 0.3 * fp.spread + 0.2 * fp.velocity),          // roughness
+    clamp01(0.5 * (fp.volMean ?? 0.5) + 0.3 * (fp.volVar ?? 0) + 0.2 * (fp.attackSlope ?? 0)), // energy
+    clamp01(0.6 * fp.velocity + 0.4 * (fp.attackSlope ?? 0)),                 // percussiveness
+  ];
 }
 
 export function pickSystem(fp) {
@@ -153,11 +160,11 @@ function validateOccupancy(out) {
 
 export function generate(fp, params, onProgress) {
   const arch = params.liveVariance ? formArchetype(fp) : null;
-  const mix = arch ? liveMix(fp) : 0;
-  // Live: the hash rotates through ALL five systems (character rules collapse
-  // a whole voice session into one or two buckets); capture keeps pickSystem.
-  const names = Object.keys(SYSTEMS);
-  const name = arch ? names[Math.floor(mix * names.length) % names.length] : pickSystem(fp);
+  const axes = arch ? liveAxes(fp) : null;
+  // System from the character rules in both paths: the mapping stays stable
+  // and learnable (whistle = swirl, speech = web); live variety comes from
+  // the wide smooth coefficient axes below, not from system roulette.
+  const name = pickSystem(fp);
   const sys = SYSTEMS[name];
   const rnd = mulberry32(fp.seed);
   const jitter = fp.velocity * 0.012 * (0.5 + params.complexity) * (arch ? 1 + arch.wildness : 1);
@@ -170,27 +177,33 @@ export function generate(fp, params, onProgress) {
     const fpAdj = attempt === 0 ? fp : { ...fp, pitchMedian: (fp.pitchMedian + attempt * 0.618) % 1, contour: fp.contour.map(v => (v + attempt * 0.618) % 1) };
     const c = sys.coeffs(fpAdj, rnd);
     if (sys.flow) {
-      let ki = 0;
+      // Flow systems already map pitch across their full validated coefficient
+      // range in coeffs(fp) — that IS the sound→shape correspondence. Live
+      // keeps the identical excursion; widening it just strays into the
+      // systems' periodic/collapsed margins (occupancy rejects → fallback).
       for (const key of Object.keys(c)) {
         if (typeof c[key] === 'number' && key !== 'e') {
-          ki++;
-          // Live: per-key hash position over a wide range (validation retries
-          // guard the edges); capture keeps the original narrow excursion.
-          const half = arch ? 0.18 + 0.12 * arch.wildness : 0.08;
-          const t = arch ? ((mix * 7.13 + ki * 2.618 + attempt * 0.377) % 1)
-                         : ((excursion * 7 + attempt) % 1);
-          c[key] = c[key] * lerp(1 - half, 1 + half, t);
+          c[key] = c[key] * lerp(0.92, 1.08, ((excursion * 7 + attempt) % 1));
         }
       }
     } else if (arch) {
-      // Discrete map: the hash repositions the fold coefficients across their
-      // whole range — percussive input has a flat pitch contour, which
-      // otherwise pins a,b,c to one web — and wildness deepens the coupling.
-      c.a = lerp(1.2, 4.2, (mix * 3.71) % 1);
-      c.b = lerp(1.2, 4.2, (mix * 5.23) % 1);
-      c.c = lerp(1.2, 4.2, (mix * 7.77) % 1);
-      const mul = 1 + 0.35 * arch.wildness;
-      c.d *= mul; c.e *= mul; c.f *= mul;
+      // Discrete map, live: fold coefficients blend the pitch contour with
+      // smooth timbre axes (percussive input has a flat contour, which
+      // otherwise pins a,b,c to one web); phases come from the axes, not the
+      // seed (the seed re-hashes on any window drift → web teleports); and
+      // the cross-couplings get a strong strictly-positive range — near-zero
+      // d/e/f (centroid or volume ≈ 0.5) decouples the map into a collapsed
+      // 1D chain that occupancy then rejects.
+      c.a = lerp(1.2, 4.2, 0.5 * fp.contour[1] + 0.5 * axes[0]);
+      c.b = lerp(1.2, 4.2, 0.5 * fp.contour[3] + 0.5 * axes[1]);
+      c.c = lerp(1.2, 4.2, 0.5 * fp.contour[5] + 0.5 * axes[3]);
+      c.g = axes[0] * Math.PI * 2;
+      c.h = axes[1] * Math.PI * 2;
+      c.i = axes[3] * Math.PI * 2;
+      const hi = 0.9 + 0.4 * arch.wildness;
+      c.d = lerp(0.4, hi, axes[0]);
+      c.e = lerp(0.4, hi, axes[1]);
+      c.f = lerp(0.4, hi, axes[3]);
     }
 
     const positions = new Float32Array(N * 3);
