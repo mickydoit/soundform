@@ -1,10 +1,10 @@
 // Live mode conductor: rolling feature window, instant envelopes, kick
 // detection, and structural morph scheduling. All I/O (audio, renderer,
 // worker, palette) is injected — this module is node-testable.
-import { buildFingerprint, buildTrajectory } from './features.js?v=38';
-import { liveTarget, glideStops, stopsToHex } from './livecolor.js?v=38';
-import { BrushPace, PAINT_MAX_POINTS } from './paint.js?v=38';
-import { createOrbitBrush } from './generators/attractor.js?v=38';
+import { buildFingerprint, buildTrajectory } from './features.js?v=39';
+import { liveTarget, glideStops, stopsToHex } from './livecolor.js?v=39';
+import { BrushPace, PAINT_MAX_POINTS } from './paint.js?v=39';
+import { createOrbitBrush } from './generators/attractor.js?v=39';
 
 export const WINDOW_SEC = 4;
 export const MORPH_CHECK_INTERVAL = 0.75;
@@ -94,7 +94,12 @@ export class LiveConductor {
   }
 
   forceMorph() {
-    if (this.growthMode === 'paint') { this.setGrowthMode('paint'); return; }
+    if (this.growthMode === 'paint') {
+      // Settings tweaks steer the brush; they must never wipe the canvas.
+      // (Mode switches restart the canvas explicitly via setGrowthMode.)
+      if (this.paint) this.paint.forceSteer = true;
+      return;
+    }
     this.forceNext = true;
   }
 
@@ -152,15 +157,17 @@ export class LiveConductor {
     }
 
     // Steering: reuse the morph scheduler's cadence and threshold.
-    const due = nowSec - this.lastCheck >= MORPH_CHECK_INTERVAL;
-    const allowed = nowSec - this.lastMorph >= MORPH_MIN_INTERVAL
+    // forceSteer (a settings tweak) bypasses both, but never resets the canvas.
+    const due = nowSec - this.lastCheck >= MORPH_CHECK_INTERVAL || st.forceSteer;
+    const allowed = (nowSec - this.lastMorph >= MORPH_MIN_INTERVAL || st.forceSteer)
                  && this.frames.length >= LIVE_MIN_FRAMES && !st.done;
     if (!due || !allowed) return;
     this.lastCheck = nowSec;
     const meanRms = this.frames.reduce((a, x) => a + x.f.rms, 0) / this.frames.length;
     if (meanRms < SILENCE_RMS) return;
     const fp = this.windowFingerprint();
-    if (fingerprintDelta(fp, this.shownFp) < MORPH_THRESHOLD) return;
+    if (!st.forceSteer && fingerprintDelta(fp, this.shownFp) < MORPH_THRESHOLD) return;
+    st.forceSteer = false;
     this.lastMorph = nowSec;
     this.shownFp = fp;
     if (st.brush) {
@@ -266,13 +273,14 @@ export class LiveConductor {
     if (!this.forceNext && fingerprintDelta(fp, this.shownFp) < MORPH_THRESHOLD) return;
     this.forceNext = false;
     this.inFlight = true;
+    const morphGen = this.growGen;
     const p = this.getParams();
     this.generate(fp, { mode: p.mode, density: p.liveDensity, complexity: p.complexity,
                         symmetry: p.symmetry, twist: p.twist, strandCount: 96,
                         cymStyle: p.cymStyle, liveVariance: true })
       .then((out) => {
         this.inFlight = false;
-        if (!this.running || !out) return;
+        if (!this.running || !out || morphGen !== this.growGen) return;
         this.lastMorph = this._lastNow;
         this.shownFp = fp;
         this.renderer.crossfadeTo(out.positions, out.attr, 1.0);

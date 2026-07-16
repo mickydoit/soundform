@@ -1,11 +1,11 @@
-import { AudioEngine } from './audio.js?v=38';
-import { buildFingerprint, buildTrajectory } from './features.js?v=38';
-import { DensityRenderer } from './density.js?v=38';
-import { PALETTES, buildLUT, customRamp, hexToRgb } from './palettes.js?v=38';
-import { exportCanvas, exportStrandSVG, framePlan, exportMP4, loopsForDuration } from './exporter.js?v=38';
-import { motionParams, displacePoint } from './motion.js?v=38';
-import { LiveConductor } from './live.js?v=38';
-import { LiveRecorder, MAX_RECORD_SEC } from './recorder.js?v=38';
+import { AudioEngine } from './audio.js?v=39';
+import { buildFingerprint, buildTrajectory } from './features.js?v=39';
+import { DensityRenderer } from './density.js?v=39';
+import { PALETTES, buildLUT, customRamp, hexToRgb } from './palettes.js?v=39';
+import { exportCanvas, exportStrandSVG, framePlan, exportMP4, loopsForDuration } from './exporter.js?v=39';
+import { motionParams, displacePoint } from './motion.js?v=39';
+import { LiveConductor } from './live.js?v=39';
+import { LiveRecorder, MAX_RECORD_SEC } from './recorder.js?v=39';
 
 const audio = new AudioEngine();
 let renderer = null;
@@ -110,7 +110,7 @@ function regenerate() {
     setStatus('Design created — drag to rotate · adjust sliders');
   };
   try {
-    if (!worker) worker = new Worker('js/worker.js?v=38', { type: 'module' });
+    if (!worker) worker = new Worker('js/worker.js?v=39', { type: 'module' });
     worker.onmessage = (e) => {
       if (e.data.progress !== undefined) setStatus(`Generating… ${Math.round(e.data.progress * 100)}%`);
       else if (e.data.error) setStatus(`Generation error: ${e.data.error}`);
@@ -124,7 +124,7 @@ function regenerate() {
 }
 
 async function fallbackGenerate(onResult) {
-  const { generate } = await import('./generators/index.js?v=38');
+  const { generate } = await import('./generators/index.js?v=39');
   onResult(generate(fingerprint, { ...params, strandCount: 96 }));
 }
 
@@ -133,7 +133,7 @@ async function fallbackGenerate(onResult) {
 function workerGenerate(fingerprint, params) {
   return new Promise((resolve) => {
     try {
-      if (!liveWorker) liveWorker = new Worker('js/worker.js?v=38', { type: 'module' });
+      if (!liveWorker) liveWorker = new Worker('js/worker.js?v=39', { type: 'module' });
       liveWorker.onmessage = (e) => {
         if (e.data.done) resolve(e.data);
         else if (e.data.error) resolve(null);
@@ -147,7 +147,7 @@ function workerGenerate(fingerprint, params) {
 async function liveGenerate(fp, p) {
   const out = await workerGenerate(fp, p);
   if (out) return out;
-  const { generate } = await import('./generators/index.js?v=38');
+  const { generate } = await import('./generators/index.js?v=39');
   return generate(fp, p);
 }
 
@@ -442,7 +442,11 @@ function bindControls() {
       document.getElementById('row-cym-style').style.display =
         params.mode === 'cymatics' ? '' : 'none';
       if (appState === 'captured') regenerate();
-      else if (appState === 'live' && conductor) conductor.forceMorph();
+      else if (appState === 'live' && conductor) {
+        // Paint: a new generator means a new painting — fresh canvas.
+        if (params.growth === 'paint') conductor.setGrowthMode('paint');
+        else conductor.forceMorph();
+      }
     });
   });
 

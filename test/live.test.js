@@ -240,3 +240,52 @@ test('paint (non-attractor): reveal requests a full design then advances', async
   assert.ok(log.paintCounts[log.paintCounts.length - 1] > 500, 'reveal advanced');
   assert.equal(log.xfades, 0);
 });
+
+test('paint: geometry sliders steer the painting, never wipe it', async () => {
+  let genCount = 0;
+  const { conductor, log } = harness({
+    generate: async (fp, p) => {
+      genCount++;
+      const n = p.density;
+      return { positions: new Float32Array(n * 3), attr: new Float32Array(n), strands: [] };
+    },
+    getParams: () => ({ mode: 'radial', complexity: 0.5, symmetry: 1, twist: 0,
+                        cymStyle: 'auto', liveDensity: 1000, paintMaxPoints: 50000,
+                        exposure: 30, scale: 1, grain: 1 }),
+  });
+  conductor.setGrowthMode('paint');
+  let begins = 0;
+  const origBegin = conductor.renderer.beginPaint;
+  conductor.renderer.beginPaint = (m) => { begins++; origBegin(m); };
+  for (let i = 0; i < 90; i++) { conductor.tick(i / 30); if (i % 15 === 14) await settle(); }
+  await settle();
+  const paintedBefore = log.paintCounts[log.paintCounts.length - 1];
+  conductor.forceMorph();                       // slider release during paint
+  for (let i = 90; i < 150; i++) { conductor.tick(i / 30); if (i % 15 === 14) await settle(); }
+  await settle();
+  assert.equal(begins, 1, 'canvas allocated once — slider must not wipe the painting');
+  assert.equal(genCount, 2, 'slider triggers a remainder re-plan');
+  const paintedAfter = log.paintCounts[log.paintCounts.length - 1];
+  assert.ok(paintedAfter >= paintedBefore, 'painting kept advancing');
+});
+
+test('stale morph generation never lands after switching to paint', async () => {
+  let resolveGen = null;
+  const { conductor, log } = harness({
+    generate: (fp, p) => new Promise((res) => {
+      // paint-mode requests resolve instantly; the morph one is held open
+      if (p.liveVariance && p.density > 900 && p.strandCount === 8) {
+        res({ positions: new Float32Array(p.density * 3), attr: new Float32Array(p.density), strands: [] });
+      } else {
+        resolveGen = () => res({ positions: new Float32Array(30), attr: new Float32Array(10), strands: [] });
+      }
+    }),
+  });
+  for (let i = 0; i < 70; i++) conductor.tick(i / 30);   // morph fires, held in flight
+  assert.ok(resolveGen, 'a morph generation is in flight');
+  conductor.setGrowthMode('paint');                       // user flips Growth mid-flight
+  for (let i = 70; i < 100; i++) conductor.tick(i / 30);
+  resolveGen();                                           // stale morph resolves late
+  await settle();
+  assert.equal(log.xfades, 0, 'stale morph must not crossfade over the painting');
+});
