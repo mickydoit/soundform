@@ -55,3 +55,86 @@ test('ChunkStore: copies bytes, keeps first decoderConfig, clears', () => {
   assert.equal(store.chunks.length, 0);
   assert.equal(store.config, null);
 });
+
+import { LiveRecorder, RECORD_FPS } from '../js/recorder.js';
+
+// ── fakes ─────────────────────────────────────────────────────────
+class FakeEncoder {
+  constructor({ output, error }) { this.output = output; this.err = error; this.encodeQueueSize = 0; this.encoded = []; FakeEncoder.last = this; }
+  static async isConfigSupported() { return { supported: true }; }
+  configure(cfg) { this.cfg = cfg; }
+  encode(frame, opts) {
+    this.encoded.push({ ts: frame.timestamp, key: !!opts?.keyFrame });
+    this.output(
+      { byteLength: 3, type: opts?.keyFrame ? 'key' : 'delta', timestamp: frame.timestamp,
+        duration: frame.duration, copyTo: (d) => d.set([7, 7, 7]) },
+      this.encoded.length === 1 ? { decoderConfig: { codec: 'avc1.640028', description: new Uint8Array([1]) } } : {},
+    );
+  }
+  async flush() {}
+  close() {}
+}
+class FakeFrame {
+  constructor(src, { timestamp, duration }) { this.timestamp = timestamp; this.duration = duration; }
+  close() {}
+}
+class FakeMuxer {
+  constructor(opts) { this.opts = opts; this.raw = []; this.finalized = false; this.target = { buffer: new ArrayBuffer(1) }; FakeMuxer.last = this; }
+  addVideoChunkRaw(data, type, ts, dur, meta) { this.raw.push({ data, type, ts, dur, meta }); }
+  addVideoChunk() {}
+  finalize() { this.finalized = true; }
+}
+const fakeDeps = (downloads) => ({
+  VideoEncoder: FakeEncoder,
+  VideoFrame: FakeFrame,
+  getMuxer: () => ({ Muxer: FakeMuxer, ArrayBufferTarget: class {} }),
+  download: (buf) => downloads.push(buf),
+});
+
+test('LiveRecorder: record → stop → original export muxes stored chunks', async () => {
+  const downloads = [];
+  const rec = new LiveRecorder(fakeDeps(downloads));
+  await rec.start({ width: 1281, height: 721 });
+  assert.equal(rec.recording, true);
+  assert.equal(FakeEncoder.last.cfg.width, 1280);   // even dims
+  for (let i = 0; i < 60; i++) rec.captureTick(i * (1000 / 60)); // 1s of rAF
+  await rec.stop();
+  assert.equal(rec.recording, false);
+  assert.ok(rec.hasMaster);
+  assert.ok(rec.store.chunks.length >= 29 && rec.store.chunks.length <= 31);
+  assert.ok(Math.abs(rec.elapsedSec - rec.store.chunks.length / RECORD_FPS) < 0.05);
+
+  const ok = await rec.exportAt('original', {});
+  assert.equal(ok, true);
+  const m = FakeMuxer.last;
+  assert.equal(m.raw.length, rec.store.chunks.length);
+  assert.ok(m.raw[0].meta?.decoderConfig, 'first raw chunk carries decoderConfig');
+  assert.equal(m.raw[1].meta, undefined);
+  assert.ok(m.finalized);
+  assert.equal(downloads.length, 1);
+
+  await rec.exportAt('original', {});               // export many times
+  assert.equal(downloads.length, 2);
+
+  rec.discard();
+  assert.equal(rec.hasMaster, false);
+});
+
+test('LiveRecorder: starting a new recording discards the old master', async () => {
+  const rec = new LiveRecorder(fakeDeps([]));
+  await rec.start({ width: 640, height: 480 });
+  for (let i = 0; i < 30; i++) rec.captureTick(i * 33.4);
+  await rec.stop();
+  const before = rec.store.chunks.length;
+  assert.ok(before > 0);
+  await rec.start({ width: 640, height: 480 });
+  assert.equal(rec.store.chunks.length, 0);
+  await rec.stop();
+});
+
+test('LiveRecorder: availableQualities reflects recorded height', async () => {
+  const rec = new LiveRecorder(fakeDeps([]));
+  await rec.start({ width: 1280, height: 720 });
+  await rec.stop();
+  assert.deepEqual(rec.availableQualities().map(p => p.id), ['original']);
+});
