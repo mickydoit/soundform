@@ -3,7 +3,9 @@
 
 const SPLAT_VERT = `
 attribute float attrv;
+attribute float aWeight;
 varying float vAttr;
+varying float vW;
 uniform float uSize;
 uniform float uTime, uFreq, uAmp;
 uniform vec3 uDir;
@@ -15,17 +17,19 @@ void main() {
   gl_Position = projectionMatrix * mv;
   gl_PointSize = uSize / max(0.1, -mv.z);
   vAttr = attrv;
+  vW = aWeight;
 }`;
 
 const SPLAT_FRAG = `
 precision highp float;
 varying float vAttr;
+varying float vW;
 uniform float uWeight;
 void main() {
   vec2 uv = gl_PointCoord - 0.5;
   float r2 = dot(uv, uv);
   if (r2 > 0.25) discard;
-  float w = exp(-r2 * 10.0) * uWeight;
+  float w = exp(-r2 * 10.0) * uWeight * vW;
   gl_FragColor = vec4(w, w * vAttr, 0.0, 1.0);
 }`;
 
@@ -90,6 +94,13 @@ export class DensityRenderer {
 
   _splatMats() {
     return this._fading ? [this.splatMat, this._fading.mat] : [this.splatMat];
+  }
+
+  // Shared all-ones aWeight buffer (grown lazily) so non-grow clouds render
+  // exactly as before the attribute existed.
+  _unitWeights(n) {
+    if (!this._unit || this._unit.length < n) this._unit = new Float32Array(n).fill(1);
+    return this._unit.subarray(0, n);
   }
 
   _initGL() {
@@ -230,6 +241,7 @@ export class DensityRenderer {
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
     geo.setAttribute('attrv', new THREE.BufferAttribute(attr, 1));
+    geo.setAttribute('aWeight', new THREE.BufferAttribute(this._unitWeights(positions.length / 3), 1));
     if (this.fallback) {
       const mat = new THREE.PointsMaterial({ size: 0.008, color: 0xbbaaff, transparent: true, opacity: 0.35, blending: THREE.AdditiveBlending, depthWrite: false });
       this.points = new THREE.Points(geo, mat);
@@ -239,6 +251,30 @@ export class DensityRenderer {
     this.points.frustumCulled = false;
     this.group.add(this.points);
     // Peak estimate: average points per pixel in the covered region, ×concentration
+    const n = positions.length / 3;
+    const [w, h] = this._size();
+    this.toneMat.uniforms.uPeak.value = Math.max(8, (n / (w * h)) * 550);
+    this._dirty = true;
+    this.splatMat.uniforms.uWeight.value = 1;
+  }
+
+  // Growth composite upload: like setCloud but with per-point weights.
+  // Called ~1×/s with growing arrays; rebuilding the geometry is fine.
+  setGrowCloud(positions, attr, weights) {
+    this._disposeFading();
+    if (this.points) { this.group.remove(this.points); this.points.geometry.dispose(); }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    geo.setAttribute('attrv', new THREE.BufferAttribute(attr, 1));
+    geo.setAttribute('aWeight', new THREE.BufferAttribute(weights, 1));
+    if (this.fallback) {
+      const mat = new THREE.PointsMaterial({ size: 0.008, color: 0xbbaaff, transparent: true, opacity: 0.35, blending: THREE.AdditiveBlending, depthWrite: false });
+      this.points = new THREE.Points(geo, mat);
+    } else {
+      this.points = new THREE.Points(geo, this.splatMat);
+    }
+    this.points.frustumCulled = false;
+    this.group.add(this.points);
     const n = positions.length / 3;
     const [w, h] = this._size();
     this.toneMat.uniforms.uPeak.value = Math.max(8, (n / (w * h)) * 550);
@@ -318,6 +354,7 @@ export class DensityRenderer {
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
     geo.setAttribute('attrv', new THREE.BufferAttribute(attr, 1));
+    geo.setAttribute('aWeight', new THREE.BufferAttribute(this._unitWeights(positions.length / 3), 1));
     const mat = this._makeSplatMat();
     mat.uniforms.uWeight.value = 0;
     this.splatMat = mat;
@@ -328,6 +365,44 @@ export class DensityRenderer {
     const n = positions.length / 3;
     const [w, h] = this._size();
     this._peakTo = Math.max(8, (n / (w * h)) * 550);
+    this._dirty = true;
+  }
+
+  // Draw-in: the incoming cloud reveals point by point (drawRange) while the
+  // outgoing cloud dims — paced manually via setDrawProgress (the conductor
+  // integrates loudness), unlike crossfadeTo's clock-driven fade.
+  drawInTo(positions, attr) {
+    if (!this.points || this.fallback) { this.setCloud(positions, attr); return; }
+    this._disposeFading();
+    this._fading = { points: this.points, mat: this.points.material, t: 0, dur: Infinity, manual: true };
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    geo.setAttribute('attrv', new THREE.BufferAttribute(attr, 1));
+    geo.setAttribute('aWeight', new THREE.BufferAttribute(this._unitWeights(positions.length / 3), 1));
+    const mat = this._makeSplatMat();
+    mat.uniforms.uWeight.value = 1;
+    geo.setDrawRange(0, 0);
+    this.splatMat = mat;
+    this.points = new THREE.Points(geo, mat);
+    this.points.frustumCulled = false;
+    this.group.add(this.points);
+    this._peakFrom = this.toneMat.uniforms.uPeak.value;
+    const n = positions.length / 3;
+    const [w, h] = this._size();
+    this._peakTo = Math.max(8, (n / (w * h)) * 550);
+    this._dirty = true;
+  }
+
+  setDrawProgress(t) {
+    if (!this.points) return;
+    const k = Math.max(0, Math.min(1, t));
+    const count = this.points.geometry.getAttribute('position').count;
+    this.points.geometry.setDrawRange(0, Math.floor(k * count));
+    if (this._fading && this._fading.manual) {
+      this._fading.mat.uniforms.uWeight.value = 1 - k;
+      this.toneMat.uniforms.uPeak.value = this._peakFrom + (this._peakTo - this._peakFrom) * k;
+      if (k >= 1) { this._disposeFading(); this.points.geometry.setDrawRange(0, count); }
+    }
     this._dirty = true;
   }
 
@@ -403,7 +478,7 @@ export class DensityRenderer {
     } else {
       this._lastTick = 0;
     }
-    if (this._fading) {
+    if (this._fading && !this._fading.manual) {
       const nowF = performance.now() / 1000;
       const dtF = Math.min(0.1, this._fadeTick ? nowF - this._fadeTick : 0.016);
       this._fadeTick = nowF;
