@@ -173,7 +173,7 @@ function setLiveSuspended(on) {
 
 function stopLive() {
   if (!conductor) return;
-  if (recorder && recorder.recording) { recorder.stop(); finishRecordingUI(); }
+  if (recorder && recorder.recording) { recorder.stop(); finishRecordingUI(); showVideoReady(); }
   document.getElementById('btn-record').classList.add('hidden');
   conductor.stop();
   conductor = null;
