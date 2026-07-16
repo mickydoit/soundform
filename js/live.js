@@ -1,9 +1,9 @@
 // Live mode conductor: rolling feature window, instant envelopes, kick
 // detection, and structural morph scheduling. All I/O (audio, renderer,
 // worker, palette) is injected — this module is node-testable.
-import { buildFingerprint, buildTrajectory } from './features.js?v=36';
-import { liveTarget, glideStops, stopsToHex } from './livecolor.js?v=36';
-import { GrowComposite, FRAGMENT_POINTS, GROW_MAX_POINTS } from './grow.js?v=36';
+import { buildFingerprint, buildTrajectory } from './features.js?v=37';
+import { liveTarget, glideStops, stopsToHex } from './livecolor.js?v=37';
+import { GrowComposite, FRAGMENT_POINTS, GROW_MAX_POINTS } from './grow.js?v=37';
 
 export const WINDOW_SEC = 4;
 export const MORPH_CHECK_INTERVAL = 0.75;

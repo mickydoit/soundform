@@ -1,11 +1,11 @@
-import { AudioEngine } from './audio.js?v=36';
-import { buildFingerprint, buildTrajectory } from './features.js?v=36';
-import { DensityRenderer } from './density.js?v=36';
-import { PALETTES, buildLUT, customRamp, hexToRgb } from './palettes.js?v=36';
-import { exportCanvas, exportStrandSVG, framePlan, exportMP4, loopsForDuration } from './exporter.js?v=36';
-import { motionParams, displacePoint } from './motion.js?v=36';
-import { LiveConductor } from './live.js?v=36';
-import { LiveRecorder, MAX_RECORD_SEC } from './recorder.js?v=36';
+import { AudioEngine } from './audio.js?v=37';
+import { buildFingerprint, buildTrajectory } from './features.js?v=37';
+import { DensityRenderer } from './density.js?v=37';
+import { PALETTES, buildLUT, customRamp, hexToRgb } from './palettes.js?v=37';
+import { exportCanvas, exportStrandSVG, framePlan, exportMP4, loopsForDuration } from './exporter.js?v=37';
+import { motionParams, displacePoint } from './motion.js?v=37';
+import { LiveConductor } from './live.js?v=37';
+import { LiveRecorder, MAX_RECORD_SEC } from './recorder.js?v=37';
 
 const audio = new AudioEngine();
 let renderer = null;
@@ -37,7 +37,7 @@ const params = {
   exposure: 30, contrast: 1.0, autoRotate: 0.3,
   motionOn: false, motionPeriod: 8,
   exportRes: 'std', videoDur: 0, transparentBg: false,
-  flatView: true, cymStyle: 'auto',
+  flatView: true, cymStyle: 'auto', growth: 'morph',
 };
 
 let statusEl, vuFill, vuWrap, clearBtn, submitBtn;
@@ -110,7 +110,7 @@ function regenerate() {
     setStatus('Design created — drag to rotate · adjust sliders');
   };
   try {
-    if (!worker) worker = new Worker('js/worker.js?v=36', { type: 'module' });
+    if (!worker) worker = new Worker('js/worker.js?v=37', { type: 'module' });
     worker.onmessage = (e) => {
       if (e.data.progress !== undefined) setStatus(`Generating… ${Math.round(e.data.progress * 100)}%`);
       else if (e.data.error) setStatus(`Generation error: ${e.data.error}`);
@@ -124,7 +124,7 @@ function regenerate() {
 }
 
 async function fallbackGenerate(onResult) {
-  const { generate } = await import('./generators/index.js?v=36');
+  const { generate } = await import('./generators/index.js?v=37');
   onResult(generate(fingerprint, { ...params, strandCount: 96 }));
 }
 
@@ -133,7 +133,7 @@ async function fallbackGenerate(onResult) {
 function workerGenerate(fingerprint, params) {
   return new Promise((resolve) => {
     try {
-      if (!liveWorker) liveWorker = new Worker('js/worker.js?v=36', { type: 'module' });
+      if (!liveWorker) liveWorker = new Worker('js/worker.js?v=37', { type: 'module' });
       liveWorker.onmessage = (e) => {
         if (e.data.done) resolve(e.data);
         else if (e.data.error) resolve(null);
@@ -147,7 +147,7 @@ function workerGenerate(fingerprint, params) {
 async function liveGenerate(fp, p) {
   const out = await workerGenerate(fp, p);
   if (out) return out;
-  const { generate } = await import('./generators/index.js?v=36');
+  const { generate } = await import('./generators/index.js?v=37');
   return generate(fp, p);
 }
 
@@ -159,6 +159,8 @@ function makeConductor() {
     getParams: () => ({ mode: params.mode, complexity: params.complexity,
                         symmetry: params.symmetry, twist: params.twist,
                         cymStyle: params.cymStyle, liveDensity: LIVE_DENSITY,
+                        fragPoints: isMobile ? 7000 : 10000,
+                        growMaxPoints: isMobile ? 400000 : 1200000,
                         exposure: params.exposure, scale: params.scale, grain: params.grain }),
     onVu: (rms) => { if (vuFill) vuFill.style.height = Math.min(100, rms * 300) + '%'; },
   });
@@ -169,6 +171,8 @@ function setLiveSuspended(on) {
   for (const id of ['sel-palette', 'manual-colors', 'sl-exposure', 'col-background', 'btn-motion', 'sl-motion-period']) {
     document.getElementById(id).classList.toggle('live-suspended', on);
   }
+  // Growth only means something during live — the inverse of the others.
+  document.getElementById('sel-growth').classList.toggle('live-suspended', !on);
 }
 
 function stopLive() {
@@ -321,7 +325,18 @@ function bindAudio() {
       submitBtn.classList.add('hidden');
       vuWrap.classList.add('hidden');
       applyColorParams();     // restores user exposure/scale/grain too (applyRenderParams)
-      regenerate();
+      if (out.cloud) {
+        // Grown session: the design IS the history — show it as captured
+        // geometry directly (regen sliders would replace it).
+        design = { positions: out.cloud.positions, attr: out.cloud.attr, strands: [] };
+        renderer.setMotion(motionParams(fingerprint.seed));
+        if (params.flatView) renderer.setOrientation(-Math.PI / 2, 0);
+        renderer.setCloud(out.cloud.positions, out.cloud.attr);
+        applyRenderParams();
+        setStatus('Grown design captured — sliders that regenerate will replace it');
+      } else {
+        regenerate();
+      }
       return;
     }
     if (frames.length === 0) { setStatus('No audio captured — try recording again'); return; }
@@ -368,6 +383,8 @@ function enterLive() {
   if ('VideoEncoder' in window) document.getElementById('btn-record').classList.remove('hidden');
   setLiveSuspended(true);
   conductor = makeConductor();
+  conductor.setGrowthMode(params.growth);
+  conductor.onGrowStatus = (msg) => setStatus(msg);
   conductor.start();
   setStatus('Live — listening');
 }
@@ -461,6 +478,11 @@ function bindControls() {
     params.flatView = e.target.checked;
     renderer.setProjection(params.flatView ? 'flat' : 'depth');
   });
+  document.getElementById('sel-growth').addEventListener('change', (e) => {
+    params.growth = e.target.value;
+    if (appState === 'live' && conductor) conductor.setGrowthMode(params.growth);
+  });
+
   document.getElementById('sel-cym-style').addEventListener('change', (e) => {
     params.cymStyle = e.target.value;
     if (appState === 'captured' && params.mode === 'cymatics') regenerate();
