@@ -499,3 +499,7 @@ input[type="color"]::-moz-color-swatch { border: none; border-radius: 50%; }
 /* ── Live mode ── */
 .live-suspended { opacity: 0.35; pointer-events: none; }
 .live-suspended select, .live-suspended input { pointer-events: none; }
+
+/* Live video recording */
+#btn-record.recording { color: #e8b4c8; animation: rec-pulse 1.4s ease-in-out infinite; }
+@keyframes rec-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }

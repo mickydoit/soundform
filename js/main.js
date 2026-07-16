@@ -5,6 +5,7 @@ import { PALETTES, buildLUT, customRamp, hexToRgb } from './palettes.js?v=34';
 import { exportCanvas, exportStrandSVG, framePlan, exportMP4, loopsForDuration } from './exporter.js?v=34';
 import { motionParams, displacePoint } from './motion.js?v=34';
 import { LiveConductor } from './live.js?v=34';
+import { LiveRecorder, MAX_RECORD_SEC } from './recorder.js?v=34';
 
 const audio = new AudioEngine();
 let renderer = null;
@@ -21,6 +22,8 @@ const isMobile = /Mobi|Android|iPhone|iPad/.test(navigator.userAgent);
 
 let conductor = null;
 let liveWorker = null;
+let recorder = null;
+let lastTimerSec = -1;
 const LIVE_DENSITY = isMobile ? 120000 : 250000;
 
 const params = {
@@ -170,6 +173,8 @@ function setLiveSuspended(on) {
 
 function stopLive() {
   if (!conductor) return;
+  if (recorder && recorder.recording) { recorder.stop(); finishRecordingUI(); }
+  document.getElementById('btn-record').classList.add('hidden');
   conductor.stop();
   conductor = null;
   audio.stop();
@@ -222,6 +227,28 @@ function bindAudio() {
       await audio.startMic();
       enterLive();
     } catch (e) { setStatus(`Microphone error: ${e.message}`); }
+  });
+
+  const btnRecord = document.getElementById('btn-record');
+  btnRecord.addEventListener('click', async () => {
+    if (appState !== 'live') return;
+    if (recorder && recorder.recording) { await stopRecording(); return; }
+    recorder = recorder || new LiveRecorder();
+    recorder.onLimit = () => { finishRecordingUI(); showVideoReady(); setStatus('Recording stopped — 5 minute limit'); };
+    recorder.onError = (e) => { finishRecordingUI(); setStatus(`Recording error: ${e.message}`); };
+    try {
+      await recorder.start(renderer.canvas);
+    } catch (e) { setStatus(`Recording error: ${e.message}`); return; }
+    lastTimerSec = -1;
+    btnRecord.classList.add('recording');
+    renderer.setFrameSink((now) => {
+      recorder.captureTick(now);
+      const s = Math.floor(recorder.elapsedSec);
+      if (s !== lastTimerSec && recorder.recording) {
+        lastTimerSec = s;
+        setStatus(`Recording — ${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`);
+      }
+    });
   });
 
   fileInput.addEventListener('change', async () => {
@@ -290,6 +317,7 @@ function bindAudio() {
 
   clearBtn.addEventListener('click', () => {
     stopLive();
+    if (recorder) recorder.discard();
     document.getElementById('btn-live').classList.remove('hidden');
     fingerprint = null; design = null; frames = [];
     appState = 'blank';
@@ -314,11 +342,28 @@ function enterLive() {
   submitBtn.classList.remove('hidden');
   clearBtn.classList.remove('hidden');
   vuWrap.classList.remove('hidden');
+  if ('VideoEncoder' in window) document.getElementById('btn-record').classList.remove('hidden');
   setLiveSuspended(true);
   conductor = makeConductor();
   conductor.start();
   setStatus('Live — listening');
 }
+
+// Tear down recording UI state; the master (if any) stays in `recorder`.
+function finishRecordingUI() {
+  renderer.setFrameSink(null);
+  document.getElementById('btn-record').classList.remove('recording');
+}
+
+async function stopRecording() {
+  if (!recorder || !recorder.recording) return;
+  await recorder.stop();
+  finishRecordingUI();
+  setStatus('Live — listening');
+  showVideoReady();
+}
+
+function showVideoReady() {}   // replaced by the video-ready panel task
 
 function enterRecording(btnStop) {
   appState = 'recording';

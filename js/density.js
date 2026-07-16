@@ -60,6 +60,7 @@ export class DensityRenderer {
     this._loopPeriod = 8;
     this._motion = null;
     this._lastTick = 0;
+    this._frameSink = null;
     this._initGL();
     this._initDrag();
     this._loop();
@@ -290,6 +291,8 @@ export class DensityRenderer {
     this._dirty = true;
   }
   setLoopPeriod(sec) { this._loopPeriod = Math.max(1, sec); }
+  setFrameSink(cb) { this._frameSink = cb; }
+  get canvas() { return this.renderer.domElement; }
   setLoopPhase(t) {
     const v = t - Math.floor(t);
     for (const m of this._splatMats()) m.uniforms.uTime.value = v;
@@ -417,6 +420,9 @@ export class DensityRenderer {
     if (!this._dirty) return; // render-on-demand: idle = zero draw calls
     this._dirty = false;
     this._renderFrame();
+    // Post-render hook (live video recording): the WebGL buffer is only
+    // valid in the same task as the draw, so capture must happen here.
+    if (this._frameSink) this._frameSink(performance.now());
   }
 
   // Hi-res export: render both passes into an offscreen RGBA8 target and read back.
