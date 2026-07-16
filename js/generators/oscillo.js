@@ -1,4 +1,4 @@
-import { mulberry32, finalize, resamplePolyline } from './common.js';
+import { mulberry32, finalize, resamplePolyline, formArchetype } from './common.js';
 
 // Waveform mandala: the recording's timeline as concentric rings on a shallow
 // watch-glass dome — time spirals outward, each ring one moment. Wave cycles
@@ -20,6 +20,7 @@ function frameAt(traj, ch, t) {
 
 export function generate(fp, params, onProgress) {
   const rnd = mulberry32(fp.seed);
+  const arch = params.liveVariance ? formArchetype(fp) : null;
   const N = Math.max(1000, Math.floor(params.density));
   const traj = fp.trajectory && fp.trajectory.length >= 3 ? fp.trajectory : null;
   const ch = fp.trajectoryChannels === 4 ? 4 : 3;
@@ -45,24 +46,77 @@ export function generate(fp, params, onProgress) {
     const y0 = domeH * (1 - t * t) + rms * 0.15; // dome + loudness bas-relief
     const fray = spread * 0.02;
 
-    const ringR = (ang) => baseR + amp * Math.sin(k * ang + phase);
-
-    for (let p = 0; p < perRing; p++) {
-      const ang = rnd() * Math.PI * 2;
-      const r = ringR(ang) + (rnd() - 0.5) * fray;
-      positions[w * 3]     = r * Math.cos(ang) + (rnd() - 0.5) * jit;
-      positions[w * 3 + 1] = y0 + (rnd() - 0.5) * (jit + fray * 0.5);
-      positions[w * 3 + 2] = r * Math.sin(ang) + (rnd() - 0.5) * jit;
-      attr[w] = Math.max(0, Math.min(1, 0.25 + rms * 2.2));
-      w++;
+    if (arch && arch.index === 1) {
+      // Unravelled ribbon: the moment becomes a straight band stacked in y —
+      // the mandala unwrapped into an oscilloscope strip chart.
+      const bandY = (t - 0.5) * 1.4;
+      const waveAmp = 0.06 + (amp * 3 + drive * 0.15) * (1 + arch.wildness);
+      const wave = (x) => waveAmp * Math.sin(k * (x + 1) * Math.PI + phase);
+      for (let p = 0; p < perRing; p++) {
+        const x = rnd() * 2 - 1;
+        positions[w * 3]     = x * 1.1 + (rnd() - 0.5) * jit;
+        positions[w * 3 + 1] = bandY + (rnd() - 0.5) * (jit + fray);
+        positions[w * 3 + 2] = wave(x) + (rnd() - 0.5) * (jit + fray * 2);
+        attr[w] = Math.max(0, Math.min(1, 0.25 + rms * 2.2));
+        w++;
+      }
+      const raw = new Float32Array(256 * 3);
+      for (let s = 0; s < 256; s++) {
+        const x = (s / 255) * 2 - 1;
+        raw[s * 3] = x * 1.1; raw[s * 3 + 1] = bandY; raw[s * 3 + 2] = wave(x);
+      }
+      strands.push(resamplePolyline(raw, 200));
+    } else if (arch && arch.index === 2) {
+      // Shattered orbit: the ring survives only as 2-5 scattered arcs,
+      // each tilted and radially displaced.
+      const nArcs = 2 + Math.floor(rnd() * 4);
+      const arcs = [];
+      for (let aI = 0; aI < nArcs; aI++) {
+        arcs.push({ a0: rnd() * Math.PI * 2, len: (0.15 + rnd() * 0.35) * Math.PI });
+      }
+      const rOff = (rnd() - 0.5) * (0.15 + 0.35 * arch.wildness);
+      const tilt = (rnd() - 0.5) * (0.6 + 0.8 * arch.wildness);
+      const ringR = (ang) => baseR + rOff + amp * Math.sin(k * ang + phase);
+      for (let p = 0; p < perRing; p++) {
+        const arc = arcs[Math.floor(rnd() * nArcs)];
+        const ang = arc.a0 + rnd() * arc.len;
+        const r = ringR(ang) + (rnd() - 0.5) * fray;
+        positions[w * 3]     = r * Math.cos(ang) + (rnd() - 0.5) * jit;
+        positions[w * 3 + 1] = y0 + Math.sin(ang) * tilt * 0.3 + (rnd() - 0.5) * (jit + fray * 0.5);
+        positions[w * 3 + 2] = r * Math.sin(ang) + (rnd() - 0.5) * jit;
+        attr[w] = Math.max(0, Math.min(1, 0.25 + rms * 2.2));
+        w++;
+      }
+      const arc0 = arcs[0];
+      const raw = new Float32Array(128 * 3);
+      for (let s = 0; s < 128; s++) {
+        const ang = arc0.a0 + (s / 127) * arc0.len;
+        const r = ringR(ang);
+        raw[s * 3] = r * Math.cos(ang);
+        raw[s * 3 + 1] = y0 + Math.sin(ang) * tilt * 0.3;
+        raw[s * 3 + 2] = r * Math.sin(ang);
+      }
+      strands.push(resamplePolyline(raw, 200));
+    } else {
+      // Ring mandala — the original presentation.
+      const ringR = (ang) => baseR + amp * Math.sin(k * ang + phase);
+      for (let p = 0; p < perRing; p++) {
+        const ang = rnd() * Math.PI * 2;
+        const r = ringR(ang) + (rnd() - 0.5) * fray;
+        positions[w * 3]     = r * Math.cos(ang) + (rnd() - 0.5) * jit;
+        positions[w * 3 + 1] = y0 + (rnd() - 0.5) * (jit + fray * 0.5);
+        positions[w * 3 + 2] = r * Math.sin(ang) + (rnd() - 0.5) * jit;
+        attr[w] = Math.max(0, Math.min(1, 0.25 + rms * 2.2));
+        w++;
+      }
+      const raw = new Float32Array(256 * 3);
+      for (let s = 0; s < 256; s++) {
+        const ang = (s / 255) * Math.PI * 2;
+        const r = ringR(ang);
+        raw[s * 3] = r * Math.cos(ang); raw[s * 3 + 1] = y0; raw[s * 3 + 2] = r * Math.sin(ang);
+      }
+      strands.push(resamplePolyline(raw, 200));
     }
-    const raw = new Float32Array(256 * 3);
-    for (let s = 0; s < 256; s++) {
-      const ang = (s / 255) * Math.PI * 2;
-      const r = ringR(ang);
-      raw[s * 3] = r * Math.cos(ang); raw[s * 3 + 1] = y0; raw[s * 3 + 2] = r * Math.sin(ang);
-    }
-    strands.push(resamplePolyline(raw, 200));
     if (onProgress && i % 16 === 0) onProgress(i / rings);
   }
   return finalize(positions, attr, strands, params);

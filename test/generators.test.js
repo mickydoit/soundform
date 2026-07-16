@@ -362,3 +362,10 @@ test('harmonic: live archetypes produce measurably different geometry', () => {
   assert.ok(shapeDistance('harmonic', FP_MUSIC(), FP_WHISTLE()) > 0.12);
   checkGenerator('harmonic', testFingerprint());
 });
+
+test('oscillo: live archetypes produce measurably different geometry', () => {
+  // Ribbon (whistle/bright) vs mandala (music/tonal) vs arcs (speech/rough).
+  assert.ok(shapeDistance('oscillo', FP_MUSIC(), FP_WHISTLE()) > 0.15);
+  assert.ok(shapeDistance('oscillo', FP_MUSIC(), FP_SPEECH()) > 0.12);
+  checkGenerator('oscillo', testFingerprint());
+});
