@@ -63,13 +63,16 @@ const mkFrame = (o = {}) => ({
 });
 
 function harness({ frame = mkFrame(), genDelay = 0, generate = null } = {}) {
-  const log = { xfades: 0, waves: [], stops: [] };
+  const log = { xfades: 0, waves: [], stops: [], growUploads: [], drawIns: 0, drawProgress: [] };
   const conductor = new LiveConductor({
     audio: { getMusicalFrame: () => frame.current ?? frame },
     renderer: {
       setWave: (a, f) => log.waves.push([a, f]),
       setParams: () => {}, setPlaying: () => {}, setLoopPeriod: () => {},
       crossfadeTo: () => { log.xfades++; },
+      setGrowCloud: (p) => { log.growUploads.push(p.length / 3); },
+      drawInTo: () => { log.drawIns++; },
+      setDrawProgress: (t) => { log.drawProgress.push(t); },
     },
     generate: generate ?? (async () => ({ positions: new Float32Array(3), attr: new Float32Array(1), strands: [] })),
     applyStops: (s) => log.stops.push(s),
@@ -206,4 +209,59 @@ test('NoteEventDetector: sustained sound fires every ~0.5s', () => {
   for (let t = 0; t < 2.0; t += 1 / 60) if (d.step(hum, 0, t)) fires.push(t);
   assert.ok(fires.length >= 3 && fires.length <= 5, `got ${fires.length}`);
   for (let i = 1; i < fires.length; i++) assert.ok(fires[i] - fires[i - 1] >= 0.45);
+});
+
+test('grow mode: events request fragments, morph scheduler is off', async () => {
+  let genParams = null;
+  const { conductor, log } = harness({
+    generate: async (fp, p) => {
+      genParams = p;
+      return { positions: new Float32Array(30), attr: new Float32Array(10), strands: [] };
+    },
+  });
+  conductor.setGrowthMode('grow-keep');
+  // settle between tick batches so successive async fragments can land
+  for (let i = 0; i < 90; i++) { conductor.tick(i / 30); if (i % 15 === 14) await settle(); }
+  await settle();
+  assert.equal(log.xfades, 0, 'no crossfade morphs in grow mode');
+  assert.ok(log.growUploads.length >= 2, 'composite uploaded as it grows');
+  assert.ok(genParams.liveVariance === true && genParams.strandCount === 8);
+  assert.ok(genParams.density > 0);
+  for (let i = 1; i < log.growUploads.length; i++) {
+    assert.ok(log.growUploads[i] >= log.growUploads[i - 1]);
+  }
+});
+
+test('grow mode: freeze returns the composite cloud', async () => {
+  const { conductor } = harness({
+    generate: async () => ({ positions: new Float32Array(30), attr: new Float32Array(10), strands: [] }),
+  });
+  conductor.setGrowthMode('grow-fade');
+  for (let i = 0; i < 90; i++) { conductor.tick(i / 30); if (i % 15 === 14) await settle(); }
+  await settle();
+  const out = conductor.freeze();
+  assert.ok(out.cloud, 'freeze exposes the composite');
+  assert.ok(out.cloud.positions.length > 0);
+  assert.equal(out.cloud.positions.length / 3, out.cloud.attr.length);
+});
+
+test('draw-in mode: new design reveals with progress instead of crossfade', async () => {
+  const { conductor, log } = harness();
+  conductor.setGrowthMode('draw-in');
+  for (let i = 0; i < 90; i++) conductor.tick(i / 30);
+  await settle();
+  for (let i = 90; i < 150; i++) conductor.tick(i / 30); // progress advances
+  assert.equal(log.xfades, 0);
+  assert.equal(log.drawIns, 1);
+  assert.ok(log.drawProgress.length > 0);
+  assert.ok(log.drawProgress[log.drawProgress.length - 1] > log.drawProgress[0]);
+});
+
+test('switching back to morph restores crossfades', async () => {
+  const { conductor, log } = harness();
+  conductor.setGrowthMode('grow-keep');
+  conductor.setGrowthMode('morph');
+  for (let i = 0; i < 90; i++) conductor.tick(i / 30);
+  await settle();
+  assert.equal(log.xfades, 1);
 });

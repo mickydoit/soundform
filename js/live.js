@@ -3,6 +3,7 @@
 // worker, palette) is injected — this module is node-testable.
 import { buildFingerprint, buildTrajectory } from './features.js?v=36';
 import { liveTarget, glideStops, stopsToHex } from './livecolor.js?v=36';
+import { GrowComposite, FRAGMENT_POINTS, GROW_MAX_POINTS } from './grow.js?v=36';
 
 export const WINDOW_SEC = 4;
 export const MORPH_CHECK_INTERVAL = 0.75;
@@ -111,6 +112,74 @@ export class LiveConductor {
     this.inFlight = false;
     this.forceNext = false;
     this._lastNow = 0;
+    this.growthMode = 'morph';
+    this.noteEvents = new NoteEventDetector();
+    this.composite = null;
+    this.growGen = 0;            // stale-fragment guard across mode switches/clears
+    this.growInFlight = false;
+    this.lastFadePass = 0;
+    this.drawProgress = 1;
+    this.onGrowStatus = null;
+    this._saidFull = false;
+  }
+
+  setGrowthMode(mode) {
+    this.growthMode = mode;
+    this.growGen++;
+    this.growInFlight = false;
+    this._saidFull = false;
+    this.drawProgress = 1;
+    if (mode === 'grow-fade' || mode === 'grow-keep') {
+      const p = this.getParams();
+      this.composite = new GrowComposite({
+        maxPoints: p.growMaxPoints ?? GROW_MAX_POINTS,
+        fade: mode === 'grow-fade',
+      });
+    } else {
+      this.composite = null;
+    }
+  }
+
+  // Fingerprint of roughly the last 0.9s — the note/word that just happened.
+  eventFingerprint(nowSec) {
+    const recent = this.frames.filter(x => nowSec - x.t <= 0.9).map(x => x.f);
+    const frames = recent.length >= 4 ? recent : this.frames.map(x => x.f);
+    const fp = buildFingerprint(frames, 0.9);
+    fp.trajectory = buildTrajectory(frames);
+    fp.trajectoryChannels = 4;
+    return fp;
+  }
+
+  _growTick(nowSec, f, kick) {
+    const p = this.getParams();
+    // fade housekeeping + weight refresh, ~1×/s
+    if (this.composite.fade && nowSec - this.lastFadePass >= 1 && this.composite.total > 0) {
+      this.lastFadePass = nowSec;
+      this.composite.ageWeights(nowSec);
+      const flat = this.composite.flatten(nowSec);
+      this.renderer.setGrowCloud(flat.positions, flat.attr, flat.weights);
+    }
+    if (!this.noteEvents.step(f, kick, nowSec)) return;
+    if (this.growInFlight) return;
+    if (this.composite.full) {
+      if (!this._saidFull && this.onGrowStatus) { this._saidFull = true; this.onGrowStatus('Design full — freeze or clear'); }
+      return;
+    }
+    this.growInFlight = true;
+    const gen = this.growGen;
+    const fp = this.eventFingerprint(nowSec);
+    this.generate(fp, { mode: p.mode, density: p.fragPoints ?? FRAGMENT_POINTS,
+                        complexity: p.complexity, symmetry: 1, twist: 0,
+                        strandCount: 8, cymStyle: p.cymStyle, liveVariance: true })
+      .then((out) => {
+        this.growInFlight = false;
+        if (!this.running || !out || gen !== this.growGen) return;
+        const flatMode = p.mode === 'cymatics' || p.mode === 'oscillo';
+        if (!this.composite.append(out.positions, out.attr, fp, this._lastNow, flatMode)) return;
+        const flat = this.composite.flatten(this._lastNow);
+        this.renderer.setGrowCloud(flat.positions, flat.attr, flat.weights);
+      })
+      .catch(() => { this.growInFlight = false; });
   }
 
   start() {
@@ -166,6 +235,16 @@ export class LiveConductor {
     this.colour = glideStops(this.colour, liveTarget(this.chromaSmooth, f.centroid), dt);
     this.applyStops(stopsToHex(this.colour));
 
+    // ── growth modes: events grow a composite instead of morphing ──
+    if (this.growthMode === 'grow-fade' || this.growthMode === 'grow-keep') {
+      this._growTick(nowSec, f, kick);
+      return;
+    }
+    if (this.growthMode === 'draw-in' && this.drawProgress < 1) {
+      this.drawProgress = Math.min(1, this.drawProgress + dt * (0.15 + 2.5 * f.rms));
+      this.renderer.setDrawProgress(this.drawProgress);
+    }
+
     // ── structural layer: throttled fingerprint check → crossfade morph ──
     const due = nowSec - this.lastCheck >= MORPH_CHECK_INTERVAL || this.forceNext;
     const allowed = !this.inFlight && nowSec - this.lastMorph >= MORPH_MIN_INTERVAL
@@ -187,7 +266,12 @@ export class LiveConductor {
         if (!this.running || !out) return;
         this.lastMorph = this._lastNow;
         this.shownFp = fp;
-        this.renderer.crossfadeTo(out.positions, out.attr, 1.0);
+        if (this.growthMode === 'draw-in') {
+          this.renderer.drawInTo(out.positions, out.attr);
+          this.drawProgress = 0;
+        } else {
+          this.renderer.crossfadeTo(out.positions, out.attr, 1.0);
+        }
       })
       .catch(() => { this.inFlight = false; });
   }
@@ -205,6 +289,11 @@ export class LiveConductor {
   freeze() {
     if (this.frames.length < LIVE_MIN_FRAMES) return null;
     this.stop();
-    return { fingerprint: this.windowFingerprint(), stops: stopsToHex(this.colour) };
+    const out = { fingerprint: this.windowFingerprint(), stops: stopsToHex(this.colour) };
+    if (this.composite && this.composite.total > 0) {
+      const flat = this.composite.flatten(this._lastNow);
+      out.cloud = { positions: flat.positions, attr: flat.attr };
+    }
+    return out;
   }
 }
