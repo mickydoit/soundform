@@ -1,10 +1,11 @@
-import { mulberry32, finalize, resamplePolyline } from './common.js';
+import { mulberry32, finalize, resamplePolyline, formArchetype } from './common.js';
 
 // Orbital ribbon shells. Each shell is a tilted, harmonically deformed orbit;
 // points scatter in a gaussian tube around it so overlaps build luminous cores.
 // Consonant sound → golden-angle even interleaving; dissonant → seed-clustered tilts.
 export function generate(fp, params, onProgress) {
   const rnd = mulberry32(fp.seed);
+  const arch = params.liveVariance ? formArchetype(fp) : null;
   const k = Math.max(1, Math.round(params.symmetry || 1));
   const N = Math.max(1000, Math.floor(params.density / k));
   const shells = Math.max(6, Math.round(6 + fp.noteCount * 2 + fp.volMean * 10 + params.complexity * 12));
@@ -19,12 +20,32 @@ export function generate(fp, params, onProgress) {
   for (let s = 0; s < shells; s++) {
     const tS = s / Math.max(1, shells - 1);
     const lobes = 2 + (fp.noteSet[s % fp.noteCount] % 3) + Math.round(params.complexity * 2);
-    const baseR = 0.35 + tS * 0.75;
-    const wobble = 0.04 + fp.pitchRange * 0.12;
-    const tiltA = fp.consonance > 0.5 ? s * golden : rnd() * Math.PI * 2;
-    const tiltB = fp.consonance > 0.5 ? tS * Math.PI * 0.8 : rnd() * Math.PI;
+    let baseR = 0.35 + tS * 0.75;
+    let wobble = 0.04 + fp.pitchRange * 0.12;
+    let tiltA = fp.consonance > 0.5 ? s * golden : rnd() * Math.PI * 2;
+    let tiltB = fp.consonance > 0.5 ? tS * Math.PI * 0.8 : rnd() * Math.PI;
+    let tubeMul = 1;
+    let ox = 0, oy = 0, oz = 0;               // shell centre offset (live variants)
+    if (arch && arch.index === 1) {
+      // Asymmetric bloom: golden-angle order broken, shells flung off-centre,
+      // wobble large — a loose organic flower instead of a tight mandala.
+      tiltA = rnd() * Math.PI * 2;
+      tiltB = rnd() * Math.PI;
+      wobble = 0.15 + fp.pitchRange * 0.2 + arch.wildness * 0.25;
+      const off = 0.12 + 0.3 * arch.wildness;
+      ox = (rnd() - 0.5) * 2 * off; oy = (rnd() - 0.5) * off; oz = (rnd() - 0.5) * 2 * off;
+    } else if (arch && arch.index === 2) {
+      // Scattered ring field: thin detached rings drifting through the volume.
+      wobble = 0.02;
+      tiltA = rnd() * Math.PI * 2;
+      tiltB = rnd() * Math.PI;
+      baseR = 0.18 + rnd() * 0.55;
+      const off = 0.25 + 0.45 * arch.wildness;
+      ox = (rnd() - 0.5) * 2 * off; oy = (rnd() - 0.5) * 2 * off; oz = (rnd() - 0.5) * 2 * off;
+      tubeMul = 3 + 4 * arch.wildness;
+    }
     const ca = Math.cos(tiltA), sa = Math.sin(tiltA), cb = Math.cos(tiltB), sb = Math.sin(tiltB);
-    const tube = 0.005 + fp.velocity * 0.008 + tS * 0.003;
+    const tube = (0.005 + fp.velocity * 0.008 + tS * 0.003) * tubeMul;
     const phase = fp.contour[s % 8] * Math.PI * 2;
 
     const orbit = (t) => {
@@ -33,7 +54,7 @@ export function generate(fp, params, onProgress) {
       const x0 = Math.cos(th) * r, y0 = Math.sin(lobes * th * 0.5 + phase) * wobble * 1.6, z0 = Math.sin(th) * r;
       // rotate around Y by tiltA then around X by tiltB
       const x1 = x0 * ca + z0 * sa, z1 = -x0 * sa + z0 * ca;
-      return [x1, y0 * cb - z1 * sb, y0 * sb + z1 * cb];
+      return [ox + x1, oy + (y0 * cb - z1 * sb), oz + (y0 * sb + z1 * cb)];
     };
 
     for (let i = 0; i < perShell; i++) {

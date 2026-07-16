@@ -324,3 +324,27 @@ test('formArchetype: wildness bounded and rises with dissonance', () => {
   assert.ok(calm >= 0 && calm <= 1 && wild >= 0 && wild <= 1);
   assert.ok(wild > calm);
 });
+
+// Shared helper: mean L1 distance between two clouds' radial histograms —
+// a cheap "different shape" metric for the live-variance tests.
+export function shapeDistance(mode, fpA, fpB) {
+  const params = { ...baseParams, mode, density: 15000, liveVariance: true };
+  const a = generate(fpA, params), b = generate(fpB, params);
+  const hist = (out) => {
+    const h = new Float64Array(16); const n = out.positions.length / 3;
+    for (let i = 0; i < n; i++) {
+      const r = Math.hypot(out.positions[i * 3], out.positions[i * 3 + 1], out.positions[i * 3 + 2]);
+      h[Math.min(15, Math.floor(r / 1.5 * 16))] += 1 / n;
+    }
+    return h;
+  };
+  const ha = hist(a), hb = hist(b);
+  let d = 0; for (let i = 0; i < 16; i++) d += Math.abs(ha[i] - hb[i]);
+  return d;
+}
+
+test('radial: live archetypes produce measurably different geometry', () => {
+  assert.ok(shapeDistance('radial', FP_MUSIC(), FP_SPEECH()) > 0.15);
+  assert.ok(shapeDistance('radial', FP_MUSIC(), FP_WHISTLE()) > 0.15);
+  checkGenerator('radial', testFingerprint()); // sanity: no flag still valid
+});
