@@ -154,7 +154,7 @@ export class LiveConductor {
     const p = this.getParams();
     this.generate(fp, { mode: p.mode, density: p.liveDensity, complexity: p.complexity,
                         symmetry: p.symmetry, twist: p.twist, strandCount: 96,
-                        cymStyle: p.cymStyle })
+                        cymStyle: p.cymStyle, liveVariance: true })
       .then((out) => {
         this.inFlight = false;
         if (!this.running || !out) return;

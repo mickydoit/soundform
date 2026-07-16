@@ -62,7 +62,7 @@ const mkFrame = (o = {}) => ({
   ...o,
 });
 
-function harness({ frame = mkFrame(), genDelay = 0 } = {}) {
+function harness({ frame = mkFrame(), genDelay = 0, generate = null } = {}) {
   const log = { xfades: 0, waves: [], stops: [] };
   const conductor = new LiveConductor({
     audio: { getMusicalFrame: () => frame.current ?? frame },
@@ -71,7 +71,7 @@ function harness({ frame = mkFrame(), genDelay = 0 } = {}) {
       setParams: () => {}, setPlaying: () => {}, setLoopPeriod: () => {},
       crossfadeTo: () => { log.xfades++; },
     },
-    generate: async () => ({ positions: new Float32Array(3), attr: new Float32Array(1), strands: [] }),
+    generate: generate ?? (async () => ({ positions: new Float32Array(3), attr: new Float32Array(1), strands: [] })),
     applyStops: (s) => log.stops.push(s),
     getParams: () => ({ mode: 'attractor', complexity: 0.5, symmetry: 1, twist: 0,
                         cymStyle: 'auto', liveDensity: 1000, exposure: 30, scale: 1, grain: 1 }),
@@ -155,4 +155,18 @@ test('fingerprintDelta: steady speech jitter stays under threshold', () => {
   const b = testFingerprint({ consonance: 0.35, centroid: 0.55, spread: 0.4,
                               pitchMedian: 0.47, velocity: 0.45 });
   assert.ok(fingerprintDelta(a, b) < MORPH_THRESHOLD);
+});
+
+test('conductor: structural regen requests carry liveVariance', async () => {
+  let seenParams = null;
+  const { conductor } = harness({
+    generate: async (fp, p) => {
+      seenParams = p;
+      return { positions: new Float32Array(3), attr: new Float32Array(1), strands: [] };
+    },
+  });
+  for (let i = 0; i < 70; i++) conductor.tick(i / 30); // ~2.3s steady sound → 1 morph
+  await new Promise(r => setImmediate(r));
+  assert.ok(seenParams, 'a regen fired');
+  assert.equal(seenParams.liveVariance, true);
 });
