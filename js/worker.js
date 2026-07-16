@@ -1,4 +1,4 @@
-import { generate } from './generators/index.js?v=33';
+import { generate } from './generators/index.js?v=34';
 
 self.onmessage = (e) => {
   const { fingerprint, params } = e.data;

@@ -402,3 +402,46 @@ test('attractor: liveVariance output valid and differs from non-live', () => {
   for (let i = 0; i < m; i += 300) diff += Math.abs(live.positions[i] - base.positions[i]);
   assert.ok(diff > 0.5, 'live coefficients actually shift the trajectory');
 });
+
+// Live attractor variety: speech-like and percussive windows must not
+// collapse into the same sinemap web (root cause of "two designs swapping").
+test('attractor live: percussive vs speech windows differ in shape', () => {
+  const talk = testFingerprint({ pitchConfidence: 0.3, consonance: 0.3, pitchMedian: 0.3,
+                                 centroid: 0.5, spread: 0.45, velocity: 0.5, seed: 111 });
+  const claps = testFingerprint({ pitchConfidence: 0.2, consonance: 0.4, velocity: 0.85,
+                                  centroid: 0.6, spread: 0.5, seed: 666 });
+  assert.ok(shapeDistance('attractor', talk, claps) > 0.15);
+});
+
+test('attractor live: varied windows visit at least 3 systems worth of shapes', () => {
+  // Distinct shapes are a proxy for distinct systems/coefficient regions:
+  // every pair of these five character-varied windows must differ visibly.
+  const fps = [
+    testFingerprint({ pitchConfidence: 0.3, pitchMedian: 0.3, centroid: 0.5, spread: 0.45, consonance: 0.3, velocity: 0.5, seed: 1 }),
+    testFingerprint({ pitchConfidence: 0.9, pitchMedian: 0.7, centroid: 0.3, spread: 0.2, consonance: 0.8, velocity: 0.25, seed: 2 }),
+    testFingerprint({ pitchConfidence: 0.85, pitchMedian: 0.2, centroid: 0.2, spread: 0.15, consonance: 0.7, majorLeaning: false, velocity: 0.2, seed: 3 }),
+    testFingerprint({ pitchConfidence: 0.2, velocity: 0.85, centroid: 0.65, spread: 0.5, consonance: 0.4, seed: 4 }),
+    testFingerprint({ pitchConfidence: 0.9, pitchMedian: 0.55, centroid: 0.45, spread: 0.3, consonance: 0.85, velocity: 0.45, seed: 5 }),
+  ];
+  for (let i = 0; i < fps.length; i++) {
+    for (let j = i + 1; j < fps.length; j++) {
+      assert.ok(shapeDistance('attractor', fps[i], fps[j]) > 0.12,
+        `windows ${i} and ${j} produced near-identical attractors`);
+    }
+  }
+});
+
+test('attractor live: loudness drives size', () => {
+  const quiet = testFingerprint({ volMean: 0.1 });
+  const loud = testFingerprint({ volMean: 0.95 });
+  const r95 = (fp) => {
+    const out = generate(fp, { ...baseParams, density: 15000, liveVariance: true });
+    const radii = [];
+    for (let i = 0; i < out.positions.length; i += 3) {
+      radii.push(Math.hypot(out.positions[i], out.positions[i + 1], out.positions[i + 2]));
+    }
+    radii.sort((a, b) => a - b);
+    return radii[Math.floor(radii.length * 0.95)];
+  };
+  assert.ok(r95(loud) > r95(quiet) * 1.25, 'loud designs should be visibly larger');
+});

@@ -51,6 +51,17 @@ const SYSTEMS = {
   },
 };
 
+// Fine-grained deterministic hash of the fingerprint's continuous channels:
+// tiny sound differences land far apart in [0,1), so live windows sweep the
+// whole system/coefficient space instead of clustering into one or two looks.
+// Seed-free, like formArchetype — the same sound still gives the same design.
+function liveMix(fp) {
+  const x = fp.pitchMedian * 12.9898 + fp.centroid * 78.233 + fp.spread * 37.719
+          + fp.velocity * 53.987 + (fp.consonance ?? 0.5) * 95.4307
+          + (fp.volMean ?? 0.5) * 15.731;
+  return x - Math.floor(x);
+}
+
 export function pickSystem(fp) {
   if (fp.pitchConfidence < 0.35 || fp.velocity > 0.75) return 'sinemap'; // percussive/noisy
   if (fp.consonance > 0.55 && fp.majorLeaning) return fp.noteCount <= 3 ? 'thomas' : 'aizawa';
@@ -141,27 +152,43 @@ function validateOccupancy(out) {
 }
 
 export function generate(fp, params, onProgress) {
-  const name = pickSystem(fp);
-  const sys = SYSTEMS[name];
   const arch = params.liveVariance ? formArchetype(fp) : null;
+  const mix = arch ? liveMix(fp) : 0;
+  // Live: the hash rotates through ALL five systems (character rules collapse
+  // a whole voice session into one or two buckets); capture keeps pickSystem.
+  const names = Object.keys(SYSTEMS);
+  const name = arch ? names[Math.floor(mix * names.length) % names.length] : pickSystem(fp);
+  const sys = SYSTEMS[name];
   const rnd = mulberry32(fp.seed);
   const jitter = fp.velocity * 0.012 * (0.5 + params.complexity) * (arch ? 1 + arch.wildness : 1);
   const k = Math.max(1, Math.round(params.symmetry || 1));
   const N = Math.max(1000, Math.floor(params.density / k));
   const excursion = 0.5 + params.complexity; // complexity widens coefficient excursion
-  const exSpread = arch ? 0.06 * arch.wildness : 0; // live widens the range itself
 
   // Deterministic retry: if the system collapses, nudge fingerprint-projection
   for (let attempt = 0; attempt < 8; attempt++) {
     const fpAdj = attempt === 0 ? fp : { ...fp, pitchMedian: (fp.pitchMedian + attempt * 0.618) % 1, contour: fp.contour.map(v => (v + attempt * 0.618) % 1) };
     const c = sys.coeffs(fpAdj, rnd);
-    if (sys.flow) for (const key of Object.keys(c)) {
-      if (typeof c[key] === 'number' && key !== 'e') {
-        c[key] = c[key] * lerp(0.92 - exSpread, 1.08 + exSpread, ((excursion * 7 + attempt) % 1));
+    if (sys.flow) {
+      let ki = 0;
+      for (const key of Object.keys(c)) {
+        if (typeof c[key] === 'number' && key !== 'e') {
+          ki++;
+          // Live: per-key hash position over a wide range (validation retries
+          // guard the edges); capture keeps the original narrow excursion.
+          const half = arch ? 0.18 + 0.12 * arch.wildness : 0.08;
+          const t = arch ? ((mix * 7.13 + ki * 2.618 + attempt * 0.377) % 1)
+                         : ((excursion * 7 + attempt) % 1);
+          c[key] = c[key] * lerp(1 - half, 1 + half, t);
+        }
       }
     } else if (arch) {
-      // Discrete maps ignore the flow excursion; wildness instead deepens the
-      // cross-coupling folds that shape the sine-map web.
+      // Discrete map: the hash repositions the fold coefficients across their
+      // whole range — percussive input has a flat pitch contour, which
+      // otherwise pins a,b,c to one web — and wildness deepens the coupling.
+      c.a = lerp(1.2, 4.2, (mix * 3.71) % 1);
+      c.b = lerp(1.2, 4.2, (mix * 5.23) % 1);
+      c.c = lerp(1.2, 4.2, (mix * 7.77) % 1);
       const mul = 1 + 0.35 * arch.wildness;
       c.d *= mul; c.e *= mul; c.f *= mul;
     }
@@ -212,6 +239,14 @@ export function generate(fp, params, onProgress) {
     if (!validateFinalized(out)) continue; // fat-tail collapse → retry
     if (!validateStrands(out.strands)) continue; // strand-phase escape → retry
     if (!validateOccupancy(out)) continue; // periodic collapse (limit cycle) → retry
+    if (arch) {
+      // Loudness → physical size: finalize pins r95 = 1 for every design, so
+      // scale after validation (0.7 whisper .. 1.25 loud; maxAbs stays ≤ 2.25,
+      // inside the 2.5 render contract).
+      const s = 0.7 + 0.55 * (fp.volMean ?? 0.5);
+      for (let i = 0; i < out.positions.length; i++) out.positions[i] *= s;
+      for (const st of out.strands) for (let i = 0; i < st.length; i++) st[i] *= s;
+    }
     return out;
   }
   if (arch) return generate(fp, { ...params, liveVariance: false }, onProgress);
