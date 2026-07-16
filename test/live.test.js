@@ -141,3 +141,18 @@ test('freeze with too little sound returns null', () => {
   for (let i = 0; i < 5; i++) conductor.tick(i / 30);
   assert.equal(conductor.freeze(), null);
 });
+
+import { testFingerprint } from './generators.test.js';
+
+test('fingerprintDelta: timbre-only change crosses the morph threshold', () => {
+  const a = testFingerprint({ centroid: 0.2, spread: 0.1 });
+  const b = testFingerprint({ centroid: 0.6, spread: 0.4 }); // same notes/register
+  assert.ok(fingerprintDelta(a, b) >= MORPH_THRESHOLD);
+});
+
+test('fingerprintDelta: steady speech jitter stays under threshold', () => {
+  const a = testFingerprint({ consonance: 0.3, centroid: 0.5, spread: 0.45 });
+  const b = testFingerprint({ consonance: 0.35, centroid: 0.55, spread: 0.4,
+                              pitchMedian: 0.47, velocity: 0.45 });
+  assert.ok(fingerprintDelta(a, b) < MORPH_THRESHOLD);
+});

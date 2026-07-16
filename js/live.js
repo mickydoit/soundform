@@ -60,7 +60,9 @@ export function fingerprintDelta(a, b) {
        + 0.9 * Math.abs(a.pitchMedian - b.pitchMedian)
        + 0.35 * Math.abs(a.consonance - b.consonance)
        + (a.majorLeaning !== b.majorLeaning ? 0.15 : 0)
-       + 0.3 * Math.abs(a.velocity - b.velocity);
+       + 0.3 * Math.abs(a.velocity - b.velocity)
+       + 0.35 * Math.abs((a.centroid ?? 0) - (b.centroid ?? 0))
+       + 0.25 * Math.abs((a.spread ?? 0) - (b.spread ?? 0));
 }
 
 export class LiveConductor {
