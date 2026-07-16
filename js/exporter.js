@@ -1,5 +1,5 @@
-import { projectStrand, rdp, toBezierPath, buildDensityGrid } from './strands.js?v=34';
-import { sampleRamp, rgbToHex } from './palettes.js?v=34';
+import { projectStrand, rdp, toBezierPath, buildDensityGrid } from './strands.js?v=35';
+import { sampleRamp, rgbToHex } from './palettes.js?v=35';
 
 export async function exportCanvas(canvas, format) {
   switch (format) {

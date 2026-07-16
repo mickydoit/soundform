@@ -1,11 +1,11 @@
-import { AudioEngine } from './audio.js?v=34';
-import { buildFingerprint, buildTrajectory } from './features.js?v=34';
-import { DensityRenderer } from './density.js?v=34';
-import { PALETTES, buildLUT, customRamp, hexToRgb } from './palettes.js?v=34';
-import { exportCanvas, exportStrandSVG, framePlan, exportMP4, loopsForDuration } from './exporter.js?v=34';
-import { motionParams, displacePoint } from './motion.js?v=34';
-import { LiveConductor } from './live.js?v=34';
-import { LiveRecorder, MAX_RECORD_SEC } from './recorder.js?v=34';
+import { AudioEngine } from './audio.js?v=35';
+import { buildFingerprint, buildTrajectory } from './features.js?v=35';
+import { DensityRenderer } from './density.js?v=35';
+import { PALETTES, buildLUT, customRamp, hexToRgb } from './palettes.js?v=35';
+import { exportCanvas, exportStrandSVG, framePlan, exportMP4, loopsForDuration } from './exporter.js?v=35';
+import { motionParams, displacePoint } from './motion.js?v=35';
+import { LiveConductor } from './live.js?v=35';
+import { LiveRecorder, MAX_RECORD_SEC } from './recorder.js?v=35';
 
 const audio = new AudioEngine();
 let renderer = null;
@@ -110,7 +110,7 @@ function regenerate() {
     setStatus('Design created — drag to rotate · adjust sliders');
   };
   try {
-    if (!worker) worker = new Worker('js/worker.js?v=34', { type: 'module' });
+    if (!worker) worker = new Worker('js/worker.js?v=35', { type: 'module' });
     worker.onmessage = (e) => {
       if (e.data.progress !== undefined) setStatus(`Generating… ${Math.round(e.data.progress * 100)}%`);
       else if (e.data.error) setStatus(`Generation error: ${e.data.error}`);
@@ -124,7 +124,7 @@ function regenerate() {
 }
 
 async function fallbackGenerate(onResult) {
-  const { generate } = await import('./generators/index.js?v=34');
+  const { generate } = await import('./generators/index.js?v=35');
   onResult(generate(fingerprint, { ...params, strandCount: 96 }));
 }
 
@@ -133,7 +133,7 @@ async function fallbackGenerate(onResult) {
 function workerGenerate(fingerprint, params) {
   return new Promise((resolve) => {
     try {
-      if (!liveWorker) liveWorker = new Worker('js/worker.js?v=34', { type: 'module' });
+      if (!liveWorker) liveWorker = new Worker('js/worker.js?v=35', { type: 'module' });
       liveWorker.onmessage = (e) => {
         if (e.data.done) resolve(e.data);
         else if (e.data.error) resolve(null);
@@ -147,7 +147,7 @@ function workerGenerate(fingerprint, params) {
 async function liveGenerate(fp, p) {
   const out = await workerGenerate(fp, p);
   if (out) return out;
-  const { generate } = await import('./generators/index.js?v=34');
+  const { generate } = await import('./generators/index.js?v=35');
   return generate(fp, p);
 }
 
@@ -251,6 +251,28 @@ function bindAudio() {
     });
   });
 
+  document.getElementById('btn-video-export').addEventListener('click', async () => {
+    if (!recorder || !recorder.hasMaster) return;
+    if (videoBusy) { videoCancel = true; setStatus('Cancelling…'); return; }
+    videoBusy = true; videoCancel = false;
+    const preset = document.getElementById('sel-video-quality').value;
+    try {
+      const ok = await recorder.exportAt(preset, {
+        onProgress: (p) => setStatus(`Video export ${Math.round(p * 100)}% — Export again to cancel`),
+        shouldCancel: () => videoCancel,
+      });
+      setStatus(ok ? 'Video saved' : 'Video export cancelled');
+    } catch (e) {
+      setStatus(`Video export error: ${e.message}`);
+    } finally { videoBusy = false; }
+  });
+
+  document.getElementById('btn-video-discard').addEventListener('click', () => {
+    if (recorder) recorder.discard();
+    hideVideoReady();
+    if (appState === 'live') setStatus('Live — listening');
+  });
+
   fileInput.addEventListener('change', async () => {
     const file = fileInput.files[0];
     if (!file) return;
@@ -318,6 +340,7 @@ function bindAudio() {
   clearBtn.addEventListener('click', () => {
     stopLive();
     if (recorder) recorder.discard();
+    hideVideoReady();
     document.getElementById('btn-live').classList.remove('hidden');
     fingerprint = null; design = null; frames = [];
     appState = 'blank';
@@ -363,7 +386,21 @@ async function stopRecording() {
   showVideoReady();
 }
 
-function showVideoReady() {}   // replaced by the video-ready panel task
+let videoBusy = false, videoCancel = false;
+
+function showVideoReady() {
+  if (!recorder || !recorder.hasMaster) return;
+  const sel = document.getElementById('sel-video-quality');
+  sel.innerHTML = '';
+  for (const p of recorder.availableQualities()) {
+    sel.appendChild(Object.assign(document.createElement('option'), { value: p.id, textContent: p.label }));
+  }
+  document.getElementById('video-ready').classList.remove('hidden');
+}
+
+function hideVideoReady() {
+  document.getElementById('video-ready').classList.add('hidden');
+}
 
 function enterRecording(btnStop) {
   appState = 'recording';

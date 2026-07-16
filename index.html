@@ -7,7 +7,7 @@
   <meta http-equiv="Pragma" content="no-cache">
   <meta http-equiv="Expires" content="0">
   <title>Soundform — Audio Design Tool</title>
-  <link rel="stylesheet" href="style.css?v=34">
+  <link rel="stylesheet" href="style.css?v=35">
 </head>
 <body>
 <div id="app">
@@ -58,6 +58,14 @@
         <div id="vu-fill"></div>
       </div>
       <div id="vu-label">MIC</div>
+    </div>
+
+    <!-- Video recording review: export the last take at any quality -->
+    <div id="video-ready" class="hidden">
+      <span class="vr-label">Video ready</span>
+      <select id="sel-video-quality"></select>
+      <button id="btn-video-export" class="vr-btn">Export</button>
+      <button id="btn-video-discard" class="vr-btn vr-discard">Discard</button>
     </div>
   </div>
 
@@ -177,6 +185,6 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r134/three.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <script src="js/vendor/mp4-muxer.min.js"></script>
-<script type="module" src="js/main.js?v=34"></script>
+<script type="module" src="js/main.js?v=35"></script>
 </body>
 </html>
