@@ -170,3 +170,40 @@ test('conductor: structural regen requests carry liveVariance', async () => {
   assert.ok(seenParams, 'a regen fired');
   assert.equal(seenParams.liveVariance, true);
 });
+
+import { NoteEventDetector } from '../js/live.js';
+
+test('NoteEventDetector: silence never fires', () => {
+  const d = new NoteEventDetector();
+  const quiet = mkFrame({ rms: 0.001 });
+  for (let i = 0; i < 120; i++) assert.equal(d.step(quiet, 0, i / 60), false);
+});
+
+test('NoteEventDetector: onset fires, then throttles 250ms', () => {
+  const d = new NoteEventDetector();
+  const f = mkFrame();
+  assert.equal(d.step(f, 1, 1.0), true);    // kick
+  assert.equal(d.step(f, 1, 1.1), false);   // inside throttle
+  assert.equal(d.step(f, 1, 1.3), true);    // past throttle
+});
+
+test('NoteEventDetector: a new held pitch class fires once', () => {
+  const d = new NoteEventDetector();
+  const c = mkFrame();                       // chroma peak at C (index 0)
+  d.step(c, 1, 0);                           // initial onset event at t=0
+  for (let t = 0.05; t < 0.3; t += 0.05) d.step(c, 0, t); // same note held
+  const eChroma = new Float32Array(12); eChroma[4] = 1;
+  const e = mkFrame({ chroma: eChroma });
+  d.step(e, 0, 0.30);                        // new note appears
+  assert.equal(d.step(e, 0, 0.35), false);   // held 0.05s — not yet
+  assert.equal(d.step(e, 0, 0.43), true);    // held ≥0.12s → fires
+});
+
+test('NoteEventDetector: sustained sound fires every ~0.5s', () => {
+  const d = new NoteEventDetector();
+  const hum = mkFrame({ pitchConf: 0.3 });   // unvoiced hum: no note events
+  const fires = [];
+  for (let t = 0; t < 2.0; t += 1 / 60) if (d.step(hum, 0, t)) fires.push(t);
+  assert.ok(fires.length >= 3 && fires.length <= 5, `got ${fires.length}`);
+  for (let i = 1; i < fires.length; i++) assert.ok(fires[i] - fires[i - 1] >= 0.45);
+});

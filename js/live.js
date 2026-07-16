@@ -42,6 +42,33 @@ export class KickDetector {
   }
 }
 
+// Growth events: one per note/word-ish sound moment. Fires on an onset (the
+// kick detector), on a NEW dominant pitch class held ≥120ms (a fresh note or
+// vowel), and every 500ms of continuous sound (held notes keep adding).
+// Events are ≥250ms apart; silence resets the sustain clock.
+export class NoteEventDetector {
+  constructor() {
+    this.lastEvent = -Infinity;
+    this.lastPc = -1;
+    this.pcSince = -Infinity;
+    this.soundSince = null;
+  }
+  step(f, kickValue, nowSec) {
+    if (f.rms <= SILENCE_RMS) { this.soundSince = null; return false; }
+    if (this.soundSince === null) this.soundSince = nowSec;
+    let fire = kickValue === 1;
+    if (f.pitchConf > 0.5) {
+      let pc = 0;
+      for (let i = 1; i < 12; i++) if (f.chroma[i] > f.chroma[pc]) pc = i;
+      if (pc !== this.lastPc) { this.lastPc = pc; this.pcSince = nowSec; }
+      else if (nowSec - this.pcSince >= 0.12 && this.pcSince > this.lastEvent) fire = true;
+    }
+    if (nowSec - Math.max(this.lastEvent, this.soundSince) >= 0.5) fire = true;
+    if (fire && nowSec - this.lastEvent >= 0.25) { this.lastEvent = nowSec; return true; }
+    return false;
+  }
+}
+
 export function trimWindow(frames, nowSec, windowSec = WINDOW_SEC) {
   while (frames.length && nowSec - frames[0].t > windowSec) frames.shift();
   return frames;
