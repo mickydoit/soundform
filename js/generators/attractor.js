@@ -1,4 +1,4 @@
-import { mulberry32, finalize, resamplePolyline } from './common.js';
+import { mulberry32, finalize, resamplePolyline, formArchetype } from './common.js';
 
 // Five systems. Harmony class + noteCount pick the system; pitch sets
 // coefficients inside pre-validated chaotic ranges; velocity adds turbulence.
@@ -143,18 +143,27 @@ function validateOccupancy(out) {
 export function generate(fp, params, onProgress) {
   const name = pickSystem(fp);
   const sys = SYSTEMS[name];
+  const arch = params.liveVariance ? formArchetype(fp) : null;
   const rnd = mulberry32(fp.seed);
-  const jitter = fp.velocity * 0.012 * (0.5 + params.complexity); // turbulence
+  const jitter = fp.velocity * 0.012 * (0.5 + params.complexity) * (arch ? 1 + arch.wildness : 1);
   const k = Math.max(1, Math.round(params.symmetry || 1));
   const N = Math.max(1000, Math.floor(params.density / k));
   const excursion = 0.5 + params.complexity; // complexity widens coefficient excursion
+  const exSpread = arch ? 0.06 * arch.wildness : 0; // live widens the range itself
 
   // Deterministic retry: if the system collapses, nudge fingerprint-projection
   for (let attempt = 0; attempt < 8; attempt++) {
     const fpAdj = attempt === 0 ? fp : { ...fp, pitchMedian: (fp.pitchMedian + attempt * 0.618) % 1, contour: fp.contour.map(v => (v + attempt * 0.618) % 1) };
     const c = sys.coeffs(fpAdj, rnd);
     if (sys.flow) for (const key of Object.keys(c)) {
-      if (typeof c[key] === 'number' && key !== 'e') c[key] = c[key] * lerp(0.92, 1.08, ((excursion * 7 + attempt) % 1));
+      if (typeof c[key] === 'number' && key !== 'e') {
+        c[key] = c[key] * lerp(0.92 - exSpread, 1.08 + exSpread, ((excursion * 7 + attempt) % 1));
+      }
+    } else if (arch) {
+      // Discrete maps ignore the flow excursion; wildness instead deepens the
+      // cross-coupling folds that shape the sine-map web.
+      const mul = 1 + 0.35 * arch.wildness;
+      c.d *= mul; c.e *= mul; c.f *= mul;
     }
 
     const positions = new Float32Array(N * 3);
@@ -205,5 +214,6 @@ export function generate(fp, params, onProgress) {
     if (!validateOccupancy(out)) continue; // periodic collapse (limit cycle) → retry
     return out;
   }
+  if (arch) return generate(fp, { ...params, liveVariance: false }, onProgress);
   throw new Error('attractor: all retries degenerate');
 }

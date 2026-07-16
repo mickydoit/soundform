@@ -387,3 +387,18 @@ test('cymatics: live auto style follows the sound character', () => {
   const forced = generate(FP_SPEECH(), { ...params, cymStyle: 'relief' });
   assert.ok(ySpan(forced) > ySpan(sandy), 'explicit cymStyle overrides archetype');
 });
+
+test('attractor: liveVariance output valid and differs from non-live', () => {
+  const fp = FP_SPEECH(); // high wildness
+  const live = generate(fp, { ...baseParams, density: 15000, liveVariance: true });
+  const base = generate(fp, { ...baseParams, density: 15000 });
+  let maxAbs = 0, s = 0;
+  const n = live.positions.length / 3;
+  for (let i = 0; i < live.positions.length; i++) maxAbs = Math.max(maxAbs, Math.abs(live.positions[i]));
+  for (let i = 0; i < n; i++) s += live.positions[i * 3] ** 2 / n;
+  assert.ok(maxAbs <= 2.5 && Math.sqrt(s) > 0.05, 'live attractor stays valid');
+  let diff = 0;
+  const m = Math.min(live.positions.length, base.positions.length);
+  for (let i = 0; i < m; i += 300) diff += Math.abs(live.positions[i] - base.positions[i]);
+  assert.ok(diff > 0.5, 'live coefficients actually shift the trajectory');
+});
