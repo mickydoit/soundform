@@ -29,13 +29,16 @@ User decisions:
 - Capture, record, and upload paths never set the flag; their output is
   unchanged (pinned by a snapshot test).
 
-### 2. Archetype selector — `formArchetype(fp, n)` in `js/generators/common.js`
+### 2. Archetype selector — `formArchetype(fp)` in `js/generators/common.js`
 
-Returns `{ index, wildness }`.
+Returns `{ index, wildness }`. (Every mode has exactly three archetypes, so
+the selector is a fixed 3-way bucket — no `n` parameter.)
 
-- **`index` (0 … n−1):** buckets a deterministic blend of **timbre + harmony**
-  — centroid, spread, consonance, velocity, pitchMedian — into one of the
-  mode's `n` archetypes. Driven by sound character, **not** `fp.seed`: a steady
+- **`index` (0 tonal-smooth · 1 bright-piercing · 2 rough-noisy):** picks the
+  strongest of three character scores blended from **timbre + harmony**
+  — centroid, spread, consonance, velocity, pitchMedian. Each generator maps
+  the three characters onto its three forms. Driven by sound character,
+  **not** `fp.seed`: a steady
   sound keeps its archetype across successive morphs; speech vs whistle vs
   music land in different archetypes.
 - **`wildness` (0–1):** continuous range-widener from dissonance
