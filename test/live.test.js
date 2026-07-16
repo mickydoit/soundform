@@ -62,22 +62,23 @@ const mkFrame = (o = {}) => ({
   ...o,
 });
 
-function harness({ frame = mkFrame(), genDelay = 0, generate = null } = {}) {
-  const log = { xfades: 0, waves: [], stops: [], growUploads: [], drawIns: 0, drawProgress: [] };
+function harness({ frame = mkFrame(), genDelay = 0, generate = null, getParams = null } = {}) {
+  const log = { xfades: 0, waves: [], stops: [], paintBegun: 0, paintWrites: [], paintCounts: [] };
   const conductor = new LiveConductor({
     audio: { getMusicalFrame: () => frame.current ?? frame },
     renderer: {
       setWave: (a, f) => log.waves.push([a, f]),
       setParams: () => {}, setPlaying: () => {}, setLoopPeriod: () => {},
       crossfadeTo: () => { log.xfades++; },
-      setGrowCloud: (p) => { log.growUploads.push(p.length / 3); },
-      drawInTo: () => { log.drawIns++; },
-      setDrawProgress: (t) => { log.drawProgress.push(t); },
+      beginPaint: (m) => { log.paintBegun = m; },
+      writePaintPoints: (o, p) => { log.paintWrites.push([o, p.length / 3]); },
+      setPaintCount: (n) => { log.paintCounts.push(n); },
+      getPaintSlice: (n) => ({ positions: new Float32Array(n * 3), attr: new Float32Array(n) }),
     },
     generate: generate ?? (async () => ({ positions: new Float32Array(3), attr: new Float32Array(1), strands: [] })),
     applyStops: (s) => log.stops.push(s),
-    getParams: () => ({ mode: 'attractor', complexity: 0.5, symmetry: 1, twist: 0,
-                        cymStyle: 'auto', liveDensity: 1000, exposure: 30, scale: 1, grain: 1 }),
+    getParams: getParams ?? (() => ({ mode: 'attractor', complexity: 0.5, symmetry: 1, twist: 0,
+                        cymStyle: 'auto', liveDensity: 1000, exposure: 30, scale: 1, grain: 1 })),
   });
   return { conductor, log };
 }
@@ -174,94 +175,68 @@ test('conductor: structural regen requests carry liveVariance', async () => {
   assert.equal(seenParams.liveVariance, true);
 });
 
-import { NoteEventDetector } from '../js/live.js';
 
-test('NoteEventDetector: silence never fires', () => {
-  const d = new NoteEventDetector();
-  const quiet = mkFrame({ rms: 0.001 });
-  for (let i = 0; i < 120; i++) assert.equal(d.step(quiet, 0, i / 60), false);
-});
-
-test('NoteEventDetector: onset fires, then throttles 250ms', () => {
-  const d = new NoteEventDetector();
-  const f = mkFrame();
-  assert.equal(d.step(f, 1, 1.0), true);    // kick
-  assert.equal(d.step(f, 1, 1.1), false);   // inside throttle
-  assert.equal(d.step(f, 1, 1.3), true);    // past throttle
-});
-
-test('NoteEventDetector: a new held pitch class fires once', () => {
-  const d = new NoteEventDetector();
-  const c = mkFrame();                       // chroma peak at C (index 0)
-  d.step(c, 1, 0);                           // initial onset event at t=0
-  for (let t = 0.05; t < 0.3; t += 0.05) d.step(c, 0, t); // same note held
-  const eChroma = new Float32Array(12); eChroma[4] = 1;
-  const e = mkFrame({ chroma: eChroma });
-  d.step(e, 0, 0.30);                        // new note appears
-  assert.equal(d.step(e, 0, 0.35), false);   // held 0.05s — not yet
-  assert.equal(d.step(e, 0, 0.43), true);    // held ≥0.12s → fires
-});
-
-test('NoteEventDetector: sustained sound fires every ~0.5s', () => {
-  const d = new NoteEventDetector();
-  const hum = mkFrame({ pitchConf: 0.3 });   // unvoiced hum: no note events
-  const fires = [];
-  for (let t = 0; t < 2.0; t += 1 / 60) if (d.step(hum, 0, t)) fires.push(t);
-  assert.ok(fires.length >= 3 && fires.length <= 5, `got ${fires.length}`);
-  for (let i = 1; i < fires.length; i++) assert.ok(fires[i] - fires[i - 1] >= 0.45);
-});
-
-test('grow mode: events request fragments, morph scheduler is off', async () => {
-  let genParams = null;
-  const { conductor, log } = harness({
-    generate: async (fp, p) => {
-      genParams = p;
-      return { positions: new Float32Array(30), attr: new Float32Array(10), strands: [] };
-    },
-  });
-  conductor.setGrowthMode('grow-keep');
-  // settle between tick batches so successive async fragments can land
-  for (let i = 0; i < 90; i++) { conductor.tick(i / 30); if (i % 15 === 14) await settle(); }
+test('paint (attractor): sound advances the brush, silence rests it', async () => {
+  const frame = { current: mkFrame() };
+  const { conductor, log } = harness({ frame });
+  conductor.setGrowthMode('paint');
+  for (let i = 0; i < 90; i++) conductor.tick(i / 30);   // 3s of sound
   await settle();
-  assert.equal(log.xfades, 0, 'no crossfade morphs in grow mode');
-  assert.ok(log.growUploads.length >= 2, 'composite uploaded as it grows');
-  assert.ok(genParams.liveVariance === true && genParams.strandCount === 8);
-  assert.ok(genParams.density > 0);
-  for (let i = 1; i < log.growUploads.length; i++) {
-    assert.ok(log.growUploads[i] >= log.growUploads[i - 1]);
-  }
+  assert.equal(log.xfades, 0, 'no crossfades in paint mode');
+  assert.ok(log.paintBegun > 0, 'paint buffer allocated');
+  assert.ok(log.paintWrites.length > 0, 'brush wrote points');
+  const painted = log.paintCounts[log.paintCounts.length - 1];
+  assert.ok(painted > 1000, `painted ${painted} points in 3s of sound`);
+  // silence: the brush rests
+  frame.current = mkFrame({ rms: 0.001, pitchConf: 0, flux: 0 });
+  const before = painted;
+  for (let i = 90; i < 210; i++) conductor.tick(i / 30); // 4s of silence
+  const after = log.paintCounts[log.paintCounts.length - 1];
+  assert.ok(after - before < 3500, 'brush rests in silence (bounded release tail)');
 });
 
-test('grow mode: freeze returns the composite cloud', async () => {
-  const { conductor } = harness({
-    generate: async () => ({ positions: new Float32Array(30), attr: new Float32Array(10), strands: [] }),
-  });
-  conductor.setGrowthMode('grow-fade');
-  for (let i = 0; i < 90; i++) { conductor.tick(i / 30); if (i % 15 === 14) await settle(); }
+test('paint: completion fires the status once and stops', async () => {
+  const { conductor, log } = harness();
+  const statuses = [];
+  conductor.onGrowStatus = (m) => statuses.push(m);
+  conductor.setGrowthMode('paint');
+  conductor.paintMax = 3000;                       // small canvas for the test
+  for (let i = 0; i < 240; i++) conductor.tick(i / 30);
+  await settle();
+  const painted = log.paintCounts[log.paintCounts.length - 1];
+  assert.ok(painted <= 3000);
+  assert.equal(statuses.filter(s => /complete/i.test(s)).length, 1);
+});
+
+test('paint: freeze returns the painted cloud', async () => {
+  const { conductor } = harness();
+  conductor.setGrowthMode('paint');
+  for (let i = 0; i < 90; i++) conductor.tick(i / 30);
   await settle();
   const out = conductor.freeze();
-  assert.ok(out.cloud, 'freeze exposes the composite');
+  assert.ok(out.cloud);
   assert.ok(out.cloud.positions.length > 0);
-  assert.equal(out.cloud.positions.length / 3, out.cloud.attr.length);
 });
 
-test('draw-in mode: new design reveals with progress instead of crossfade', async () => {
-  const { conductor, log } = harness();
-  conductor.setGrowthMode('draw-in');
-  for (let i = 0; i < 90; i++) conductor.tick(i / 30);
+test('paint (non-attractor): reveal requests a full design then advances', async () => {
+  let genCount = 0, genParams = null;
+  const { conductor, log } = harness({
+    generate: async (fp, p) => {
+      genCount++; genParams = p;
+      const n = p.density;
+      return { positions: new Float32Array(n * 3), attr: new Float32Array(n), strands: [] };
+    },
+    getParams: () => ({ mode: 'radial', complexity: 0.5, symmetry: 1, twist: 0,
+                        cymStyle: 'auto', liveDensity: 1000, paintMaxPoints: 5000,
+                        exposure: 30, scale: 1, grain: 1 }),
+  });
+  conductor.setGrowthMode('paint');
+  for (let i = 0; i < 90; i++) { conductor.tick(i / 30); if (i % 15 === 14) await settle(); }
   await settle();
-  for (let i = 90; i < 150; i++) conductor.tick(i / 30); // progress advances
+  assert.equal(genCount, 1, 'one full design requested');
+  assert.equal(genParams.density, 5000);
+  assert.equal(genParams.liveVariance, true);
+  assert.ok(log.paintWrites.some(([o]) => o === 0), 'design written at offset 0');
+  assert.ok(log.paintCounts[log.paintCounts.length - 1] > 500, 'reveal advanced');
   assert.equal(log.xfades, 0);
-  assert.equal(log.drawIns, 1);
-  assert.ok(log.drawProgress.length > 0);
-  assert.ok(log.drawProgress[log.drawProgress.length - 1] > log.drawProgress[0]);
-});
-
-test('switching back to morph restores crossfades', async () => {
-  const { conductor, log } = harness();
-  conductor.setGrowthMode('grow-keep');
-  conductor.setGrowthMode('morph');
-  for (let i = 0; i < 90; i++) conductor.tick(i / 30);
-  await settle();
-  assert.equal(log.xfades, 1);
 });

@@ -3,7 +3,8 @@
 // worker, palette) is injected — this module is node-testable.
 import { buildFingerprint, buildTrajectory } from './features.js?v=37';
 import { liveTarget, glideStops, stopsToHex } from './livecolor.js?v=37';
-import { GrowComposite, FRAGMENT_POINTS, GROW_MAX_POINTS } from './grow.js?v=37';
+import { BrushPace, PAINT_MAX_POINTS } from './paint.js?v=37';
+import { createOrbitBrush } from './generators/attractor.js?v=37';
 
 export const WINDOW_SEC = 4;
 export const MORPH_CHECK_INTERVAL = 0.75;
@@ -40,33 +41,6 @@ export class KickDetector {
       if (flux > mean + 1.5 * std && flux > 0.001) { this.value = 1; this.refractory = 0.15; }
     }
     return this.value;
-  }
-}
-
-// Growth events: one per note/word-ish sound moment. Fires on an onset (the
-// kick detector), on a NEW dominant pitch class held ≥120ms (a fresh note or
-// vowel), and every 500ms of continuous sound (held notes keep adding).
-// Events are ≥250ms apart; silence resets the sustain clock.
-export class NoteEventDetector {
-  constructor() {
-    this.lastEvent = -Infinity;
-    this.lastPc = -1;
-    this.pcSince = -Infinity;
-    this.soundSince = null;
-  }
-  step(f, kickValue, nowSec) {
-    if (f.rms <= SILENCE_RMS) { this.soundSince = null; return false; }
-    if (this.soundSince === null) this.soundSince = nowSec;
-    let fire = kickValue === 1;
-    if (f.pitchConf > 0.5) {
-      let pc = 0;
-      for (let i = 1; i < 12; i++) if (f.chroma[i] > f.chroma[pc]) pc = i;
-      if (pc !== this.lastPc) { this.lastPc = pc; this.pcSince = nowSec; }
-      else if (nowSec - this.pcSince >= 0.12 && this.pcSince > this.lastEvent) fire = true;
-    }
-    if (nowSec - Math.max(this.lastEvent, this.soundSince) >= 0.5) fire = true;
-    if (fire && nowSec - this.lastEvent >= 0.25) { this.lastEvent = nowSec; return true; }
-    return false;
   }
 }
 
@@ -113,73 +87,114 @@ export class LiveConductor {
     this.forceNext = false;
     this._lastNow = 0;
     this.growthMode = 'morph';
-    this.noteEvents = new NoteEventDetector();
-    this.composite = null;
-    this.growGen = 0;            // stale-fragment guard across mode switches/clears
-    this.growInFlight = false;
-    this.lastFadePass = 0;
-    this.drawProgress = 1;
+    this.growGen = 0;            // stale-generation guard across mode switches/clears
     this.onGrowStatus = null;
-    this._saidFull = false;
+    this.paint = null;           // { pace, brush, count, revealTotal, pendingGen, retried, done, begun }
+    this.paintMax = null;        // test override; otherwise getParams/paint default
+  }
+
+  forceMorph() {
+    if (this.growthMode === 'paint') { this.setGrowthMode('paint'); return; }
+    this.forceNext = true;
   }
 
   setGrowthMode(mode) {
     this.growthMode = mode;
     this.growGen++;
-    this.growInFlight = false;
-    this._saidFull = false;
-    this.drawProgress = 1;
-    if (mode === 'grow-fade' || mode === 'grow-keep') {
-      const p = this.getParams();
-      this.composite = new GrowComposite({
-        maxPoints: p.growMaxPoints ?? GROW_MAX_POINTS,
-        fade: mode === 'grow-fade',
-      });
-    } else {
-      this.composite = null;
-    }
+    this.paint = mode === 'paint'
+      ? { pace: new BrushPace(), brush: null, count: 0, revealTotal: 0,
+          pendingGen: false, retried: false, done: false, begun: false }
+      : null;
   }
 
-  // Fingerprint of roughly the last 0.9s — the note/word that just happened.
-  eventFingerprint(nowSec) {
-    const recent = this.frames.filter(x => nowSec - x.t <= 0.9).map(x => x.f);
-    const frames = recent.length >= 4 ? recent : this.frames.map(x => x.f);
-    const fp = buildFingerprint(frames, 0.9);
-    fp.trajectory = buildTrajectory(frames);
-    fp.trajectoryChannels = 4;
-    return fp;
-  }
-
-  _growTick(nowSec, f, kick) {
+  _paintTick(nowSec, f, kick, dt) {
     const p = this.getParams();
-    // fade housekeeping + weight refresh, ~1×/s
-    if (this.composite.fade && nowSec - this.lastFadePass >= 1 && this.composite.total > 0) {
-      this.lastFadePass = nowSec;
-      this.composite.ageWeights(nowSec);
-      const flat = this.composite.flatten(nowSec);
-      this.renderer.setGrowCloud(flat.positions, flat.attr, flat.weights);
-    }
-    if (!this.noteEvents.step(f, kick, nowSec)) return;
-    if (this.growInFlight) return;
-    if (this.composite.full) {
-      if (!this._saidFull && this.onGrowStatus) { this._saidFull = true; this.onGrowStatus('Design full — freeze or clear'); }
+    const max = this.paintMax ?? p.paintMaxPoints ?? PAINT_MAX_POINTS;
+    const st = this.paint;
+
+    // Start the canvas once we have enough sound to fingerprint.
+    if (!st.begun) {
+      if (this.frames.length < LIVE_MIN_FRAMES) return;
+      const meanRms = this.frames.reduce((a, x) => a + x.f.rms, 0) / this.frames.length;
+      if (meanRms < SILENCE_RMS) return;
+      const fp = this.windowFingerprint();
+      st.begun = true;
+      this.renderer.beginPaint(max);
+      this.shownFp = fp;
+      if (p.mode === 'attractor') {
+        st.brush = createOrbitBrush(fp, { complexity: p.complexity });
+      } else {
+        this._requestReveal(fp, p, max, 0);
+      }
       return;
     }
-    this.growInFlight = true;
+
+    // Advance the brush.
+    const k = st.pace.pointsThisFrame(f.rms, kick, dt);
+    if (k > 0 && !st.done) {
+      if (st.brush) {
+        const take = Math.min(k, max - st.count);
+        if (take > 0) {
+          const chunk = st.brush.next(take, dt);
+          this.renderer.writePaintPoints(st.count, chunk.positions, chunk.attr);
+          st.count += take;
+          this.renderer.setPaintCount(st.count);
+        }
+      } else if (st.revealTotal > 0) {
+        st.count = Math.min(st.count + k, st.revealTotal);
+        this.renderer.setPaintCount(st.count);
+      }
+      const target = st.brush ? max : (st.revealTotal || max);
+      if (st.count >= target && !st.done) {
+        st.done = true;
+        if (this.onGrowStatus) this.onGrowStatus('Painting complete — freeze or clear');
+      }
+    }
+
+    // Steering: reuse the morph scheduler's cadence and threshold.
+    const due = nowSec - this.lastCheck >= MORPH_CHECK_INTERVAL;
+    const allowed = nowSec - this.lastMorph >= MORPH_MIN_INTERVAL
+                 && this.frames.length >= LIVE_MIN_FRAMES && !st.done;
+    if (!due || !allowed) return;
+    this.lastCheck = nowSec;
+    const meanRms = this.frames.reduce((a, x) => a + x.f.rms, 0) / this.frames.length;
+    if (meanRms < SILENCE_RMS) return;
+    const fp = this.windowFingerprint();
+    if (fingerprintDelta(fp, this.shownFp) < MORPH_THRESHOLD) return;
+    this.lastMorph = nowSec;
+    this.shownFp = fp;
+    if (st.brush) {
+      st.brush.steer(fp);                       // ribbons bend from here on
+    } else if (!st.pendingGen) {
+      this._requestReveal(fp, p, max, st.count); // repaint the unpainted remainder
+    }
+  }
+
+  // Full-resolution design for reveal painting; spliceFrom = painted count
+  // whose strokes must be preserved (0 = fresh canvas).
+  _requestReveal(fp, p, max, spliceFrom) {
+    const st = this.paint;
+    st.pendingGen = true;
     const gen = this.growGen;
-    const fp = this.eventFingerprint(nowSec);
-    this.generate(fp, { mode: p.mode, density: p.fragPoints ?? FRAGMENT_POINTS,
-                        complexity: p.complexity, symmetry: 1, twist: 0,
-                        strandCount: 8, cymStyle: p.cymStyle, liveVariance: true })
+    this.generate(fp, { mode: p.mode, density: max, complexity: p.complexity,
+                        symmetry: p.symmetry, twist: p.twist, strandCount: 8,
+                        cymStyle: p.cymStyle, liveVariance: true })
       .then((out) => {
-        this.growInFlight = false;
-        if (!this.running || !out || gen !== this.growGen) return;
-        const flatMode = p.mode === 'cymatics' || p.mode === 'oscillo';
-        if (!this.composite.append(out.positions, out.attr, fp, this._lastNow, flatMode)) return;
-        const flat = this.composite.flatten(this._lastNow);
-        this.renderer.setGrowCloud(flat.positions, flat.attr, flat.weights);
+        st.pendingGen = false;
+        if (!this.running || gen !== this.growGen) return;
+        if (!out) {
+          if (!st.retried) { st.retried = true; this._requestReveal(fp, p, max, spliceFrom); }
+          else if (this.onGrowStatus) this.onGrowStatus('Paint: generation failed — keep making sound to retry');
+          return;
+        }
+        st.retried = false;
+        const total = out.attr.length;
+        const from = Math.min(spliceFrom, total);
+        this.renderer.writePaintPoints(from,
+          out.positions.subarray(from * 3), out.attr.subarray(from));
+        st.revealTotal = total;
       })
-      .catch(() => { this.growInFlight = false; });
+      .catch(() => { st.pendingGen = false; });
   }
 
   start() {
@@ -200,8 +215,6 @@ export class LiveConductor {
     this.renderer.setPlaying(false);
     this.renderer.setWave(0, this.freqSmooth);
   }
-
-  forceMorph() { this.forceNext = true; }
 
   tick(nowSec) {
     const dt = Math.min(0.1, this._lastNow ? nowSec - this._lastNow : 1 / 60);
@@ -235,14 +248,10 @@ export class LiveConductor {
     this.colour = glideStops(this.colour, liveTarget(this.chromaSmooth, f.centroid), dt);
     this.applyStops(stopsToHex(this.colour));
 
-    // ── growth modes: events grow a composite instead of morphing ──
-    if (this.growthMode === 'grow-fade' || this.growthMode === 'grow-keep') {
-      this._growTick(nowSec, f, kick);
+    // ── paint mode: the sound is the brush ──
+    if (this.growthMode === 'paint') {
+      this._paintTick(nowSec, f, kick, dt);
       return;
-    }
-    if (this.growthMode === 'draw-in' && this.drawProgress < 1) {
-      this.drawProgress = Math.min(1, this.drawProgress + dt * (0.15 + 2.5 * f.rms));
-      this.renderer.setDrawProgress(this.drawProgress);
     }
 
     // ── structural layer: throttled fingerprint check → crossfade morph ──
@@ -266,12 +275,7 @@ export class LiveConductor {
         if (!this.running || !out) return;
         this.lastMorph = this._lastNow;
         this.shownFp = fp;
-        if (this.growthMode === 'draw-in') {
-          this.renderer.drawInTo(out.positions, out.attr);
-          this.drawProgress = 0;
-        } else {
-          this.renderer.crossfadeTo(out.positions, out.attr, 1.0);
-        }
+        this.renderer.crossfadeTo(out.positions, out.attr, 1.0);
       })
       .catch(() => { this.inFlight = false; });
   }
@@ -290,9 +294,8 @@ export class LiveConductor {
     if (this.frames.length < LIVE_MIN_FRAMES) return null;
     this.stop();
     const out = { fingerprint: this.windowFingerprint(), stops: stopsToHex(this.colour) };
-    if (this.composite && this.composite.total > 0) {
-      const flat = this.composite.flatten(this._lastNow);
-      out.cloud = { positions: flat.positions, attr: flat.attr };
+    if (this.growthMode === 'paint' && this.paint && this.paint.count > 0) {
+      out.cloud = this.renderer.getPaintSlice(this.paint.count);
     }
     return out;
   }
