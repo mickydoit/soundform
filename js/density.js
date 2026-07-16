@@ -238,6 +238,7 @@ export class DensityRenderer {
   setCloud(positions, attr) {
     this._disposeFading();
     if (this.points) { this.group.remove(this.points); this.points.geometry.dispose(); }
+    this._paintPos = null; this._paintAttr = null;
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
     geo.setAttribute('attrv', new THREE.BufferAttribute(attr, 1));
@@ -258,15 +259,23 @@ export class DensityRenderer {
     this.splatMat.uniforms.uWeight.value = 1;
   }
 
-  // Growth composite upload: like setCloud but with per-point weights.
-  // Called ~1×/s with growing arrays; rebuilding the geometry is fine.
-  setGrowCloud(positions, attr, weights) {
+  // ── Paint mode: one preallocated buffer painted incrementally ──
+  // beginPaint allocates; writePaintPoints copies chunks in (streaming brush
+  // appends AND remainder splices); setPaintCount reveals via drawRange.
+  beginPaint(maxPoints) {
     this._disposeFading();
     if (this.points) { this.group.remove(this.points); this.points.geometry.dispose(); }
+    this._paintPos = new Float32Array(maxPoints * 3);
+    this._paintAttr = new Float32Array(maxPoints);
     const geo = new THREE.BufferGeometry();
-    geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-    geo.setAttribute('attrv', new THREE.BufferAttribute(attr, 1));
-    geo.setAttribute('aWeight', new THREE.BufferAttribute(weights, 1));
+    const posA = new THREE.BufferAttribute(this._paintPos, 3);
+    const attrA = new THREE.BufferAttribute(this._paintAttr, 1);
+    posA.setUsage(THREE.DynamicDrawUsage);
+    attrA.setUsage(THREE.DynamicDrawUsage);
+    geo.setAttribute('position', posA);
+    geo.setAttribute('attrv', attrA);
+    geo.setAttribute('aWeight', new THREE.BufferAttribute(this._unitWeights(maxPoints), 1));
+    geo.setDrawRange(0, 0);
     if (this.fallback) {
       const mat = new THREE.PointsMaterial({ size: 0.008, color: 0xbbaaff, transparent: true, opacity: 0.35, blending: THREE.AdditiveBlending, depthWrite: false });
       this.points = new THREE.Points(geo, mat);
@@ -275,11 +284,44 @@ export class DensityRenderer {
     }
     this.points.frustumCulled = false;
     this.group.add(this.points);
-    const n = positions.length / 3;
-    const [w, h] = this._size();
-    this.toneMat.uniforms.uPeak.value = Math.max(8, (n / (w * h)) * 550);
+    this._paintDirty = null;
     this._dirty = true;
     this.splatMat.uniforms.uWeight.value = 1;
+  }
+
+  writePaintPoints(offset, positions, attr) {
+    if (!this._paintPos) return;
+    this._paintPos.set(positions, offset * 3);
+    this._paintAttr.set(attr, offset);
+    const end = offset + attr.length;
+    this._paintDirty = this._paintDirty
+      ? { min: Math.min(this._paintDirty.min, offset), max: Math.max(this._paintDirty.max, end) }
+      : { min: offset, max: end };
+    const geo = this.points.geometry;
+    const posA = geo.getAttribute('position');
+    const attrA = geo.getAttribute('attrv');
+    posA.updateRange = { offset: this._paintDirty.min * 3, count: (this._paintDirty.max - this._paintDirty.min) * 3 };
+    attrA.updateRange = { offset: this._paintDirty.min, count: this._paintDirty.max - this._paintDirty.min };
+    posA.needsUpdate = true;
+    attrA.needsUpdate = true;
+    this._dirty = true;
+  }
+
+  setPaintCount(n) {
+    if (!this.points) return;
+    this.points.geometry.setDrawRange(0, n);
+    const [w, h] = this._size();
+    this.toneMat.uniforms.uPeak.value = Math.max(8, (n / (w * h)) * 550);
+    this._paintDirty = null; // consumed by the upcoming render
+    this._dirty = true;
+  }
+
+  // Painted region as standalone copies (freeze/capture).
+  getPaintSlice(n) {
+    return {
+      positions: this._paintPos ? this._paintPos.slice(0, n * 3) : new Float32Array(0),
+      attr: this._paintAttr ? this._paintAttr.slice(0, n) : new Float32Array(0),
+    };
   }
 
   setPalette(lutBytes) {
@@ -302,6 +344,7 @@ export class DensityRenderer {
   clear() {
     this._disposeFading();
     if (this.points) { this.group.remove(this.points); this.points.geometry.dispose(); this.points = null; }
+    this._paintPos = null; this._paintAttr = null;
     this._dirty = true;
   }
 
@@ -365,44 +408,6 @@ export class DensityRenderer {
     const n = positions.length / 3;
     const [w, h] = this._size();
     this._peakTo = Math.max(8, (n / (w * h)) * 550);
-    this._dirty = true;
-  }
-
-  // Draw-in: the incoming cloud reveals point by point (drawRange) while the
-  // outgoing cloud dims — paced manually via setDrawProgress (the conductor
-  // integrates loudness), unlike crossfadeTo's clock-driven fade.
-  drawInTo(positions, attr) {
-    if (!this.points || this.fallback) { this.setCloud(positions, attr); return; }
-    this._disposeFading();
-    this._fading = { points: this.points, mat: this.points.material, t: 0, dur: Infinity, manual: true };
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-    geo.setAttribute('attrv', new THREE.BufferAttribute(attr, 1));
-    geo.setAttribute('aWeight', new THREE.BufferAttribute(this._unitWeights(positions.length / 3), 1));
-    const mat = this._makeSplatMat();
-    mat.uniforms.uWeight.value = 1;
-    geo.setDrawRange(0, 0);
-    this.splatMat = mat;
-    this.points = new THREE.Points(geo, mat);
-    this.points.frustumCulled = false;
-    this.group.add(this.points);
-    this._peakFrom = this.toneMat.uniforms.uPeak.value;
-    const n = positions.length / 3;
-    const [w, h] = this._size();
-    this._peakTo = Math.max(8, (n / (w * h)) * 550);
-    this._dirty = true;
-  }
-
-  setDrawProgress(t) {
-    if (!this.points) return;
-    const k = Math.max(0, Math.min(1, t));
-    const count = this.points.geometry.getAttribute('position').count;
-    this.points.geometry.setDrawRange(0, Math.floor(k * count));
-    if (this._fading && this._fading.manual) {
-      this._fading.mat.uniforms.uWeight.value = 1 - k;
-      this.toneMat.uniforms.uPeak.value = this._peakFrom + (this._peakTo - this._peakFrom) * k;
-      if (k >= 1) { this._disposeFading(); this.points.geometry.setDrawRange(0, count); }
-    }
     this._dirty = true;
   }
 
@@ -478,7 +483,7 @@ export class DensityRenderer {
     } else {
       this._lastTick = 0;
     }
-    if (this._fading && !this._fading.manual) {
+    if (this._fading) {
       const nowF = performance.now() / 1000;
       const dtF = Math.min(0.1, this._fadeTick ? nowF - this._fadeTick : 0.016);
       this._fadeTick = nowF;
