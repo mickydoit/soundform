@@ -80,12 +80,31 @@ export function generate(fp, params, onProgress) {
     }
     strands.push(resamplePolyline(raw, 200));
   }
-  // Duplicate shells' centrelines with slight offsets until strand budget met
-  while (strands.length < Math.min(96, params.strandCount || 96)) {
-    const src = strands[strands.length % shells];
-    const copy = src.slice();
-    for (let i = 0; i < copy.length; i++) copy[i] += (rnd() - 0.5) * 0.012;
-    strands.push(copy);
+  const target = Math.min(96, params.strandCount || 96);
+  const budgeted = shells >= target ? strands : padStrands(strands, target, rnd);
+  return finalize(positions, attr, budgeted, params);
+}
+
+// Repeats each of `base`'s shell centrelines (jittering the repeats) up to
+// `target` count, keeping every shell's copies together as one contiguous
+// block rather than round-robin interleaving them. Round-robin (`i %
+// base.length`) gives the padded array a period of base.length, which a
+// fixed-stride downstream sample (e.g. the SVG export's evenly-spaced strand
+// pick) can resonate with and silently skip whole shells. With contiguous
+// blocks, any evenly-spaced sample of >= base.length strands is guaranteed
+// (pigeonhole) to land inside every block, since each block is at least as
+// wide as the sample's stride.
+export function padStrands(base, target, rnd) {
+  const shells = base.length;
+  const strands = [];
+  for (let s = 0; s < shells; s++) {
+    const count = Math.round(((s + 1) * target) / shells) - Math.round((s * target) / shells);
+    for (let c = 0; c < count; c++) {
+      if (c === 0) { strands.push(base[s]); continue; }
+      const copy = base[s].slice();
+      for (let i = 0; i < copy.length; i++) copy[i] += (rnd() - 0.5) * 0.012;
+      strands.push(copy);
+    }
   }
-  return finalize(positions, attr, strands, params);
+  return strands;
 }

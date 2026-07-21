@@ -4,6 +4,7 @@ import { generate, registeredModes } from '../js/generators/index.js';
 import { pickSystem } from '../js/generators/attractor.js';
 import { sphericalY, makeValueNoise3, recipe } from '../js/generators/harmonic.js';
 import { mulberry32 } from '../js/generators/common.js';
+import { padStrands } from '../js/generators/radial.js';
 
 export function testFingerprint(overrides = {}) {
   const chroma = new Float32Array(12); chroma[0] = 1; chroma[4] = 0.8; chroma[7] = 0.7;
@@ -118,6 +119,36 @@ test('attractor: low-pitch thomas routing does not collapse to a limit cycle', (
 
 test('radial generator', () => {
   checkGenerator('radial');
+});
+
+// SVG export picks strands at a fixed stride (main.js: all[Math.floor(i*step)])
+// from design.strands. radial.js only ever generates `shells` unique orbit
+// centrelines and fills the rest of the strand budget with duplicates — if
+// that padding repeats them in strict round-robin order, its period equals
+// `shells`, and a stride sharing a factor with `shells` samples the same
+// subset of shells forever, silently dropping the others from the export
+// while the on-screen point cloud still renders all of them.
+test('radial: padded strand budget survives fixed-stride export sampling', () => {
+  // Sweep shell counts (even/odd/prime-sharing) and UI strandCount choices
+  // (mirroring main.js's `want`), across several seeds, to prove coverage
+  // holds generally rather than for one lucky case.
+  for (const shells of [6, 12, 22, 30]) {
+    for (const want of [24, 48, 72, 96]) {
+      if (want < shells) continue; // fewer picks than shells: full coverage is impossible by definition
+      const target = 96;
+      const base = Array.from({ length: shells }, (_, k) => Float32Array.of(k, k, k));
+      for (const seed of [1, 2, 3]) {
+        const strands = padStrands(base, target, mulberry32(seed));
+        assert.equal(strands.length, target);
+        const step = target / want;
+        const picked = [];
+        for (let i = 0; i < want; i++) picked.push(strands[Math.floor(i * step)]);
+        const identities = new Set(picked.map((s) => Math.round(s[0])));
+        assert.equal(identities.size, shells,
+          `shells=${shells} want=${want} seed=${seed}: export sample only covered ${identities.size}/${shells} shells`);
+      }
+    }
+  }
 });
 
 test('cymatics generator', () => {
