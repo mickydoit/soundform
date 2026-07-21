@@ -1,11 +1,11 @@
-import { AudioEngine } from './audio.js?v=40';
-import { buildFingerprint, buildTrajectory } from './features.js?v=40';
-import { DensityRenderer } from './density.js?v=40';
-import { PALETTES, buildLUT, customRamp, hexToRgb } from './palettes.js?v=40';
-import { exportCanvas, exportStrandSVG, framePlan, exportMP4, loopsForDuration } from './exporter.js?v=40';
-import { motionParams, displacePoint } from './motion.js?v=40';
-import { LiveConductor } from './live.js?v=40';
-import { LiveRecorder, MAX_RECORD_SEC } from './recorder.js?v=40';
+import { AudioEngine } from './audio.js?v=41';
+import { buildFingerprint, buildTrajectory } from './features.js?v=41';
+import { DensityRenderer } from './density.js?v=41';
+import { PALETTES, buildLUT, customRamp, hexToRgb } from './palettes.js?v=41';
+import { exportCanvas, exportStrandSVG, framePlan, exportMP4, loopsForDuration } from './exporter.js?v=41';
+import { motionParams, displacePoint } from './motion.js?v=41';
+import { LiveConductor } from './live.js?v=41';
+import { LiveRecorder, MAX_RECORD_SEC } from './recorder.js?v=41';
 
 const audio = new AudioEngine();
 let renderer = null;
@@ -110,7 +110,7 @@ function regenerate() {
     setStatus('Design created — drag to rotate · adjust sliders');
   };
   try {
-    if (!worker) worker = new Worker('js/worker.js?v=40', { type: 'module' });
+    if (!worker) worker = new Worker('js/worker.js?v=41', { type: 'module' });
     worker.onmessage = (e) => {
       if (e.data.progress !== undefined) setStatus(`Generating… ${Math.round(e.data.progress * 100)}%`);
       else if (e.data.error) setStatus(`Generation error: ${e.data.error}`);
@@ -124,7 +124,7 @@ function regenerate() {
 }
 
 async function fallbackGenerate(onResult) {
-  const { generate } = await import('./generators/index.js?v=40');
+  const { generate } = await import('./generators/index.js?v=41');
   onResult(generate(fingerprint, { ...params, strandCount: 96 }));
 }
 
@@ -133,7 +133,7 @@ async function fallbackGenerate(onResult) {
 function workerGenerate(fingerprint, params) {
   return new Promise((resolve) => {
     try {
-      if (!liveWorker) liveWorker = new Worker('js/worker.js?v=40', { type: 'module' });
+      if (!liveWorker) liveWorker = new Worker('js/worker.js?v=41', { type: 'module' });
       liveWorker.onmessage = (e) => {
         if (e.data.done) resolve(e.data);
         else if (e.data.error) resolve(null);
@@ -147,7 +147,7 @@ function workerGenerate(fingerprint, params) {
 async function liveGenerate(fp, p) {
   const out = await workerGenerate(fp, p);
   if (out) return out;
-  const { generate } = await import('./generators/index.js?v=40');
+  const { generate } = await import('./generators/index.js?v=41');
   return generate(fp, p);
 }
 
@@ -527,6 +527,10 @@ function bindExport() {
         const fmt = btn.dataset.fmt;
         if (fmt === 'svg') {
           if (!design) { setStatus('Create a design first'); return; }
+          if (!design.strands.length) {
+            setStatus('SVG needs a shape design — painted captures have no paths. Try PNG/JPG/WebP, or nudge a Form slider to regenerate a shape.');
+            return;
+          }
           const all = design.strands;
           const want = Math.min(params.strandCount * Math.max(1, Math.round(all.length / 96)), all.length);
           const step = all.length / want;
