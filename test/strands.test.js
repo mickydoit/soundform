@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { projectStrand, rdp, toBezierPath, buildDensityGrid,
          simplifyToBudget, buildVectorPaths,
-         catmullRomToBezier, toRelativeBezierLegs } from '../js/strands.js';
+         catmullRomToBezier, toRelativeBezierLegs, buildPdfOps } from '../js/strands.js';
 
 const IDENTITY = [1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1];
 
@@ -88,6 +88,47 @@ test('buildVectorPaths resolves colors and geometry per strand', () => {
   assert.ok(it.opacity > 0 && it.opacity <= 1);
   assert.equal(it.x1, it.points[0][0]);
   assert.equal(it.y2, it.points[it.points.length - 1][1]);
+});
+
+test('buildPdfOps produces jsPDF-ready ops with no DOM/jsPDF dependency', () => {
+  const strand = new Float32Array(200 * 3);
+  for (let i = 0; i < 200; i++) {
+    const t = i / 199;
+    strand[i * 3] = Math.cos(t * 6) * 0.6;
+    strand[i * 3 + 1] = (t - 0.5) * 1.4;
+    strand[i * 3 + 2] = Math.sin(t * 6) * 0.6;
+  }
+  const ops = buildPdfOps({ strands: [strand], positions: strand, mvp: IDENTITY,
+    width: 800, height: 600, stops: [[0, '#050614'], [1, '#ffffff']], weight: 2, background: '#03040a' });
+  assert.equal(ops.width, 800);
+  assert.equal(ops.background, '#03040a');
+  assert.equal(ops.strokes.length, 1);
+  const stroke = ops.strokes[0];
+  assert.ok(stroke.strokeWidth > 0);
+  assert.ok(stroke.runs.length > 0);
+  stroke.runs.forEach((run) => {
+    assert.equal(run.start.length, 2);
+    assert.match(run.color, /^#[0-9a-f]{6}$/);
+    run.legs.forEach((leg) => assert.equal(leg.length, 6));
+  });
+});
+
+test('buildPdfOps run colors interpolate from c1 toward c2 along the stroke', () => {
+  const strand = new Float32Array(600 * 3);
+  for (let i = 0; i < 600; i++) {
+    const t = i / 599;
+    strand[i * 3] = t * 1.2 - 0.6;
+    strand[i * 3 + 1] = Math.sin(t * 3) * 0.4;
+    strand[i * 3 + 2] = 0;
+  }
+  const ops = buildPdfOps({ strands: [strand], positions: strand, mvp: IDENTITY,
+    width: 800, height: 600, stops: [[0, '#000000'], [1, '#ffffff']], weight: 1, background: null });
+  const runs = ops.strokes[0].runs;
+  assert.ok(runs.length > 1, 'fixture must produce multiple runs to test interpolation');
+  assert.equal(ops.background, null);
+  const firstGray = parseInt(runs[0].color.slice(1, 3), 16);
+  const lastGray = parseInt(runs[runs.length - 1].color.slice(1, 3), 16);
+  assert.ok(lastGray >= firstGray, 'color should trend from c1 toward c2 along the stroke');
 });
 
 test('toBezierPath output is unchanged after the catmullRomToBezier refactor', () => {

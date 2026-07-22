@@ -1,6 +1,6 @@
 // Strand → editable SVG path machinery. DOM/THREE-free (works under node).
 
-import { sampleRamp, rgbToHex } from './palettes.js';
+import { sampleRamp, rgbToHex, hexToRgb } from './palettes.js';
 
 export function projectStrand(strand, m, w, h) {
   const pts = [];
@@ -141,4 +141,32 @@ export function buildVectorPaths({ strands, positions, mvp, width, height, stops
 
   items.sort((a, b) => b.depth - a.depth); // far strands first (painter's order)
   return items;
+}
+
+const PDF_RUN_SEGMENTS = 6; // bezier segments per solid-color run
+
+// jsPDF's core API has no per-stroke gradient — approximate the SVG
+// gradient by splitting each stroke into short flat-color runs.
+export function lerpHex(c1, c2, t) {
+  const a = hexToRgb(c1), b = hexToRgb(c2);
+  return rgbToHex([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t]);
+}
+
+// Pure PDF draw-op builder: same path data as SVG, pre-split into
+// jsPDF-lines()-ready runs. No jsPDF/DOM dependency — js/exporter.js wires
+// this into an actual document.
+export function buildPdfOps({ strands, positions, mvp, width, height, stops, weight, background }) {
+  const items = buildVectorPaths({ strands, positions, mvp, width, height, stops, weight });
+  const strokeStrokes = items.map((it) => {
+    const segs = catmullRomToBezier(it.points);
+    const runs = [];
+    for (let i = 0; i < segs.length; i += PDF_RUN_SEGMENTS) {
+      const chunk = segs.slice(i, i + PDF_RUN_SEGMENTS);
+      const start = i === 0 ? it.points[0] : segs[i - 1].end;
+      const t = (i + chunk.length / 2) / Math.max(1, segs.length);
+      runs.push({ start, legs: toRelativeBezierLegs(start, chunk), color: lerpHex(it.c1, it.c2, t) });
+    }
+    return { runs, strokeWidth: it.strokeWidth, opacity: it.opacity };
+  });
+  return { width, height, background: background ?? null, strokes: strokeStrokes };
 }
