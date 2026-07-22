@@ -1,4 +1,5 @@
-import { buildVectorPaths, toBezierPath } from './strands.js?v=41';
+import { buildVectorPaths, toBezierPath, buildPdfOps } from './strands.js?v=41';
+import { hexToRgb } from './palettes.js?v=41';
 
 export async function exportCanvas(canvas, format) {
   switch (format) {
@@ -77,6 +78,43 @@ export function exportStrandSVG({ strands, positions, mvp, width, height, stops,
     ...groups,
     '</svg>',
   ].join('\n');
+}
+
+// Native vector PDF: same path data as exportStrandSVG, drawn with jsPDF's
+// core lines() API (accepts bezier-curve segments as relative deltas) —
+// no raster image embed, stays crisp at any zoom.
+export function exportStrandPDF({ strands, positions, mvp, width, height, stops, background, weight }) {
+  const { jsPDF } = window.jspdf;
+  const ops = buildPdfOps({ strands, positions, mvp, width, height, stops, weight, background });
+  const mmW = width > height ? 297 : 210;
+  const mmH = mmW * (height / width);
+  const doc = new jsPDF({
+    orientation: width > height ? 'landscape' : 'portrait',
+    unit: 'mm',
+    format: [mmW, mmH],
+  });
+  const px2mm = mmW / width;
+
+  if (ops.background != null) {
+    const [r, g, b] = hexToRgb(ops.background).map((v) => Math.round(v * 255));
+    doc.setFillColor(r, g, b);
+    doc.rect(0, 0, mmW, mmH, 'F');
+  }
+
+  const hasAlpha = typeof doc.setGState === 'function' && typeof doc.GState === 'function';
+  doc.setLineCap('round');
+  ops.strokes.forEach(({ runs, strokeWidth, opacity }) => {
+    doc.setLineWidth(strokeWidth * px2mm);
+    if (hasAlpha) doc.setGState(new doc.GState({ opacity }));
+    runs.forEach(({ start, legs, color }) => {
+      const [r, g, b] = hexToRgb(color).map((v) => Math.round(v * 255));
+      doc.setDrawColor(r, g, b);
+      doc.lines(legs, start[0] * px2mm, start[1] * px2mm, [px2mm, px2mm], 'S', false);
+    });
+  });
+  if (hasAlpha) doc.setGState(new doc.GState({ opacity: 1 }));
+
+  doc.save('soundform.pdf');
 }
 
 // ── MP4 export ─────────────────────────────────────────────────────
