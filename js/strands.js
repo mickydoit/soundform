@@ -59,18 +59,39 @@ export function simplifyToBudget(pts, epsilon0 = 1.4, budget = SIMPLIFY_BUDGET) 
   return out;
 }
 
-// Catmull-Rom → cubic bezier SVG path.
-export function toBezierPath(pts) {
-  if (pts.length < 2) return '';
-  const f = v => +v.toFixed(1);
-  let d = `M${f(pts[0][0])} ${f(pts[0][1])}`;
+// Catmull-Rom through pts -> absolute cubic bezier control points.
+export function catmullRomToBezier(pts) {
+  const segs = [];
   for (let i = 0; i < pts.length - 1; i++) {
     const p0 = pts[Math.max(0, i - 1)], p1 = pts[i], p2 = pts[i + 1], p3 = pts[Math.min(pts.length - 1, i + 2)];
     const c1 = [p1[0] + (p2[0] - p0[0]) / 6, p1[1] + (p2[1] - p0[1]) / 6];
     const c2 = [p2[0] - (p3[0] - p1[0]) / 6, p2[1] - (p3[1] - p1[1]) / 6];
-    d += `C${f(c1[0])} ${f(c1[1])} ${f(c2[0])} ${f(c2[1])} ${f(p2[0])} ${f(p2[1])}`;
+    segs.push({ c1, c2, end: p2 });
+  }
+  return segs;
+}
+
+export function toBezierPath(pts) {
+  if (pts.length < 2) return '';
+  const f = v => +v.toFixed(1);
+  let d = `M${f(pts[0][0])} ${f(pts[0][1])}`;
+  for (const { c1, c2, end } of catmullRomToBezier(pts)) {
+    d += `C${f(c1[0])} ${f(c1[1])} ${f(c2[0])} ${f(c2[1])} ${f(end[0])} ${f(end[1])}`;
   }
   return d;
+}
+
+// Relative bezier-curve deltas for jsPDF's lines() API: each leg's three
+// pairs chain from the previous accumulated point (not all relative to the
+// segment start), matching how jsPDF walks a lines() array.
+export function toRelativeBezierLegs(start, segments) {
+  const legs = [];
+  let cx = start[0], cy = start[1];
+  for (const { c1, c2, end } of segments) {
+    legs.push([c1[0] - cx, c1[1] - cy, c2[0] - c1[0], c2[1] - c1[1], end[0] - c2[0], end[1] - c2[1]]);
+    cx = end[0]; cy = end[1];
+  }
+  return legs;
 }
 
 // Coarse 3D occupancy grid over [-1.3, 1.3]³, max-normalised.

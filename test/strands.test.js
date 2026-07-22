@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { projectStrand, rdp, toBezierPath, buildDensityGrid,
-         simplifyToBudget, buildVectorPaths } from '../js/strands.js';
+         simplifyToBudget, buildVectorPaths,
+         catmullRomToBezier, toRelativeBezierLegs } from '../js/strands.js';
 
 const IDENTITY = [1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1];
 
@@ -84,4 +85,31 @@ test('buildVectorPaths resolves colors and geometry per strand', () => {
   assert.ok(it.opacity > 0 && it.opacity <= 1);
   assert.equal(it.x1, it.points[0][0]);
   assert.equal(it.y2, it.points[it.points.length - 1][1]);
+});
+
+test('toBezierPath output is unchanged after the catmullRomToBezier refactor', () => {
+  const pts = [[0, 0], [10, 10], [20, 0], [30, 10], [40, -5]];
+  assert.equal(
+    toBezierPath(pts),
+    'M0 0C1.7 1.7 6.7 10 10 10C13.3 10 16.7 0 20 0C23.3 0 26.7 10.8 30 10C33.3 9.2 38.3 -2.5 40 -5'
+  );
+});
+
+test('catmullRomToBezier + toRelativeBezierLegs round-trips to the same absolute points', () => {
+  const pts = [[5, 5], [12, -3], [20, 8], [31, 2], [40, 15]];
+  const segs = catmullRomToBezier(pts);
+  const legs = toRelativeBezierLegs(pts[0], segs);
+  let cx = pts[0][0], cy = pts[0][1];
+  const reconstructedEnds = [];
+  for (const [dx1, dy1, dx2, dy2, dx3, dy3] of legs) {
+    const x1 = cx + dx1, y1 = cy + dy1;
+    const x2 = x1 + dx2, y2 = y1 + dy2;
+    const x3 = x2 + dx3, y3 = y2 + dy3;
+    reconstructedEnds.push([x3, y3]);
+    cx = x3; cy = y3;
+  }
+  segs.forEach((seg, i) => {
+    assert.ok(Math.abs(reconstructedEnds[i][0] - seg.end[0]) < 1e-9);
+    assert.ok(Math.abs(reconstructedEnds[i][1] - seg.end[1]) < 1e-9);
+  });
 });
