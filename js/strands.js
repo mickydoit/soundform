@@ -19,8 +19,9 @@ export function projectStrand(strand, m, w, h) {
   return { pts, depth: count ? depthSum / count : 1 };
 }
 
-// Ramer–Douglas–Peucker, iterative (stack), epsilon in pixels.
-export function rdp(pts, epsilon) {
+// Ramer–Douglas–Peucker, iterative (stack), epsilon in pixels. Operates on
+// an open chain — the start/end chord must have real length (see rdp()).
+function rdpOpen(pts, epsilon) {
   if (pts.length < 3) return pts.slice();
   const keep = new Uint8Array(pts.length);
   keep[0] = keep[pts.length - 1] = 1;
@@ -41,6 +42,28 @@ export function rdp(pts, epsilon) {
     }
   }
   return pts.filter((_, i) => keep[i]);
+}
+
+// Ramer–Douglas–Peucker, epsilon in pixels. The standard algorithm measures
+// each point's perpendicular distance from the start-end chord — when the
+// chord is ~zero length (a closed or near-closed loop, e.g. a full-sweep
+// ring strand), that distance is undefined and every point looks collinear,
+// collapsing the whole loop to 2 duplicate points. Detect that case and
+// split the loop at its farthest point first, simplifying each half as an
+// open chain.
+export function rdp(pts, epsilon) {
+  if (pts.length < 3) return pts.slice();
+  const [ax, ay] = pts[0], [bx, by] = pts[pts.length - 1];
+  if (Math.hypot(bx - ax, by - ay) >= epsilon) return rdpOpen(pts, epsilon);
+  let farI = 0, farD = -1;
+  for (let i = 1; i < pts.length - 1; i++) {
+    const d = Math.hypot(pts[i][0] - ax, pts[i][1] - ay);
+    if (d > farD) { farD = d; farI = i; }
+  }
+  if (farD < epsilon) return [pts[0]]; // truly a dot at this scale
+  const first = rdpOpen(pts.slice(0, farI + 1), epsilon);
+  const second = rdpOpen(pts.slice(farI), epsilon);
+  return first.concat(second.slice(1));
 }
 
 const SIMPLIFY_BUDGET = 500;

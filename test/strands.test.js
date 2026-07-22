@@ -22,6 +22,22 @@ test('rdp keeps endpoints, drops collinear points', () => {
   assert.ok(out.some(p => p[1] === 5)); // keeps the spike
 });
 
+test('rdp: closed loop (first ≈ last point) is not collapsed to a degenerate point', () => {
+  // Any full 0..2π sweep (ring strands, orbit shells) is a closed loop —
+  // the standard point-to-chord distance formula divides by ~zero chord
+  // length here, which used to collapse the whole loop to 2 duplicate points.
+  const pts = [];
+  for (let i = 0; i < 220; i++) {
+    const th = (i / 219) * Math.PI * 2;
+    pts.push([Math.cos(th) * 100 + 500, Math.sin(th) * 100 + 500]);
+  }
+  const out = rdp(pts, 1.4);
+  assert.ok(out.length > 4, `closed loop should keep a real shape, got ${out.length} points`);
+  const xs = out.map(p => p[0]), ys = out.map(p => p[1]);
+  assert.ok(Math.max(...xs) - Math.min(...xs) > 150, "must retain the circle's width");
+  assert.ok(Math.max(...ys) - Math.min(...ys) > 150, "must retain the circle's height");
+});
+
 test('toBezierPath emits M + C commands', () => {
   const d = toBezierPath([[0, 0], [10, 10], [20, 0], [30, 10]]);
   assert.ok(d.startsWith('M'));
