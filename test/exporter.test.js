@@ -74,3 +74,21 @@ test('exportStrandSVG: null background omits the rect, keeps paths', () => {
   assert.ok(!svg.includes('id="background"'), 'background rect must be absent');
   assert.ok(svg.includes('<path'), 'paths must remain');
 });
+
+test('exportStrandSVG: a strand that used to exceed the 300-point drop cap still appears', () => {
+  // Jittered loop whose eps=1.4 simplification lands at 384 points — solidly
+  // between the old 300 drop cap and the new 500 budget.
+  const n = 6000;
+  const st = new Float32Array(n * 3);
+  for (let i = 0; i < n; i++) {
+    const t = i / (n - 1);
+    const jitter = Math.sin(t * 1200) * 0.008;
+    st[i * 3] = Math.cos(t * 6) * 0.6 + jitter;
+    st[i * 3 + 1] = (t - 0.5) * 1.4;
+    st[i * 3 + 2] = Math.sin(t * 6) * 0.6 + jitter;
+  }
+  const svg = exportStrandSVG({ strands: [st], positions: st, mvp: IDENTITY, width: 1600, height: 1200,
+    stops: [[0, '#050614'], [1, '#ffffff']], background: '#03040a', weight: 1 });
+  assert.ok(svg.includes('id="strand-01"'), 'the dense strand must not be dropped');
+  assert.ok(svg.includes('<path'));
+});

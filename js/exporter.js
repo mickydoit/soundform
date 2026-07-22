@@ -1,5 +1,4 @@
-import { projectStrand, rdp, toBezierPath, buildDensityGrid } from './strands.js?v=41';
-import { sampleRamp, rgbToHex } from './palettes.js?v=41';
+import { buildVectorPaths, toBezierPath } from './strands.js?v=41';
 
 export async function exportCanvas(canvas, format) {
   switch (format) {
@@ -54,40 +53,17 @@ function _dl(url, name) {
 // Structured vector export: one named group per strand, real bezier paths,
 // density-driven stroke weight/opacity, palette gradient along each path.
 export function exportStrandSVG({ strands, positions, mvp, width, height, stops, background, weight }) {
-  const grid = buildDensityGrid(positions);
-  const items = [];
-
-  strands.forEach((strand, si) => {
-    const { pts, depth } = projectStrand(strand, mvp, width, height);
-    if (pts.length < 2) return;
-    const simplified = rdp(pts, 1.4);
-    if (simplified.length < 2 || simplified.length > 300) return;
-    // mean local 3D density along the strand
-    let dSum = 0, dN = 0;
-    for (let i = 0; i < strand.length; i += 30) {
-      dSum += grid.sample(strand[i], strand[i + 1], strand[i + 2]); dN++;
-    }
-    const density = dN ? dSum / dN : 0.3;
-    items.push({ si, depth, density, d: toBezierPath(simplified),
-                 x1: simplified[0][0], y1: simplified[0][1],
-                 x2: simplified[simplified.length - 1][0], y2: simplified[simplified.length - 1][1] });
-  });
-
-  items.sort((a, b) => b.depth - a.depth); // far strands first (painter's order)
+  const items = buildVectorPaths({ strands, positions, mvp, width, height, stops, weight });
 
   const defs = [], groups = [];
   items.forEach((it, order) => {
     const id = String(order + 1).padStart(2, '0');
-    const c1 = rgbToHex(sampleRamp(stops, 0.35 + it.density * 0.3));
-    const c2 = rgbToHex(sampleRamp(stops, 0.6 + it.density * 0.4));
     defs.push(
       `    <linearGradient id="grad-${id}" gradientUnits="userSpaceOnUse" x1="${it.x1.toFixed(1)}" y1="${it.y1.toFixed(1)}" x2="${it.x2.toFixed(1)}" y2="${it.y2.toFixed(1)}">` +
-      `<stop offset="0" stop-color="${c1}"/><stop offset="1" stop-color="${c2}"/></linearGradient>`);
-    const sw = ((0.6 + it.density * 3.4) * weight).toFixed(2);
-    const op = (0.35 + it.density * 0.55).toFixed(2);
+      `<stop offset="0" stop-color="${it.c1}"/><stop offset="1" stop-color="${it.c2}"/></linearGradient>`);
     groups.push(
       `  <g id="strand-${id}">\n` +
-      `    <path d="${it.d}" fill="none" stroke="url(#grad-${id})" stroke-width="${sw}" stroke-linecap="round" opacity="${op}"/>\n` +
+      `    <path d="${toBezierPath(it.points)}" fill="none" stroke="url(#grad-${id})" stroke-width="${it.strokeWidth.toFixed(2)}" stroke-linecap="round" opacity="${it.opacity.toFixed(2)}"/>\n` +
       `  </g>`);
   });
 
