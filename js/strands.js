@@ -104,14 +104,16 @@ export function toBezierPath(pts) {
   return d;
 }
 
-// Relative bezier-curve deltas for jsPDF's lines() API: each leg's three
-// pairs chain from the previous accumulated point (not all relative to the
-// segment start), matching how jsPDF walks a lines() array.
+// Relative bezier-curve deltas for jsPDF's lines() API: per jsPDF's actual
+// implementation, all three pairs in a 6-value entry (c1, c2, end) are
+// offsets from the point BEFORE the curve started — not chained from one
+// to the next. Encoding them as chained deltas (c2 relative to c1, end
+// relative to c2) silently corrupts every curve but the first in a run.
 export function toRelativeBezierLegs(start, segments) {
   const legs = [];
   let cx = start[0], cy = start[1];
   for (const { c1, c2, end } of segments) {
-    legs.push([c1[0] - cx, c1[1] - cy, c2[0] - c1[0], c2[1] - c1[1], end[0] - c2[0], end[1] - c2[1]]);
+    legs.push([c1[0] - cx, c1[1] - cy, c2[0] - cx, c2[1] - cy, end[0] - cx, end[1] - cy]);
     cx = end[0]; cy = end[1];
   }
   return legs;

@@ -156,15 +156,17 @@ test('toBezierPath output is unchanged after the catmullRomToBezier refactor', (
 });
 
 test('catmullRomToBezier + toRelativeBezierLegs round-trips to the same absolute points', () => {
+  // Reconstructs the way jsPDF's own lines() does: for a 6-value entry, all
+  // three pairs (c1, c2, end) are offsets from the point BEFORE the curve —
+  // not chained from c1 to c2 to end. See jsPDF's API.lines source.
   const pts = [[5, 5], [12, -3], [20, 8], [31, 2], [40, 15]];
   const segs = catmullRomToBezier(pts);
   const legs = toRelativeBezierLegs(pts[0], segs);
   let cx = pts[0][0], cy = pts[0][1];
   const reconstructedEnds = [];
   for (const [dx1, dy1, dx2, dy2, dx3, dy3] of legs) {
-    const x1 = cx + dx1, y1 = cy + dy1;
-    const x2 = x1 + dx2, y2 = y1 + dy2;
-    const x3 = x2 + dx3, y3 = y2 + dy3;
+    const x2 = cx + dx2, y2 = cy + dy2;
+    const x3 = cx + dx3, y3 = cy + dy3;
     reconstructedEnds.push([x3, y3]);
     cx = x3; cy = y3;
   }
