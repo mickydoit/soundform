@@ -52,19 +52,22 @@ test('simplifyToBudget leaves an already-small strand under budget alone at eps0
 });
 
 test('buildVectorPaths keeps a strand that used to exceed the old 300-point drop cap', () => {
-  // A smooth curve whose eps=1.4 simplification lands between 300 and 500 points.
-  const strand = new Float32Array(400 * 3);
-  for (let i = 0; i < 400; i++) {
-    const t = i / 399;
-    strand[i * 3] = Math.cos(t * 40) * 0.6 + t * 0.001;
+  // Jittered loop whose eps=1.4 simplification lands at 384 points (verified
+  // via rdp directly) — solidly between the old 300 drop cap and the 500 budget.
+  const n = 6000;
+  const strand = new Float32Array(n * 3);
+  for (let i = 0; i < n; i++) {
+    const t = i / (n - 1);
+    const jitter = Math.sin(t * 1200) * 0.008;
+    strand[i * 3] = Math.cos(t * 6) * 0.6 + jitter;
     strand[i * 3 + 1] = (t - 0.5) * 1.4;
-    strand[i * 3 + 2] = Math.sin(t * 40) * 0.6;
+    strand[i * 3 + 2] = Math.sin(t * 6) * 0.6 + jitter;
   }
-  const positions = strand;
-  const items = buildVectorPaths({ strands: [strand], positions, mvp: IDENTITY,
+  const items = buildVectorPaths({ strands: [strand], positions: strand, mvp: IDENTITY,
     width: 1600, height: 1200, stops: [[0, '#000000'], [1, '#ffffff']], weight: 1 });
   assert.equal(items.length, 1, 'the strand must appear, not be dropped');
   assert.ok(items[0].points.length >= 2);
+  assert.ok(items[0].points.length > 300, 'sanity check: this fixture must actually exceed the old drop cap');
 });
 
 test('buildVectorPaths resolves colors and geometry per strand', () => {
