@@ -327,7 +327,7 @@ function bindAudio() {
       if (out.cloud) {
         // Grown session: the design IS the history — show it as captured
         // geometry directly (regen sliders would replace it).
-        design = { positions: out.cloud.positions, attr: out.cloud.attr, strands: [] };
+        design = { positions: out.cloud.positions, attr: out.cloud.attr, strands: out.cloud.strands || [] };
         renderer.setMotion(motionParams(fingerprint.seed));
         if (params.flatView) renderer.setOrientation(-Math.PI / 2, 0);
         renderer.setCloud(out.cloud.positions, out.cloud.attr);
