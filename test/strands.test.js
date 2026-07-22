@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { projectStrand, rdp, toBezierPath, buildDensityGrid } from '../js/strands.js';
+import { projectStrand, rdp, toBezierPath, buildDensityGrid,
+         simplifyToBudget, buildVectorPaths } from '../js/strands.js';
 
 const IDENTITY = [1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1];
 
@@ -33,4 +34,54 @@ test('density grid: dense region samples higher than empty', () => {
   }
   const g = buildDensityGrid(pos, 16);
   assert.ok(g.sample(0.05, 0, 0) > g.sample(0.9, 0.9, 0.9));
+});
+
+test('simplifyToBudget never drops a strand, even a very dense one', () => {
+  // Amplitude-2 zigzag: at epsilon 1.4 nearly every point survives (>500).
+  const pts = [];
+  for (let i = 0; i < 5000; i++) pts.push([i * 0.1, (i % 2) * 2]);
+  const out = simplifyToBudget(pts, 1.4, 500);
+  assert.ok(out.length >= 2, 'strand must never vanish');
+  assert.ok(out.length <= 500, `expected <=500, got ${out.length}`);
+});
+
+test('simplifyToBudget leaves an already-small strand under budget alone at eps0', () => {
+  const pts = [[0, 0], [10, 0.01], [20, 0], [30, 5], [40, 0]];
+  assert.deepEqual(simplifyToBudget(pts, 1.4, 500), rdp(pts, 1.4));
+});
+
+test('buildVectorPaths keeps a strand that used to exceed the old 300-point drop cap', () => {
+  // A smooth curve whose eps=1.4 simplification lands between 300 and 500 points.
+  const strand = new Float32Array(400 * 3);
+  for (let i = 0; i < 400; i++) {
+    const t = i / 399;
+    strand[i * 3] = Math.cos(t * 40) * 0.6 + t * 0.001;
+    strand[i * 3 + 1] = (t - 0.5) * 1.4;
+    strand[i * 3 + 2] = Math.sin(t * 40) * 0.6;
+  }
+  const positions = strand;
+  const items = buildVectorPaths({ strands: [strand], positions, mvp: IDENTITY,
+    width: 1600, height: 1200, stops: [[0, '#000000'], [1, '#ffffff']], weight: 1 });
+  assert.equal(items.length, 1, 'the strand must appear, not be dropped');
+  assert.ok(items[0].points.length >= 2);
+});
+
+test('buildVectorPaths resolves colors and geometry per strand', () => {
+  const strand = new Float32Array(200 * 3);
+  for (let i = 0; i < 200; i++) {
+    const t = i / 199;
+    strand[i * 3] = Math.cos(t * 6) * 0.6;
+    strand[i * 3 + 1] = (t - 0.5) * 1.4;
+    strand[i * 3 + 2] = Math.sin(t * 6) * 0.6;
+  }
+  const items = buildVectorPaths({ strands: [strand], positions: strand, mvp: IDENTITY,
+    width: 800, height: 600, stops: [[0, '#050614'], [1, '#ffffff']], weight: 2 });
+  assert.equal(items.length, 1);
+  const it = items[0];
+  assert.match(it.c1, /^#[0-9a-f]{6}$/);
+  assert.match(it.c2, /^#[0-9a-f]{6}$/);
+  assert.ok(it.strokeWidth > 0);
+  assert.ok(it.opacity > 0 && it.opacity <= 1);
+  assert.equal(it.x1, it.points[0][0]);
+  assert.equal(it.y2, it.points[it.points.length - 1][1]);
 });

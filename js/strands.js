@@ -1,5 +1,7 @@
 // Strand → editable SVG path machinery. DOM/THREE-free (works under node).
 
+import { sampleRamp, rgbToHex } from './palettes.js';
+
 export function projectStrand(strand, m, w, h) {
   const pts = [];
   let depthSum = 0, count = 0;
@@ -41,6 +43,22 @@ export function rdp(pts, epsilon) {
   return pts.filter((_, i) => keep[i]);
 }
 
+const SIMPLIFY_BUDGET = 500;
+const SIMPLIFY_GROWTH = 1.3;
+const SIMPLIFY_MAX_ATTEMPTS = 6;
+
+// Adaptive RDP: loosen epsilon until the strand fits the budget instead of
+// ever dropping it outright. Dense strands get coarser, never invisible.
+export function simplifyToBudget(pts, epsilon0 = 1.4, budget = SIMPLIFY_BUDGET) {
+  let epsilon = epsilon0;
+  let out = rdp(pts, epsilon);
+  for (let i = 1; i < SIMPLIFY_MAX_ATTEMPTS && out.length > budget; i++) {
+    epsilon *= SIMPLIFY_GROWTH;
+    out = rdp(pts, epsilon);
+  }
+  return out;
+}
+
 // Catmull-Rom → cubic bezier SVG path.
 export function toBezierPath(pts) {
   if (pts.length < 2) return '';
@@ -71,4 +89,35 @@ export function buildDensityGrid(positions, res = 24) {
       return grid[(idx(x) * res + idx(y)) * res + idx(z)] / max;
     },
   };
+}
+
+// Strand → simplified 2D path + resolved color/weight, ready for any
+// vector format (SVG gradient stops, PDF flat-color runs) to draw from.
+export function buildVectorPaths({ strands, positions, mvp, width, height, stops, weight }) {
+  const grid = buildDensityGrid(positions);
+  const items = [];
+
+  strands.forEach((strand, si) => {
+    const { pts, depth } = projectStrand(strand, mvp, width, height);
+    if (pts.length < 2) return;
+    const simplified = simplifyToBudget(pts, 1.4, SIMPLIFY_BUDGET);
+    if (simplified.length < 2) return;
+    let dSum = 0, dN = 0;
+    for (let i = 0; i < strand.length; i += 30) {
+      dSum += grid.sample(strand[i], strand[i + 1], strand[i + 2]); dN++;
+    }
+    const density = dN ? dSum / dN : 0.3;
+    items.push({
+      si, depth, density, points: simplified,
+      c1: rgbToHex(sampleRamp(stops, 0.35 + density * 0.3)),
+      c2: rgbToHex(sampleRamp(stops, 0.6 + density * 0.4)),
+      strokeWidth: (0.6 + density * 3.4) * weight,
+      opacity: 0.35 + density * 0.55,
+      x1: simplified[0][0], y1: simplified[0][1],
+      x2: simplified[simplified.length - 1][0], y2: simplified[simplified.length - 1][1],
+    });
+  });
+
+  items.sort((a, b) => b.depth - a.depth); // far strands first (painter's order)
+  return items;
 }
