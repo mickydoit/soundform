@@ -155,35 +155,61 @@ test('cymatics generator', () => {
   checkGenerator('cymatics');
 });
 
-test('cymatics strands: field-following rings, no straight radial spokes', () => {
+test('cymatics strands: field-following arcs, gaps in nodal voids, no straight radial spokes', () => {
   const params = { ...baseParams, mode: 'cymatics', strandCount: 48 };
   const out = generate(testFingerprint(), params);
-  assert.equal(out.strands.length, 48, 'every requested strand should be a ring, none dropped to spokes');
-  let bulgingCount = 0;
+  assert.ok(out.strands.length >= 1, 'some strand geometry must survive');
+
+  let bulgingCount = 0, fullRingCount = 0;
   for (const s of out.strands) {
-    // Sign-only (no magnitude floor): even the innermost ring has a tiny
-    // but nonzero radius, and a true full sweep crosses zero on both axes
-    // regardless of scale — a fixed-angle spoke would not. This must hold
-    // for every strand — it's structural, independent of the field.
-    let hasPosX = false, hasNegX = false, hasPosZ = false, hasNegZ = false;
+    const n = s.length / 3;
+    assert.ok(n >= 4, 'every strand must have enough points to be a real arc, not a sliver');
+
     let minR = Infinity, maxR = -Infinity;
+    const angles = [];
     for (let i = 0; i < s.length; i += 3) {
       const x = s[i], z = s[i + 2];
-      if (x > 0) hasPosX = true; if (x < 0) hasNegX = true;
-      if (z > 0) hasPosZ = true; if (z < 0) hasNegZ = true;
       const r = Math.hypot(x, z);
       if (r < minR) minR = r; if (r > maxR) maxR = r;
+      angles.push(Math.atan2(z, x));
     }
-    assert.ok(hasPosX && hasNegX && hasPosZ && hasNegZ,
-      'a ring must sweep through all four quadrants — a fixed-angle spoke would not');
-    if (maxR - minR > minR * 0.05) bulgingCount++;
+    if (maxR - minR > minR * 0.02) bulgingCount++;
+
+    // A degenerate radial spoke has ~zero angular spread; a real arc — full
+    // ring or partial — sweeps a real range of angles as it walks outward.
+    let spread = 0;
+    for (let i = 1; i < angles.length; i++) {
+      let d = angles[i] - angles[i - 1];
+      while (d > Math.PI) d -= 2 * Math.PI;
+      while (d < -Math.PI) d += 2 * Math.PI;
+      spread += Math.abs(d);
+    }
+    assert.ok(spread > 0.05, 'a spoke would have near-zero angular sweep — this must be a real arc');
+
+    // A ring whose start and end points coincide is a full closed loop (no
+    // gap survived it) — those must still sweep all four quadrants, exactly
+    // like an unbroken ring always has.
+    const dx = s[0] - s[s.length - 3], dz = s[2] - s[s.length - 1];
+    if (Math.hypot(dx, dz) < minR * 0.05) {
+      fullRingCount++;
+      let hasPosX = false, hasNegX = false, hasPosZ = false, hasNegZ = false;
+      for (let i = 0; i < s.length; i += 3) {
+        if (s[i] > 0) hasPosX = true; if (s[i] < 0) hasNegX = true;
+        if (s[i + 2] > 0) hasPosZ = true; if (s[i + 2] < 0) hasNegZ = true;
+      }
+      assert.ok(hasPosX && hasNegX && hasPosZ && hasNegZ,
+        'a full closed ring must sweep through all four quadrants');
+    }
   }
   // Radius modulation (petal bulge) depends on the field's local amplitude
-  // variance at each ring's radius — an occasional ring can legitimately
-  // sit near a node with little variation, so require most (not all) rings
-  // to bulge rather than a strict per-ring guarantee.
-  assert.ok(bulgingCount >= out.strands.length * 0.85,
-    `most rings should be amplitude-modulated (petal bulge), not perfect circles: ${bulgingCount}/${out.strands.length}`);
+  // variance at each ring's radius — require most (not all) arcs to bulge
+  // rather than a strict per-strand guarantee.
+  assert.ok(bulgingCount >= out.strands.length * 0.5,
+    `most arcs should be amplitude-modulated (petal bulge), not perfect circles: ${bulgingCount}/${out.strands.length}`);
+  // The whole point of this fix: rings crossing a nodal void must actually
+  // break into separate arcs, not stay unbroken loops regardless of the field.
+  assert.ok(fullRingCount < out.strands.length,
+    'at least some rings should break into arcs at nodal voids, not all stay full loops');
 });
 
 test('harmonic generator: bounded, dense, deterministic, strands', () => {

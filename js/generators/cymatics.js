@@ -118,21 +118,113 @@ export function generate(fp, params, onProgress) {
   // camera angle — previously only Y wobbled, so rings (and the straight
   // spokes padding them out) projected as plain circles/lines regardless
   // of the sound.
+  //
+  // A ring used to hold its full circular sweep even where the field is
+  // near-zero (the nodal channels between petals) — the density render's
+  // dark voids there come from rejection sampling keeping far fewer points,
+  // which a continuous ring can't represent. Below VOID_CUTOFF the ring now
+  // breaks into a gap instead, so each ring exports as the arcs that
+  // survive the same field the point cloud is built from, not a whole loop
+  // wobbled by it.
   const want = Math.max(24, Math.min(96, params.strandCount || 96));
   const RING_AMP_GAIN = 0.25;
+  const RING_SAMPLES = 220;
+  const VOID_CUTOFF = 0.12;
+  const VOID_SMOOTH_WINDOW = 15; // angular samples; smooths out single-ripple
+                                  // gaps from the field's fine radial oscillation
+                                  // at larger radii, so only sustained nodal
+                                  // regions (real petal boundaries) break a ring
   const strands = [];
   for (let ri = 0; ri < want; ri++) {
     const r0 = (ri + 0.5) / want;
-    const pts = new Float32Array(220 * 3);
-    for (let i = 0; i < 220; i++) {
-      const th = (i / 219) * Math.PI * 2;
+    const ringPts = new Float32Array(RING_SAMPLES * 3);
+    const af0 = new Float32Array(RING_SAMPLES);
+    for (let i = 0; i < RING_SAMPLES; i++) {
+      const th = (i / RING_SAMPLES) * Math.PI * 2;
       const f = field(r0, th) / fMax;
       const r = r0 * (1 + RING_AMP_GAIN * f);
-      pts[i * 3] = Math.cos(th) * r;
-      pts[i * 3 + 1] = f * relief;
-      pts[i * 3 + 2] = Math.sin(th) * r;
+      ringPts[i * 3] = Math.cos(th) * r;
+      ringPts[i * 3 + 1] = f * relief;
+      ringPts[i * 3 + 2] = Math.sin(th) * r;
+      af0[i] = Math.abs(f);
     }
-    strands.push(resamplePolyline(pts, 200));
+    const smoothed = boxcarMean(af0, VOID_SMOOTH_WINDOW);
+    const visible = new Uint8Array(RING_SAMPLES);
+    for (let i = 0; i < RING_SAMPLES; i++) visible[i] = smoothed[i] >= VOID_CUTOFF ? 1 : 0;
+    for (const run of visibleRuns(visible)) {
+      if (run.length < 4) continue; // sliver, not worth a stroke
+      const arcPts = new Float32Array(run.length * 3);
+      run.forEach((i, k) => {
+        arcPts[k * 3] = ringPts[i * 3];
+        arcPts[k * 3 + 1] = ringPts[i * 3 + 1];
+        arcPts[k * 3 + 2] = ringPts[i * 3 + 2];
+      });
+      const closed = run.length === RING_SAMPLES;
+      const src = closed ? closeLoop(arcPts) : arcPts;
+      const m = closed ? 200 : Math.max(6, Math.round(200 * run.length / RING_SAMPLES));
+      strands.push(resamplePolyline(src, m));
+    }
   }
   return finalize(positions.subarray(0, count * 3).slice(), attr.subarray(0, count).slice(), strands, params);
+}
+
+// Circular boxcar average — smooths a per-angle sample array over `window`
+// neighbors (wrapping), so an isolated single-sample dip doesn't register
+// on its own.
+function boxcarMean(arr, window) {
+  const n = arr.length;
+  const half = Math.floor(window / 2);
+  const out = new Float32Array(n);
+  let sum = 0;
+  for (let i = -half; i <= half; i++) sum += arr[((i % n) + n) % n];
+  for (let i = 0; i < n; i++) {
+    out[i] = sum / (half * 2 + 1);
+    const drop = ((i - half) % n + n) % n;
+    const add = ((i + half + 1) % n + n) % n;
+    sum += arr[add] - arr[drop];
+  }
+  return out;
+}
+
+// Contiguous index runs where visible[i] is truthy, treating the array as a
+// circular ring (a run may wrap past the end back to the start). Returns
+// one full-length run if every sample is visible.
+function visibleRuns(visible) {
+  const n = visible.length;
+  let allVisible = true, anyVisible = false;
+  for (let i = 0; i < n; i++) {
+    if (visible[i]) anyVisible = true; else allVisible = false;
+  }
+  if (allVisible) return [Array.from({ length: n }, (_, k) => k)];
+  if (!anyVisible) return []; // whole ring sits in a node — no arcs survive
+
+  let start = 0;
+  while (!visible[start]) start++; // first visible index (anyVisible, so this halts)
+  while (visible[(start - 1 + n) % n]) start = (start - 1 + n) % n; // walk back to run start
+
+  const runs = [];
+  let cur = null;
+  for (let k = 0; k < n; k++) {
+    const idx = (start + k) % n;
+    if (visible[idx]) {
+      if (!cur) cur = [];
+      cur.push(idx);
+    } else if (cur) {
+      runs.push(cur);
+      cur = null;
+    }
+  }
+  if (cur) runs.push(cur);
+  return runs;
+}
+
+// Appends the first point to the end so a fully-visible ring still closes
+// visually (matches the old fixed 220-sample duplicate-endpoint behavior).
+function closeLoop(pts) {
+  const out = new Float32Array(pts.length + 3);
+  out.set(pts);
+  out[pts.length] = pts[0];
+  out[pts.length + 1] = pts[1];
+  out[pts.length + 2] = pts[2];
+  return out;
 }
