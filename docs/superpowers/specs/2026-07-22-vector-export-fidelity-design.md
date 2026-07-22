@@ -100,12 +100,22 @@ Paint) — `LiveConductor._requestReveal` (`js/live.js:182-205`) already calls
 the real design generator and gets back `out.strands`; today only
 `out.positions`/`out.attr` are kept (written to the canvas) and `out.strands`
 is discarded. Change: store the latest `out.strands` on `this.paint.strands`
-alongside the existing `st.revealTotal`. On `freeze()`
-(`js/live.js:301-309`), when `st.brush` is null (reveal-based, not the
-attractor orbit brush), clip `st.strands` to `st.count`: walk strands in
-order accumulating point counts, keep whole strands under the boundary,
-truncate the strand straddling `st.count` to its first N points, drop any
-strand entirely beyond it. Attach as `out.cloud.strands`.
+alongside the existing `st.revealTotal`.
+
+Note: `strands` (sparse ~200-point backbone curves, one per strand, used
+only for vector export) and `positions`/`attr` (the dense rendered point
+cloud `st.count` indexes into via `drawRange`) are built independently by
+the generator (e.g. `js/generators/radial.js:17-85`) — they are not
+index-aligned, so a cumulative point-count boundary in `positions` does not
+correspond to a boundary in `strands`. On `freeze()` (`js/live.js:301-309`),
+when `st.brush` is null (reveal-based, not the attractor orbit brush):
+if the reveal had reached completion (`st.count >= st.revealTotal`, the
+common case — painting finished before freezing), use `st.strands` as-is,
+full fidelity. If frozen mid-reveal, truncate every strand to the same
+*fraction* `st.count / st.revealTotal` of its own point count (each strand
+independently, not a cumulative walk across strands) — an honest
+approximation of "how far the reveal had gotten," not a claim of exact
+per-point alignment. Attach the result as `out.cloud.strands`.
 
 **Attractor-brush Paint** — `createOrbitBrush` (`js/generators/attractor.js`)
 has no discrete strands; it's one continuously-steered orbit. But
