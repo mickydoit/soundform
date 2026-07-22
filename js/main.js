@@ -2,7 +2,7 @@ import { AudioEngine } from './audio.js?v=41';
 import { buildFingerprint, buildTrajectory } from './features.js?v=41';
 import { DensityRenderer } from './density.js?v=41';
 import { PALETTES, buildLUT, customRamp, hexToRgb } from './palettes.js?v=41';
-import { exportCanvas, exportStrandSVG, framePlan, exportMP4, loopsForDuration } from './exporter.js?v=41';
+import { exportCanvas, exportStrandSVG, exportStrandPDF, framePlan, exportMP4, loopsForDuration } from './exporter.js?v=41';
 import { motionParams, displacePoint } from './motion.js?v=41';
 import { LiveConductor } from './live.js?v=41';
 import { LiveRecorder, MAX_RECORD_SEC } from './recorder.js?v=41';
@@ -525,10 +525,10 @@ function bindExport() {
     btn.addEventListener('click', async () => {
       try {
         const fmt = btn.dataset.fmt;
-        if (fmt === 'svg') {
+        if (fmt === 'svg' || fmt === 'pdf') {
           if (!design) { setStatus('Create a design first'); return; }
           if (!design.strands.length) {
-            setStatus('SVG needs a shape design — painted captures have no paths. Try PNG/JPG/WebP, or nudge a Form slider to regenerate a shape.');
+            setStatus('Vector export needs a shape design — painted captures with no revealed strokes have no paths yet. Try PNG/JPG/WebP, or nudge a Form slider to regenerate a shape.');
             return;
           }
           const all = design.strands;
@@ -553,18 +553,23 @@ function bindExport() {
             expStrands = picked.map(displaceArr);
             expPositions = displaceArr(design.positions);
           }
-          const svg = exportStrandSVG({
+          const vecArgs = {
             strands: expStrands,
             positions: expPositions,
             mvp: renderer.getMVP().elements,
             width: 1600, height: 1200,
             stops: activeStops(), background: params.transparentBg ? null : params.background,
             weight: params.strokeWeight,
-          });
-          const url = URL.createObjectURL(new Blob([svg], { type: 'image/svg+xml' }));
-          const a = Object.assign(document.createElement('a'), { href: url, download: 'soundform.svg' });
-          document.body.appendChild(a); a.click(); document.body.removeChild(a);
-          setTimeout(() => URL.revokeObjectURL(url), 3000);
+          };
+          if (fmt === 'svg') {
+            const svg = exportStrandSVG(vecArgs);
+            const url = URL.createObjectURL(new Blob([svg], { type: 'image/svg+xml' }));
+            const a = Object.assign(document.createElement('a'), { href: url, download: 'soundform.svg' });
+            document.body.appendChild(a); a.click(); document.body.removeChild(a);
+            setTimeout(() => URL.revokeObjectURL(url), 3000);
+          } else {
+            exportStrandPDF(vecArgs);
+          }
         } else if (fmt === 'mp4') {
           if (!('VideoEncoder' in window)) { setStatus('MP4 export not supported in this browser'); return; }
           if (!design) { setStatus('Create a design first'); return; }
@@ -598,8 +603,7 @@ function bindExport() {
           const RES_PX = { std: null, '2k': 2400, '4k': 3840, '8k': 7680 };
           const container = document.getElementById('renderer-container');
           const target = RES_PX[params.exportRes];
-          const scale = fmt === 'pdf' ? 2
-            : (target ? target / Math.max(container.clientWidth || 800, container.clientHeight || 600) : 3);
+          const scale = target ? target / Math.max(container.clientWidth || 800, container.clientHeight || 600) : 3;
           const transparent = params.transparentBg && (fmt === 'png' || fmt === 'webp');
           const canvas = renderer.renderHiRes(scale, { transparent });
           if (renderer.exportNote) setStatus(renderer.exportNote);

@@ -14,21 +14,6 @@ export async function exportCanvas(canvas, format) {
     case 'webp':
       _dl(canvas.toDataURL('image/webp', 0.95), 'soundform.webp');
       break;
-
-    case 'pdf': {
-      const { jsPDF } = window.jspdf;
-      const w = canvas.width, h = canvas.height;
-      const mmW = w > h ? 297 : 210;
-      const mmH = mmW * (h / w);
-      const doc = new jsPDF({
-        orientation: w > h ? 'landscape' : 'portrait',
-        unit: 'mm',
-        format: [mmW, mmH],
-      });
-      doc.addImage(_onBlack(canvas, 'image/jpeg', 0.92), 'JPEG', 0, 0, mmW, mmH);
-      doc.save('soundform.pdf');
-      break;
-    }
   }
 }
 
