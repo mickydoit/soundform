@@ -67,6 +67,22 @@ export function fingerprintDelta(a, b) {
        + 0.25 * Math.abs((a.spread ?? 0) - (b.spread ?? 0));
 }
 
+// Reveal-based Paint: `strands` (sparse backbone curves, for export) and
+// `positions`/`attr` (the dense rendered cloud `count` indexes into) come
+// from the same generator call but are NOT index-aligned with each other.
+// If the reveal reached completion, use strands as-is (full fidelity, the
+// common case). If frozen mid-reveal, truncate each strand independently to
+// the same fraction as an honest approximation — not a claim of exact
+// per-point alignment between the two arrays.
+export function clipStrandsToCount(strands, revealTotal, count) {
+  if (!revealTotal || count >= revealTotal) return strands;
+  const frac = count / revealTotal;
+  return strands.map((s) => {
+    const keep = Math.max(0, Math.floor((s.length / 3) * frac)) * 3;
+    return s.subarray(0, keep);
+  });
+}
+
 export class LiveConductor {
   constructor({ audio, renderer, generate, applyStops, getParams, onVu = null }) {
     Object.assign(this, { audio, renderer, generate, applyStops, getParams, onVu });
@@ -89,7 +105,7 @@ export class LiveConductor {
     this.growthMode = 'morph';
     this.growGen = 0;            // stale-generation guard across mode switches/clears
     this.onGrowStatus = null;
-    this.paint = null;           // { pace, brush, count, revealTotal, pendingGen, retried, done, begun }
+    this.paint = null;           // { pace, brush, count, revealTotal, strands, segments, pendingGen, retried, done, begun }
     this.paintMax = null;        // test override; otherwise getParams/paint default
   }
 
@@ -107,7 +123,7 @@ export class LiveConductor {
     this.growthMode = mode;
     this.growGen++;
     this.paint = mode === 'paint'
-      ? { pace: new BrushPace(), brush: null, count: 0, revealTotal: 0,
+      ? { pace: new BrushPace(), brush: null, count: 0, revealTotal: 0, strands: [], segments: [0],
           pendingGen: false, retried: false, done: false, begun: false }
       : null;
   }
@@ -200,6 +216,7 @@ export class LiveConductor {
         this.renderer.writePaintPoints(from,
           out.positions.subarray(from * 3), out.attr.subarray(from));
         st.revealTotal = total;
+        st.strands = out.strands;
       })
       .catch(() => { st.pendingGen = false; });
   }
@@ -303,7 +320,11 @@ export class LiveConductor {
     this.stop();
     const out = { fingerprint: this.windowFingerprint(), stops: stopsToHex(this.colour) };
     if (this.growthMode === 'paint' && this.paint && this.paint.count > 0) {
-      out.cloud = this.renderer.getPaintSlice(this.paint.count);
+      const st = this.paint;
+      out.cloud = this.renderer.getPaintSlice(st.count);
+      out.cloud.strands = st.brush
+        ? [] // attractor-brush segments are attached in Task 8
+        : clipStrandsToCount(st.strands, st.revealTotal, st.count);
     }
     return out;
   }

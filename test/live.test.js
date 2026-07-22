@@ -53,7 +53,7 @@ test('fingerprintDelta crosses the morph threshold on a real change', () => {
   assert.ok(fingerprintDelta(a, near) < MORPH_THRESHOLD);
 });
 
-import { LiveConductor, LIVE_MIN_FRAMES } from '../js/live.js';
+import { LiveConductor, LIVE_MIN_FRAMES, clipStrandsToCount } from '../js/live.js';
 
 const mkFrame = (o = {}) => ({
   pitchHz: 220, pitchConf: 0.9, rms: 0.15, flux: 0.002,
@@ -216,6 +216,39 @@ test('paint: freeze returns the painted cloud', async () => {
   const out = conductor.freeze();
   assert.ok(out.cloud);
   assert.ok(out.cloud.positions.length > 0);
+});
+
+test('clipStrandsToCount returns strands unchanged when the reveal completed', () => {
+  const strands = [new Float32Array(30), new Float32Array(60)]; // 10 and 20 points
+  const out = clipStrandsToCount(strands, 1000, 1000);
+  assert.equal(out, strands);
+});
+
+test('clipStrandsToCount truncates every strand to the same revealed fraction', () => {
+  const a = new Float32Array(40 * 3); // 40 points
+  const b = new Float32Array(10 * 3); // 10 points
+  const out = clipStrandsToCount([a, b], 1000, 500); // 50% revealed
+  assert.equal(out[0].length, 20 * 3, 'strand a truncated to 50% of its own points');
+  assert.equal(out[1].length, 5 * 3, 'strand b truncated to 50% of its own points');
+});
+
+test('paint (non-attractor): freeze attaches the revealed strands', async () => {
+  const strandA = new Float32Array(200 * 3);
+  const { conductor } = harness({
+    generate: async (fp, p) => ({
+      positions: new Float32Array(p.density * 3), attr: new Float32Array(p.density),
+      strands: [strandA],
+    }),
+    getParams: () => ({ mode: 'radial', complexity: 0.5, symmetry: 1, twist: 0,
+                        cymStyle: 'auto', liveDensity: 1000, paintMaxPoints: 5000,
+                        exposure: 30, scale: 1, grain: 1 }),
+  });
+  conductor.setGrowthMode('paint');
+  for (let i = 0; i < 90; i++) { conductor.tick(i / 30); if (i % 15 === 14) await settle(); }
+  await settle();
+  const out = conductor.freeze();
+  assert.ok(out.cloud.strands, 'strands must be attached to the frozen cloud');
+  assert.equal(out.cloud.strands.length, 1);
 });
 
 test('paint (non-attractor): reveal requests a full design then advances', async () => {
