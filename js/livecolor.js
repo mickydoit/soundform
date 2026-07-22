@@ -4,7 +4,7 @@
 // the second-strongest pitch class the secondary; major leans warm+light,
 // minor cool+deep; consonance drives saturation; centroid lifts the
 // accent toward cream. Output feeds customRamp-shaped stops → buildLUT.
-import { bestTriad } from './features.js?v=41';
+import { bestTriad } from './features.js?v=42';
 
 export const PC_BASE_HUE = 270;      // C = lavender
 export const BG_HEX = '#04040a';
