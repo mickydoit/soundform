@@ -53,7 +53,7 @@ test('fingerprintDelta crosses the morph threshold on a real change', () => {
   assert.ok(fingerprintDelta(a, near) < MORPH_THRESHOLD);
 });
 
-import { LiveConductor, LIVE_MIN_FRAMES, clipStrandsToCount } from '../js/live.js';
+import { LiveConductor, LIVE_MIN_FRAMES, clipStrandsToCount, sliceSegments } from '../js/live.js';
 
 const mkFrame = (o = {}) => ({
   pitchHz: 220, pitchConf: 0.9, rms: 0.15, flux: 0.002,
@@ -193,6 +193,38 @@ test('paint (attractor): sound advances the brush, silence rests it', async () =
   for (let i = 90; i < 210; i++) conductor.tick(i / 30); // 4s of silence
   const after = log.paintCounts[log.paintCounts.length - 1];
   assert.ok(after - before < 3500, 'brush rests in silence (bounded release tail)');
+});
+
+test('sliceSegments with no steer boundaries returns one segment covering everything', () => {
+  const positions = new Float32Array(300); // 100 points
+  const out = sliceSegments(positions, [0], 100);
+  assert.equal(out.length, 1);
+  assert.equal(out[0].length, 300);
+});
+
+test('sliceSegments splits at each recorded boundary', () => {
+  const positions = new Float32Array(1500); // 500 points
+  const out = sliceSegments(positions, [0, 200, 350], 500);
+  assert.equal(out.length, 3);
+  assert.equal(out[0].length, 200 * 3);
+  assert.equal(out[1].length, 150 * 3);
+  assert.equal(out[2].length, 150 * 3);
+});
+
+test('paint (attractor): steering records a segment boundary, freeze attaches segments', async () => {
+  const frame = { current: mkFrame() };
+  const { conductor } = harness({ frame });
+  conductor.setGrowthMode('paint');
+  for (let i = 0; i < 90; i++) conductor.tick(i / 30); // 3s — paints, no steer yet
+  await settle();
+  const c2 = new Float32Array(12); c2[2] = 1; c2[6] = 0.85; c2[9] = 0.9; // different chord
+  frame.current = mkFrame({ pitchHz: 880, chroma: c2 });
+  for (let i = 90; i < 300; i++) conductor.tick(i / 30); // steer should fire on the change
+  await settle();
+  const out = conductor.freeze();
+  assert.ok(out.cloud.strands.length >= 1, 'at least one segment attached');
+  const totalPoints = out.cloud.strands.reduce((n, s) => n + s.length / 3, 0);
+  assert.equal(totalPoints, out.cloud.positions.length / 3, 'segments cover exactly the painted points');
 });
 
 test('paint: completion fires the status once and stops', async () => {

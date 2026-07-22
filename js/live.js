@@ -83,6 +83,21 @@ export function clipStrandsToCount(strands, revealTotal, count) {
   });
 }
 
+// Attractor-brush Paint has no discrete strands — writePaintPoints appends
+// at strictly increasing offsets, so the point buffer is already one
+// continuous stroke in time order. Slice it into segments at each recorded
+// steer() boundary so downstream RDP simplification runs per-segment
+// instead of over one enormous strand.
+export function sliceSegments(positions, boundaries, count) {
+  const bounds = boundaries.filter((b) => b < count).concat(count);
+  const out = [];
+  for (let i = 0; i < bounds.length - 1; i++) {
+    const a = bounds[i], b = bounds[i + 1];
+    if (b > a) out.push(positions.subarray(a * 3, b * 3));
+  }
+  return out;
+}
+
 export class LiveConductor {
   constructor({ audio, renderer, generate, applyStops, getParams, onVu = null }) {
     Object.assign(this, { audio, renderer, generate, applyStops, getParams, onVu });
@@ -187,7 +202,8 @@ export class LiveConductor {
     this.lastMorph = nowSec;
     this.shownFp = fp;
     if (st.brush) {
-      st.brush.steer(fp);                       // ribbons bend from here on
+      st.segments.push(st.count);                // mark the bend as a segment boundary
+      st.brush.steer(fp);                        // ribbons bend from here on
     } else if (!st.pendingGen) {
       this._requestReveal(fp, p, max, st.count); // repaint the unpainted remainder
     }
@@ -323,7 +339,7 @@ export class LiveConductor {
       const st = this.paint;
       out.cloud = this.renderer.getPaintSlice(st.count);
       out.cloud.strands = st.brush
-        ? [] // attractor-brush segments are attached in Task 8
+        ? sliceSegments(out.cloud.positions, st.segments, st.count)
         : clipStrandsToCount(st.strands, st.revealTotal, st.count);
     }
     return out;
