@@ -155,6 +155,37 @@ test('cymatics generator', () => {
   checkGenerator('cymatics');
 });
 
+test('cymatics strands: field-following rings, no straight radial spokes', () => {
+  const params = { ...baseParams, mode: 'cymatics', strandCount: 48 };
+  const out = generate(testFingerprint(), params);
+  assert.equal(out.strands.length, 48, 'every requested strand should be a ring, none dropped to spokes');
+  let bulgingCount = 0;
+  for (const s of out.strands) {
+    // Sign-only (no magnitude floor): even the innermost ring has a tiny
+    // but nonzero radius, and a true full sweep crosses zero on both axes
+    // regardless of scale — a fixed-angle spoke would not. This must hold
+    // for every strand — it's structural, independent of the field.
+    let hasPosX = false, hasNegX = false, hasPosZ = false, hasNegZ = false;
+    let minR = Infinity, maxR = -Infinity;
+    for (let i = 0; i < s.length; i += 3) {
+      const x = s[i], z = s[i + 2];
+      if (x > 0) hasPosX = true; if (x < 0) hasNegX = true;
+      if (z > 0) hasPosZ = true; if (z < 0) hasNegZ = true;
+      const r = Math.hypot(x, z);
+      if (r < minR) minR = r; if (r > maxR) maxR = r;
+    }
+    assert.ok(hasPosX && hasNegX && hasPosZ && hasNegZ,
+      'a ring must sweep through all four quadrants — a fixed-angle spoke would not');
+    if (maxR - minR > minR * 0.05) bulgingCount++;
+  }
+  // Radius modulation (petal bulge) depends on the field's local amplitude
+  // variance at each ring's radius — an occasional ring can legitimately
+  // sit near a node with little variation, so require most (not all) rings
+  // to bulge rather than a strict per-ring guarantee.
+  assert.ok(bulgingCount >= out.strands.length * 0.85,
+    `most rings should be amplitude-modulated (petal bulge), not perfect circles: ${bulgingCount}/${out.strands.length}`);
+});
+
 test('harmonic generator: bounded, dense, deterministic, strands', () => {
   checkGenerator('harmonic');
 });
