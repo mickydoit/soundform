@@ -55,3 +55,34 @@ test('applyTwistArr rotates around Y proportionally to height', () => {
   assert.ok(Math.abs(arr[3]) < 1e-6);       // x' = cos(π/2) = 0
   assert.ok(Math.abs(arr[5] + 1) < 1e-6);   // z' = -sin(π/2) = -1
 });
+
+test('finalize: object strands ({pts,tone,band,ring}) normalize, replicate, keep metadata', () => {
+  const rnd = mulberry32(42);
+  const positions = new Float32Array(60);
+  for (let i = 0; i < 60; i++) positions[i] = (rnd() - 0.5) * 4;
+  const attr = new Float32Array(20).fill(0.5);
+  const pts = new Float32Array([1, 0, 0, 0, 1, 0, -1, 0, 0]);
+  const out = finalize(positions, attr, [{ pts, tone: 0.7, band: 3, ring: 5 }],
+    { symmetry: 2, twist: 0.3 });
+  assert.equal(out.strands.length, 2, 'symmetry 2 replicates the strand');
+  for (const s of out.strands) {
+    assert.equal(s.tone, 0.7);
+    assert.equal(s.band, 3);
+    assert.equal(s.ring, 5);
+    assert.ok(s.pts instanceof Float32Array);
+    for (const v of s.pts) assert.ok(Number.isFinite(v));
+  }
+  assert.notDeepEqual([...out.strands[0].pts], [...out.strands[1].pts],
+    'the two symmetry copies must be rotated apart');
+});
+
+test('finalize: bare-array strands still work unchanged', () => {
+  const rnd = mulberry32(7);
+  const positions = new Float32Array(60);
+  for (let i = 0; i < 60; i++) positions[i] = (rnd() - 0.5) * 4;
+  const attr = new Float32Array(20).fill(0.5);
+  const bare = new Float32Array([1, 0, 0, 0, 1, 0]);
+  const out = finalize(positions, attr, [bare], { symmetry: 2, twist: 0 });
+  assert.equal(out.strands.length, 2);
+  for (const s of out.strands) assert.ok(s instanceof Float32Array);
+});

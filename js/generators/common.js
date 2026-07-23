@@ -76,11 +76,13 @@ export function replicateSymmetry(arr, k) {
 
 // Standard post-pass every generator calls last:
 // normalize (using the CLOUD's transform for strands too, so they stay aligned),
-// then symmetry replication, then twist.
+// then symmetry replication, then twist. A strand is either a bare
+// Float32Array or { pts, tone, band, ring } — object strands transform via
+// .pts and keep their metadata on every symmetry copy.
 export function finalize(positions, attr, strands, params) {
   const t = computeNormalization(positions);
   applyNormalization(positions, t);
-  for (const s of strands) applyNormalization(s, t);
+  for (const s of strands) applyNormalization(s.pts ?? s, t);
 
   const k = Math.max(1, Math.round(params.symmetry || 1));
   let outPos = positions, outAttr = attr, outStrands = strands;
@@ -92,18 +94,19 @@ export function finalize(positions, attr, strands, params) {
     for (let j = 0; j < k; j++) {
       const ang = (j / k) * Math.PI * 2, c = Math.cos(ang), s = Math.sin(ang);
       for (const st of strands) {
-        const copy = new Float32Array(st.length);
-        for (let i = 0; i < st.length; i += 3) {
-          copy[i] = st[i] * c + st[i + 2] * s;
-          copy[i + 1] = st[i + 1];
-          copy[i + 2] = -st[i] * s + st[i + 2] * c;
+        const src = st.pts ?? st;
+        const copy = new Float32Array(src.length);
+        for (let i = 0; i < src.length; i += 3) {
+          copy[i] = src[i] * c + src[i + 2] * s;
+          copy[i + 1] = src[i + 1];
+          copy[i + 2] = -src[i] * s + src[i + 2] * c;
         }
-        outStrands.push(copy);
+        outStrands.push(st.pts ? { ...st, pts: copy } : copy);
       }
     }
   }
   applyTwistArr(outPos, params.twist || 0);
-  for (const s of outStrands) applyTwistArr(s, params.twist || 0);
+  for (const s of outStrands) applyTwistArr(s.pts ?? s, params.twist || 0);
   return { positions: outPos, attr: outAttr, strands: outStrands };
 }
 
