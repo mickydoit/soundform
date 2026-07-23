@@ -142,9 +142,9 @@ export function buildDensityGrid(positions, res = 24) {
 // tonemap analogue, and Illustrator "Select → Same → Stroke Color" friendly.
 // TONE_CLASSES must equal TONE_LEVELS in js/generators/cymatics.js.
 export const TONE_CLASSES = 5;
-const TONE_RAMP_POS = [0.25, 0.425, 0.6, 0.775, 0.95];
-const TONE_OPACITY  = [0.28, 0.435, 0.59, 0.745, 0.9];
-const TONE_WIDTH    = [0.5, 0.725, 0.95, 1.175, 1.4];
+const TONE_RAMP_POS = [0.45, 0.6, 0.72, 0.85, 0.97];
+const TONE_OPACITY  = [0.55, 0.68, 0.78, 0.88, 0.97];
+const TONE_WIDTH    = [0.7, 0.975, 1.25, 1.525, 1.8];
 
 export function toneClass(tone) {
   return Math.max(0, Math.min(TONE_CLASSES - 1, Math.floor(tone * TONE_CLASSES)));
