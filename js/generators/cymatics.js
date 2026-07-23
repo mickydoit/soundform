@@ -148,7 +148,7 @@ export function generate(fp, params, onProgress) {
       ringPts[i * 3] = Math.cos(th) * r;
       ringPts[i * 3 + 1] = f * relief;
       ringPts[i * 3 + 2] = Math.sin(th) * r;
-      af0[i] = Math.abs(f);
+      af0[i] = Math.min(1, Math.abs(f));
     }
     const smoothed = boxcarMean(af0, VOID_SMOOTH_WINDOW);
     const arcs = [];
