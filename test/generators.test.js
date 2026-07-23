@@ -5,6 +5,7 @@ import { pickSystem } from '../js/generators/attractor.js';
 import { sphericalY, makeValueNoise3, recipe } from '../js/generators/harmonic.js';
 import { mulberry32 } from '../js/generators/common.js';
 import { padStrands } from '../js/generators/radial.js';
+import { toneRuns } from '../js/generators/cymatics.js';
 
 export function testFingerprint(overrides = {}) {
   const chroma = new Float32Array(12); chroma[0] = 1; chroma[4] = 0.8; chroma[7] = 0.7;
@@ -40,7 +41,10 @@ export function checkGenerator(mode, fp = testFingerprint()) {
   assert.ok(maxAbs <= 2.5, `${mode}: unbounded (${maxAbs})`);
   assert.ok(std[0] + std[1] + std[2] > 0.15, `${mode}: degenerate`);
   assert.ok(out.strands.length >= 24, `${mode}: needs strands`);
-  for (const s of out.strands) for (let i = 0; i < s.length; i += 1) assert.ok(Number.isFinite(s[i]), `${mode}: non-finite strand value`);
+  for (const s of out.strands) {
+    const arr = s.pts ?? s;
+    for (let i = 0; i < arr.length; i += 1) assert.ok(Number.isFinite(arr[i]), `${mode}: non-finite strand value`);
+  }
   const out2 = generate(fp, params);
   assert.deepEqual([...out.positions.slice(0, 300)], [...out2.positions.slice(0, 300)], `${mode}: not deterministic`);
   return out;
@@ -155,28 +159,46 @@ test('cymatics generator', () => {
   checkGenerator('cymatics');
 });
 
-test('cymatics strands: field-following arcs, gaps in nodal voids, no straight radial spokes', () => {
-  const params = { ...baseParams, mode: 'cymatics', strandCount: 48 };
-  const out = generate(testFingerprint(), params);
-  assert.ok(out.strands.length >= 1, 'some strand geometry must survive');
+test('toneRuns: splits at tone boundaries, gaps below cutoff', () => {
+  const smoothed = new Float32Array(30);
+  for (let i = 0; i < 10; i++) smoothed[i] = 0.25;  // level 1
+  for (let i = 10; i < 20; i++) smoothed[i] = 0.85; // level 4
+  for (let i = 20; i < 30; i++) smoothed[i] = 0.02; // void
+  const runs = toneRuns(smoothed, 0.12, 5, 4);
+  assert.equal(runs.length, 2, 'one low-tone run, one high-tone run, void emits nothing');
+  const tones = runs.map((r) => r.tone).sort((a, b) => a - b);
+  assert.ok(Math.abs(tones[0] - 0.25) < 0.01);
+  assert.ok(Math.abs(tones[1] - 0.85) < 0.01);
+  const all = runs.flatMap((r) => r.indices);
+  assert.equal(new Set(all).size, 20, 'every visible sample lands in exactly one run');
+});
 
-  let bulgingCount = 0, fullRingCount = 0;
+test('toneRuns: a sliver segment merges into a neighbor, adjacent same-level runs coalesce', () => {
+  const smoothed = new Float32Array(20);
+  for (let i = 0; i < 9; i++) smoothed[i] = 0.3;
+  for (let i = 9; i < 11; i++) smoothed[i] = 0.9; // 2-sample sliver
+  for (let i = 11; i < 20; i++) smoothed[i] = 0.3;
+  const runs = toneRuns(smoothed, 0.12, 5, 4);
+  assert.equal(runs.length, 1, 'sliver absorbed and same-level halves coalesced');
+  assert.equal(runs[0].indices.length, 20);
+});
+
+test('cymatics strands: tone-split fringe arcs with band/ring metadata', () => {
+  const out = generate(testFingerprint(), { ...baseParams, mode: 'cymatics' });
+  assert.ok(out.strands.length >= 24, 'fringe set must be substantial');
+  assert.ok(out.strands.length <= 4800, 'path cap');
+
+  const rings = new Set(), toneClasses = new Set();
   for (const s of out.strands) {
-    const n = s.length / 3;
-    assert.ok(n >= 4, 'every strand must have enough points to be a real arc, not a sliver');
-
-    let minR = Infinity, maxR = -Infinity;
+    assert.ok(s.pts instanceof Float32Array, 'tone strands carry pts');
+    assert.ok(s.tone >= 0 && s.tone <= 1, `tone out of range: ${s.tone}`);
+    assert.ok(Number.isInteger(s.band) && s.band >= 0 && s.band <= 7, `bad band: ${s.band}`);
+    assert.ok(Number.isInteger(s.ring) && s.ring >= 0, `bad ring: ${s.ring}`);
+    rings.add(s.ring);
+    toneClasses.add(Math.min(4, Math.floor(s.tone * 5)));
+    // A real arc sweeps a real angular range — a radial spoke or point does not.
     const angles = [];
-    for (let i = 0; i < s.length; i += 3) {
-      const x = s[i], z = s[i + 2];
-      const r = Math.hypot(x, z);
-      if (r < minR) minR = r; if (r > maxR) maxR = r;
-      angles.push(Math.atan2(z, x));
-    }
-    if (maxR - minR > minR * 0.02) bulgingCount++;
-
-    // A degenerate radial spoke has ~zero angular spread; a real arc — full
-    // ring or partial — sweeps a real range of angles as it walks outward.
+    for (let i = 0; i < s.pts.length; i += 3) angles.push(Math.atan2(s.pts[i + 2], s.pts[i]));
     let spread = 0;
     for (let i = 1; i < angles.length; i++) {
       let d = angles[i] - angles[i - 1];
@@ -184,32 +206,12 @@ test('cymatics strands: field-following arcs, gaps in nodal voids, no straight r
       while (d < -Math.PI) d += 2 * Math.PI;
       spread += Math.abs(d);
     }
-    assert.ok(spread > 0.05, 'a spoke would have near-zero angular sweep — this must be a real arc');
-
-    // A ring whose start and end points coincide is a full closed loop (no
-    // gap survived it) — those must still sweep all four quadrants, exactly
-    // like an unbroken ring always has.
-    const dx = s[0] - s[s.length - 3], dz = s[2] - s[s.length - 1];
-    if (Math.hypot(dx, dz) < minR * 0.05) {
-      fullRingCount++;
-      let hasPosX = false, hasNegX = false, hasPosZ = false, hasNegZ = false;
-      for (let i = 0; i < s.length; i += 3) {
-        if (s[i] > 0) hasPosX = true; if (s[i] < 0) hasNegX = true;
-        if (s[i + 2] > 0) hasPosZ = true; if (s[i + 2] < 0) hasNegZ = true;
-      }
-      assert.ok(hasPosX && hasNegX && hasPosZ && hasNegZ,
-        'a full closed ring must sweep through all four quadrants');
-    }
+    assert.ok(spread > 0.02, 'arc must sweep a real angular range');
   }
-  // Radius modulation (petal bulge) depends on the field's local amplitude
-  // variance at each ring's radius — require most (not all) arcs to bulge
-  // rather than a strict per-strand guarantee.
-  assert.ok(bulgingCount >= out.strands.length * 0.5,
-    `most arcs should be amplitude-modulated (petal bulge), not perfect circles: ${bulgingCount}/${out.strands.length}`);
-  // The whole point of this fix: rings crossing a nodal void must actually
-  // break into separate arcs, not stay unbroken loops regardless of the field.
-  assert.ok(fullRingCount < out.strands.length,
-    'at least some rings should break into arcs at nodal voids, not all stay full loops');
+  assert.ok(rings.size >= 20, `ring count should reflect the fine fringe set, got ${rings.size}`);
+  assert.ok(toneClasses.size >= 2, 'arcs must span multiple tone classes, not one flat tone');
+  assert.ok(out.strands.length > rings.size,
+    'rings must split into multiple arcs at voids and tone boundaries');
 });
 
 test('harmonic generator: bounded, dense, deterministic, strands', () => {

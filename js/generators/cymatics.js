@@ -1,5 +1,9 @@
 import { mulberry32, finalize, resamplePolyline, formArchetype } from './common.js';
 
+// Tone quantization levels — must equal TONE_CLASSES in js/strands.js
+// (generators never import versioned modules, so the constant is duplicated).
+const TONE_LEVELS = 5;
+
 // Water-mandala cymatics: standing waves on a circular membrane.
 // Each detected note = one (m petals, ring wavenumber) mode; modes superpose
 // into an interference field. Points survive where |amplitude| is high, so
@@ -112,31 +116,29 @@ export function generate(fp, params, onProgress) {
     if (onProgress && count % 250000 === 0) onProgress(count / N);
   }
 
-  // Strands: crest rings whose radius bulges outward at high-amplitude
-  // crests and pinches inward at troughs (in-plane, not just Y), so the
-  // exported skeleton actually traces the interference field from any
-  // camera angle — previously only Y wobbled, so rings (and the straight
-  // spokes padding them out) projected as plain circles/lines regardless
-  // of the sound.
-  //
-  // A ring used to hold its full circular sweep even where the field is
-  // near-zero (the nodal channels between petals) — the density render's
-  // dark voids there come from rejection sampling keeping far fewer points,
-  // which a continuous ring can't represent. Below VOID_CUTOFF the ring now
-  // breaks into a gap instead, so each ring exports as the arcs that
-  // survive the same field the point cloud is built from, not a whole loop
-  // wobbled by it.
-  const want = Math.max(24, Math.min(96, params.strandCount || 96));
+  // Strands: one ring per bright fringe — the peaks of the same cos(kFine·r)
+  // term that draws the on-screen striations — instead of uniformly spaced
+  // rings. Each ring keeps the amplitude bulge and the smoothed void-gap
+  // logic, and is additionally split wherever the smoothed amplitude crosses
+  // a quantized tone boundary, so every exported arc carries the field
+  // amplitude (tone) the raster renders as brightness, plus its radial band.
+  // No rnd() calls here: the RNG stream feeding the point cloud stays intact.
   const RING_AMP_GAIN = 0.25;
   const RING_SAMPLES = 220;
   const VOID_CUTOFF = 0.12;
   const VOID_SMOOTH_WINDOW = 15; // angular samples; smooths out single-ripple
-                                  // gaps from the field's fine radial oscillation
-                                  // at larger radii, so only sustained nodal
-                                  // regions (real petal boundaries) break a ring
-  const strands = [];
-  for (let ri = 0; ri < want; ri++) {
-    const r0 = (ri + 0.5) / want;
+                                  // gaps so only sustained nodal regions break a ring
+  const MIN_RUN = 6;              // samples; shorter tone segments merge into a neighbor
+  const PATH_CAP = 4800;          // max exported arcs after symmetry replication
+
+  const ringRadii = [];
+  for (let n = 1; ; n++) {
+    const r = (n * Math.PI) / kFine; // |cos(kFine·r)| peaks where kFine·r = nπ
+    if (r > 0.995) break;
+    ringRadii.push(r);
+  }
+
+  const ringArcs = ringRadii.map((r0) => {
     const ringPts = new Float32Array(RING_SAMPLES * 3);
     const af0 = new Float32Array(RING_SAMPLES);
     for (let i = 0; i < RING_SAMPLES; i++) {
@@ -149,23 +151,81 @@ export function generate(fp, params, onProgress) {
       af0[i] = Math.abs(f);
     }
     const smoothed = boxcarMean(af0, VOID_SMOOTH_WINDOW);
-    const visible = new Uint8Array(RING_SAMPLES);
-    for (let i = 0; i < RING_SAMPLES; i++) visible[i] = smoothed[i] >= VOID_CUTOFF ? 1 : 0;
-    for (const run of visibleRuns(visible)) {
-      if (run.length < 4) continue; // sliver, not worth a stroke
-      const arcPts = new Float32Array(run.length * 3);
-      run.forEach((i, k) => {
-        arcPts[k * 3] = ringPts[i * 3];
-        arcPts[k * 3 + 1] = ringPts[i * 3 + 1];
-        arcPts[k * 3 + 2] = ringPts[i * 3 + 2];
+    const arcs = [];
+    for (const run of toneRuns(smoothed, VOID_CUTOFF, TONE_LEVELS, MIN_RUN)) {
+      if (run.indices.length < 4) continue; // sliver, not worth a stroke
+      const arcPts = new Float32Array(run.indices.length * 3);
+      run.indices.forEach((i, j) => {
+        arcPts[j * 3] = ringPts[i * 3];
+        arcPts[j * 3 + 1] = ringPts[i * 3 + 1];
+        arcPts[j * 3 + 2] = ringPts[i * 3 + 2];
       });
-      const closed = run.length === RING_SAMPLES;
+      const closed = run.indices.length === RING_SAMPLES;
       const src = closed ? closeLoop(arcPts) : arcPts;
-      const m = closed ? 200 : Math.max(6, Math.round(200 * run.length / RING_SAMPLES));
-      strands.push(resamplePolyline(src, m));
+      const m = closed ? 200 : Math.max(6, Math.round(200 * run.indices.length / RING_SAMPLES));
+      arcs.push({ pts: resamplePolyline(src, m), tone: run.tone });
+    }
+    return arcs;
+  });
+
+  // Path budget: k-fold symmetry replicates every arc k times — thin whole
+  // rings (never individual arcs) until the estimate fits the cap.
+  const totalArcs = ringArcs.reduce((a, r) => a + r.length, 0) * k;
+  const ringStride = Math.max(1, Math.ceil(totalArcs / PATH_CAP));
+  const strands = [];
+  ringArcs.forEach((arcs, ri) => {
+    if (ri % ringStride) return;
+    const band = Math.min(7, Math.floor(ringRadii[ri] * 8));
+    for (const a of arcs) strands.push({ pts: a.pts, tone: a.tone, band, ring: ri });
+  });
+  return finalize(positions.subarray(0, count * 3).slice(), attr.subarray(0, count).slice(), strands, params);
+}
+
+function levelOf(a, levels) {
+  return Math.max(0, Math.min(levels - 1, Math.floor(a * levels)));
+}
+
+// Splits a circular per-sample amplitude array into contiguous runs that are
+// (a) above the void cutoff and (b) within a single quantized tone level.
+// Segments shorter than minRun merge into their larger neighbor, and adjacent
+// same-level segments coalesce, so tone boundaries never fragment an arc into
+// slivers. Returns [{ indices, tone }], tone = the run's mean amplitude.
+export function toneRuns(smoothed, cutoff, levels, minRun) {
+  const n = smoothed.length;
+  const visible = new Uint8Array(n);
+  for (let i = 0; i < n; i++) visible[i] = smoothed[i] >= cutoff ? 1 : 0;
+  const out = [];
+  for (const vis of visibleRuns(visible)) {
+    const sub = [];
+    for (const idx of vis) {
+      const lv = levelOf(smoothed[idx], levels);
+      const last = sub[sub.length - 1];
+      if (last && last.level === lv) last.indices.push(idx);
+      else sub.push({ level: lv, indices: [idx] });
+    }
+    for (let i = 0; i < sub.length; ) {
+      if (sub.length === 1 || sub[i].indices.length >= minRun) { i++; continue; }
+      const prev = sub[i - 1], next = sub[i + 1];
+      if (prev && (!next || prev.indices.length >= next.indices.length)) {
+        prev.indices.push(...sub[i].indices);
+      } else {
+        next.indices.unshift(...sub[i].indices);
+      }
+      sub.splice(i, 1);
+    }
+    for (let i = 1; i < sub.length; ) {
+      if (sub[i].level === sub[i - 1].level) {
+        sub[i - 1].indices.push(...sub[i].indices);
+        sub.splice(i, 1);
+      } else i++;
+    }
+    for (const seg of sub) {
+      let sum = 0;
+      for (const idx of seg.indices) sum += smoothed[idx];
+      out.push({ indices: seg.indices, tone: sum / seg.indices.length });
     }
   }
-  return finalize(positions.subarray(0, count * 3).slice(), attr.subarray(0, count).slice(), strands, params);
+  return out;
 }
 
 // Circular boxcar average — smooths a per-angle sample array over `window`
