@@ -1,12 +1,12 @@
-import { AudioEngine } from './audio.js?v=43';
-import { buildFingerprint, buildTrajectory } from './features.js?v=43';
-import { DensityRenderer } from './density.js?v=43';
-import { PALETTES, buildLUT, customRamp, hexToRgb } from './palettes.js?v=43';
-import { exportCanvas, exportStrandSVG, exportStrandPDF, framePlan, exportMP4, loopsForDuration } from './exporter.js?v=43';
-import { motionParams, displacePoint } from './motion.js?v=43';
-import { LiveConductor } from './live.js?v=43';
-import { LiveRecorder, MAX_RECORD_SEC } from './recorder.js?v=43';
-import { selectRingSubset } from './strands.js?v=43';
+import { AudioEngine } from './audio.js?v=44';
+import { buildFingerprint, buildTrajectory } from './features.js?v=44';
+import { DensityRenderer } from './density.js?v=44';
+import { PALETTES, buildLUT, customRamp, hexToRgb } from './palettes.js?v=44';
+import { exportCanvas, exportStrandSVG, exportStrandPDF, framePlan, exportMP4, loopsForDuration } from './exporter.js?v=44';
+import { motionParams, displacePoint } from './motion.js?v=44';
+import { LiveConductor } from './live.js?v=44';
+import { LiveRecorder, MAX_RECORD_SEC } from './recorder.js?v=44';
+import { selectRingSubset } from './strands.js?v=44';
 
 const audio = new AudioEngine();
 let renderer = null;
@@ -111,7 +111,7 @@ function regenerate() {
     setStatus('Design created — drag to rotate · adjust sliders');
   };
   try {
-    if (!worker) worker = new Worker('js/worker.js?v=43', { type: 'module' });
+    if (!worker) worker = new Worker('js/worker.js?v=44', { type: 'module' });
     worker.onmessage = (e) => {
       if (e.data.progress !== undefined) setStatus(`Generating… ${Math.round(e.data.progress * 100)}%`);
       else if (e.data.error) setStatus(`Generation error: ${e.data.error}`);
@@ -125,7 +125,7 @@ function regenerate() {
 }
 
 async function fallbackGenerate(onResult) {
-  const { generate } = await import('./generators/index.js?v=43');
+  const { generate } = await import('./generators/index.js?v=44');
   onResult(generate(fingerprint, { ...params, strandCount: 96 }));
 }
 
@@ -134,7 +134,7 @@ async function fallbackGenerate(onResult) {
 function workerGenerate(fingerprint, params) {
   return new Promise((resolve) => {
     try {
-      if (!liveWorker) liveWorker = new Worker('js/worker.js?v=43', { type: 'module' });
+      if (!liveWorker) liveWorker = new Worker('js/worker.js?v=44', { type: 'module' });
       liveWorker.onmessage = (e) => {
         if (e.data.done) resolve(e.data);
         else if (e.data.error) resolve(null);
@@ -148,7 +148,7 @@ function workerGenerate(fingerprint, params) {
 async function liveGenerate(fp, p) {
   const out = await workerGenerate(fp, p);
   if (out) return out;
-  const { generate } = await import('./generators/index.js?v=43');
+  const { generate } = await import('./generators/index.js?v=44');
   return generate(fp, p);
 }
 

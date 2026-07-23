@@ -1,5 +1,5 @@
-import { buildVectorPaths, toBezierPath, buildPdfOps } from './strands.js?v=43';
-import { hexToRgb } from './palettes.js?v=43';
+import { buildVectorPaths, toBezierPath, buildPdfOps } from './strands.js?v=44';
+import { hexToRgb } from './palettes.js?v=44';
 
 export async function exportCanvas(canvas, format) {
   switch (format) {
