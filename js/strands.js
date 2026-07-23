@@ -137,20 +137,65 @@ export function buildDensityGrid(positions, res = 24) {
   };
 }
 
+// Tone-carrying strands (cymatics fine-fringe arcs): flat palette colour per
+// quantized tone class instead of a density-grid gradient — the raster
+// tonemap analogue, and Illustrator "Select → Same → Stroke Color" friendly.
+// TONE_CLASSES must equal TONE_LEVELS in js/generators/cymatics.js.
+export const TONE_CLASSES = 5;
+const TONE_RAMP_POS = [0.25, 0.425, 0.6, 0.775, 0.95];
+const TONE_OPACITY  = [0.28, 0.435, 0.59, 0.745, 0.9];
+const TONE_WIDTH    = [0.5, 0.725, 0.95, 1.175, 1.4];
+
+export function toneClass(tone) {
+  return Math.max(0, Math.min(TONE_CLASSES - 1, Math.floor(tone * TONE_CLASSES)));
+}
+
+// Strands-slider mapping for tone strands: keep an evenly spaced subset of
+// whole rings — a ring's tone runs only read together, so individual arcs
+// are never stride-dropped the way legacy strands are.
+export function selectRingSubset(strands, frac) {
+  const ringIds = [...new Set(strands.map((s) => s.ring))].sort((a, b) => a - b);
+  const wantRings = Math.max(8, Math.min(ringIds.length, Math.round(ringIds.length * frac)));
+  const stride = ringIds.length / wantRings;
+  const keep = new Set();
+  for (let i = 0; i < wantRings; i++) keep.add(ringIds[Math.floor(i * stride)]);
+  return strands.filter((s) => keep.has(s.ring));
+}
+
 // Strand → simplified 2D path + resolved color/weight, ready for any
 // vector format (SVG gradient stops, PDF flat-color runs) to draw from.
+// Tone strands ({pts,tone,band,ring}) style from their tone class; bare
+// arrays keep the density-grid gradient styling.
 export function buildVectorPaths({ strands, positions, mvp, width, height, stops, weight }) {
-  const grid = buildDensityGrid(positions);
+  let grid = null; // built lazily — tone strands never sample it
   const items = [];
 
   strands.forEach((strand, si) => {
-    const { pts, depth } = projectStrand(strand, mvp, width, height);
+    const raw = strand.pts ?? strand;
+    const { pts, depth } = projectStrand(raw, mvp, width, height);
     if (pts.length < 2) return;
     const simplified = simplifyToBudget(pts, 1.4, SIMPLIFY_BUDGET);
     if (simplified.length < 2) return;
+    const ends = {
+      x1: simplified[0][0], y1: simplified[0][1],
+      x2: simplified[simplified.length - 1][0], y2: simplified[simplified.length - 1][1],
+    };
+    if (strand.pts) {
+      const q = toneClass(strand.tone);
+      items.push({
+        si, depth, points: simplified,
+        tone: strand.tone, toneClass: q + 1, band: strand.band, ring: strand.ring,
+        color: rgbToHex(sampleRamp(stops, TONE_RAMP_POS[q])),
+        strokeWidth: TONE_WIDTH[q] * weight,
+        opacity: TONE_OPACITY[q],
+        ...ends,
+      });
+      return;
+    }
+    grid ??= buildDensityGrid(positions);
     let dSum = 0, dN = 0;
-    for (let i = 0; i < strand.length; i += 30) {
-      dSum += grid.sample(strand[i], strand[i + 1], strand[i + 2]); dN++;
+    for (let i = 0; i < raw.length; i += 30) {
+      dSum += grid.sample(raw[i], raw[i + 1], raw[i + 2]); dN++;
     }
     const density = dN ? dSum / dN : 0.3;
     items.push({
@@ -159,8 +204,7 @@ export function buildVectorPaths({ strands, positions, mvp, width, height, stops
       c2: rgbToHex(sampleRamp(stops, 0.6 + density * 0.4)),
       strokeWidth: (0.6 + density * 3.4) * weight,
       opacity: 0.35 + density * 0.55,
-      x1: simplified[0][0], y1: simplified[0][1],
-      x2: simplified[simplified.length - 1][0], y2: simplified[simplified.length - 1][1],
+      ...ends,
     });
   });
 
@@ -184,6 +228,13 @@ export function buildPdfOps({ strands, positions, mvp, width, height, stops, wei
   const items = buildVectorPaths({ strands, positions, mvp, width, height, stops, weight });
   const strokeStrokes = items.map((it) => {
     const segs = catmullRomToBezier(it.points);
+    if (it.color) {
+      // Tone strand: one flat-color run covers the whole path.
+      return {
+        runs: [{ start: it.points[0], legs: toRelativeBezierLegs(it.points[0], segs), color: it.color }],
+        strokeWidth: it.strokeWidth, opacity: it.opacity,
+      };
+    }
     const runs = [];
     for (let i = 0; i < segs.length; i += PDF_RUN_SEGMENTS) {
       const chunk = segs.slice(i, i + PDF_RUN_SEGMENTS);

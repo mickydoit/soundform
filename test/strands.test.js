@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { projectStrand, rdp, toBezierPath, buildDensityGrid,
          simplifyToBudget, buildVectorPaths,
-         catmullRomToBezier, toRelativeBezierLegs, buildPdfOps } from '../js/strands.js';
+         catmullRomToBezier, toRelativeBezierLegs, buildPdfOps, selectRingSubset } from '../js/strands.js';
 
 const IDENTITY = [1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1];
 
@@ -174,4 +174,71 @@ test('catmullRomToBezier + toRelativeBezierLegs round-trips to the same absolute
     assert.ok(Math.abs(reconstructedEnds[i][0] - seg.end[0]) < 1e-9);
     assert.ok(Math.abs(reconstructedEnds[i][1] - seg.end[1]) < 1e-9);
   });
+});
+
+const TONE_STOPS = [[0, '#050614'], [0.5, '#6c99ba'], [1, '#f2e6c0']];
+
+function toneStrand(tone, band = 0, ring = 0) {
+  const pts = new Float32Array(64 * 3);
+  for (let i = 0; i < 64; i++) {
+    const th = (i / 63) * Math.PI; // open half-circle arc
+    pts[i * 3] = Math.cos(th) * 0.6;
+    pts[i * 3 + 1] = 0;
+    pts[i * 3 + 2] = Math.sin(th) * 0.6;
+  }
+  return { pts, tone, band, ring };
+}
+
+test('buildVectorPaths: tone strands get flat palette color, tone-driven width/opacity', () => {
+  const items = buildVectorPaths({ strands: [toneStrand(0.05, 0, 0), toneStrand(0.95, 3, 7)],
+    positions: new Float32Array(300), mvp: IDENTITY, width: 800, height: 600,
+    stops: TONE_STOPS, weight: 1 });
+  assert.equal(items.length, 2);
+  const faint = items.find((i) => i.toneClass === 1);
+  const bright = items.find((i) => i.toneClass === 5);
+  assert.ok(faint && bright, 'tone 0.05 → class 1, tone 0.95 → class 5');
+  assert.match(faint.color, /^#[0-9a-f]{6}$/);
+  assert.ok(!('c1' in faint), 'tone strands carry a flat color, not a gradient pair');
+  assert.ok(bright.opacity > faint.opacity, 'brighter tone → more opaque');
+  assert.ok(bright.strokeWidth > faint.strokeWidth, 'brighter tone → wider stroke');
+  assert.equal(bright.band, 3);
+  assert.equal(bright.ring, 7);
+});
+
+test('buildVectorPaths: mixed tone + legacy strands both style correctly', () => {
+  const legacy = new Float32Array(200 * 3);
+  for (let i = 0; i < 200; i++) {
+    const t = i / 199;
+    legacy[i * 3] = Math.cos(t * 6) * 0.6;
+    legacy[i * 3 + 1] = (t - 0.5) * 1.4;
+    legacy[i * 3 + 2] = Math.sin(t * 6) * 0.6;
+  }
+  const items = buildVectorPaths({ strands: [legacy, toneStrand(0.5, 2, 4)],
+    positions: legacy, mvp: IDENTITY, width: 800, height: 600, stops: TONE_STOPS, weight: 1 });
+  assert.equal(items.length, 2);
+  assert.ok(items.find((i) => i.color), 'tone item present');
+  assert.ok(items.find((i) => i.c1), 'legacy gradient item present');
+});
+
+test('buildPdfOps: tone strand draws as a single flat-color run', () => {
+  const ops = buildPdfOps({ strands: [toneStrand(0.8, 1, 2)], positions: new Float32Array(30),
+    mvp: IDENTITY, width: 800, height: 600, stops: TONE_STOPS, weight: 1, background: null });
+  assert.equal(ops.strokes.length, 1);
+  assert.equal(ops.strokes[0].runs.length, 1, 'flat color needs no gradient-approximation runs');
+  assert.match(ops.strokes[0].runs[0].color, /^#[0-9a-f]{6}$/);
+});
+
+test('selectRingSubset: keeps whole rings, scales with fraction, floor of 8', () => {
+  const strands = [];
+  for (let ring = 0; ring < 40; ring++) {
+    for (let a = 0; a < 3; a++) strands.push(toneStrand(0.5, 0, ring));
+  }
+  const half = selectRingSubset(strands, 0.5);
+  const rings = new Set(half.map((s) => s.ring));
+  assert.equal(rings.size, 20);
+  for (const r of rings) {
+    assert.equal(half.filter((s) => s.ring === r).length, 3, 'all arcs of a kept ring survive');
+  }
+  assert.equal(selectRingSubset(strands, 1).length, strands.length);
+  assert.equal(new Set(selectRingSubset(strands, 0.05).map((s) => s.ring)).size, 8);
 });
