@@ -92,3 +92,46 @@ test('exportStrandSVG: a strand that used to exceed the 300-point drop cap still
   assert.ok(svg.includes('id="strand-01"'), 'the dense strand must not be dropped');
   assert.ok(svg.includes('<path'));
 });
+
+function toneFixture() {
+  const strands = [];
+  for (let ring = 0; ring < 12; ring++) {
+    for (let a = 0; a < 4; a++) {
+      const pts = new Float32Array(40 * 3);
+      for (let i = 0; i < 40; i++) {
+        const th = (a / 4 + (i / 39) * 0.2) * Math.PI * 2;
+        const r = 0.1 + ring * 0.07;
+        pts[i * 3] = Math.cos(th) * r;
+        pts[i * 3 + 1] = 0;
+        pts[i * 3 + 2] = Math.sin(th) * r;
+      }
+      strands.push({ pts, tone: (a + 1) / 4 - 0.01, band: Math.min(7, Math.floor((0.1 + ring * 0.07) * 8)), ring });
+    }
+  }
+  return { strands, positions: new Float32Array(300), mvp: IDENTITY, width: 1600, height: 1200,
+           stops: [[0, '#050614'], [0.5, '#6c99ba'], [1, '#f2e6c0']], background: null, weight: 1 };
+}
+
+test('exportStrandSVG: tone strands emit band groups with flat strokes and data-tone', () => {
+  const svg = exportStrandSVG(toneFixture());
+  assert.ok(svg.includes('id="band-01"'), 'inner band group present');
+  assert.ok(svg.includes('data-tone='), 'tone class attribute present');
+  assert.ok(!svg.includes('linearGradient'), 'tone strands use flat colors, no gradients');
+  assert.ok(!svg.includes('id="strand-'), 'no legacy strand groups for tone strands');
+  assert.match(svg, /stroke="#[0-9a-f]{6}"/);
+});
+
+test('exportStrandSVG: mixed tone + legacy designs keep both structures', () => {
+  const tf = toneFixture();
+  const legacy = new Float32Array(200 * 3);
+  for (let i = 0; i < 200; i++) {
+    const t = i / 199;
+    legacy[i * 3] = Math.cos(t * 6) * 0.6;
+    legacy[i * 3 + 1] = (t - 0.5) * 1.4;
+    legacy[i * 3 + 2] = Math.sin(t * 6) * 0.6;
+  }
+  const svg = exportStrandSVG({ ...tf, strands: [...tf.strands, legacy], positions: legacy });
+  assert.ok(svg.includes('id="band-01"'));
+  assert.ok(svg.includes('id="strand-'), 'legacy strand keeps its group');
+  assert.ok(svg.includes('linearGradient'), 'legacy strand keeps its gradient');
+});

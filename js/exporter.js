@@ -36,13 +36,26 @@ function _dl(url, name) {
   document.body.removeChild(a);
 }
 
-// Structured vector export: one named group per strand, real bezier paths,
-// density-driven stroke weight/opacity, palette gradient along each path.
+// Structured vector export. Legacy strands: one named group per strand, real
+// bezier paths, density-driven weight/opacity, palette gradient along each
+// path. Tone strands (cymatics fringe arcs): grouped by radial band
+// (band-01 inner … band-08 outer), flat tone-class stroke colors — no
+// gradient defs — with data-tone for tooling.
 export function exportStrandSVG({ strands, positions, mvp, width, height, stops, background, weight }) {
   const items = buildVectorPaths({ strands, positions, mvp, width, height, stops, weight });
 
   const defs = [], groups = [];
+  const bands = new Map();
   items.forEach((it, order) => {
+    if (it.color) {
+      const path =
+        `    <path d="${toBezierPath(it.points)}" fill="none" stroke="${it.color}"` +
+        ` stroke-width="${it.strokeWidth.toFixed(2)}" stroke-linecap="round"` +
+        ` opacity="${it.opacity.toFixed(2)}" data-tone="${it.toneClass}"/>`;
+      if (!bands.has(it.band)) bands.set(it.band, []);
+      bands.get(it.band).push(path);
+      return;
+    }
     const id = String(order + 1).padStart(2, '0');
     defs.push(
       `    <linearGradient id="grad-${id}" gradientUnits="userSpaceOnUse" x1="${it.x1.toFixed(1)}" y1="${it.y1.toFixed(1)}" x2="${it.x2.toFixed(1)}" y2="${it.y2.toFixed(1)}">` +
@@ -52,14 +65,15 @@ export function exportStrandSVG({ strands, positions, mvp, width, height, stops,
       `    <path d="${toBezierPath(it.points)}" fill="none" stroke="url(#grad-${id})" stroke-width="${it.strokeWidth.toFixed(2)}" stroke-linecap="round" opacity="${it.opacity.toFixed(2)}"/>\n` +
       `  </g>`);
   });
+  const bandGroups = [...bands.keys()].sort((a, b) => a - b).map((b) =>
+    `  <g id="band-${String(b + 1).padStart(2, '0')}">\n${bands.get(b).join('\n')}\n  </g>`);
 
   return [
     '<?xml version="1.0" encoding="UTF-8"?>',
     `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">`,
     ...(background != null ? [`  <rect id="background" width="${width}" height="${height}" fill="${background}"/>`] : []),
-    '  <defs>',
-    ...defs,
-    '  </defs>',
+    ...(defs.length ? ['  <defs>', ...defs, '  </defs>'] : []),
+    ...bandGroups,
     ...groups,
     '</svg>',
   ].join('\n');
