@@ -125,7 +125,18 @@ export function generate(fp, params, onProgress) {
   // No rnd() calls here: the RNG stream feeding the point cloud stays intact.
   const RING_AMP_GAIN = 0.25;
   const RING_SAMPLES = 220;
+  // VOID_CUTOFF is a *relative* contrast fraction (of each ring's own peak
+  // amplitude), not an absolute floor — the field is radially damped
+  // (1/sqrt(1+kr·r·0.5)), so outer rings never reach the absolute levels
+  // inner rings do. An absolute cutoff silently culled whole outer rings;
+  // a per-ring relative one still carves the same within-ring petal voids.
   const VOID_CUTOFF = 0.12;
+  const RING_DEAD_FLOOR = 0.04;    // below this peak amplitude, a ring is
+                                    // truly in a node — skip it entirely
+  const TONE_GAMMA = 0.45;         // perceptual lift: raw amplitude -> stored
+                                    // tone, so radially-damped outer arcs land
+                                    // in visible tone classes (log-ish compression,
+                                    // the vector analogue of the raster's tonemap)
   const VOID_SMOOTH_WINDOW = 15; // angular samples; smooths out single-ripple
                                   // gaps so only sustained nodal regions break a ring
   const MIN_RUN = 6;              // samples; shorter tone segments merge into a neighbor
@@ -151,8 +162,12 @@ export function generate(fp, params, onProgress) {
       af0[i] = Math.min(1, Math.abs(f));
     }
     const smoothed = boxcarMean(af0, VOID_SMOOTH_WINDOW);
+    let ringMax = 0;
+    for (let i = 0; i < smoothed.length; i++) if (smoothed[i] > ringMax) ringMax = smoothed[i];
+    if (ringMax < RING_DEAD_FLOOR) return []; // truly dead ring — whole ring sits in a node
+    const ringCutoff = VOID_CUTOFF * ringMax;
     const arcs = [];
-    for (const run of toneRuns(smoothed, VOID_CUTOFF, TONE_LEVELS, MIN_RUN)) {
+    for (const run of toneRuns(smoothed, ringCutoff, TONE_LEVELS, MIN_RUN)) {
       if (run.indices.length < 4) continue; // sliver, not worth a stroke
       const arcPts = new Float32Array(run.indices.length * 3);
       run.indices.forEach((i, j) => {
@@ -163,7 +178,8 @@ export function generate(fp, params, onProgress) {
       const closed = run.indices.length === RING_SAMPLES;
       const src = closed ? closeLoop(arcPts) : arcPts;
       const m = closed ? 200 : Math.max(6, Math.round(200 * run.indices.length / RING_SAMPLES));
-      arcs.push({ pts: resamplePolyline(src, m), tone: run.tone });
+      const tone = Math.pow(Math.max(0, Math.min(1, run.tone)), TONE_GAMMA);
+      arcs.push({ pts: resamplePolyline(src, m), tone });
     }
     return arcs;
   });
