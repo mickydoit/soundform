@@ -6,6 +6,7 @@ import { exportCanvas, exportStrandSVG, exportStrandPDF, framePlan, exportMP4, l
 import { motionParams, displacePoint } from './motion.js?v=43';
 import { LiveConductor } from './live.js?v=43';
 import { LiveRecorder, MAX_RECORD_SEC } from './recorder.js?v=43';
+import { selectRingSubset } from './strands.js?v=43';
 
 const audio = new AudioEngine();
 let renderer = null;
@@ -532,10 +533,18 @@ function bindExport() {
             return;
           }
           const all = design.strands;
-          const want = Math.min(params.strandCount * Math.max(1, Math.round(all.length / 96)), all.length);
-          const step = all.length / want;
-          const picked = [];
-          for (let i = 0; i < want; i++) picked.push(all[Math.floor(i * step)]);
+          let picked;
+          if (all[0]?.pts) {
+            // Tone strands (cymatics fringe arcs): the slider keeps a fraction
+            // of whole rings — a ring's tone runs only read together, so
+            // individual arcs are never stride-dropped.
+            picked = selectRingSubset(all, params.strandCount / 96);
+          } else {
+            const want = Math.min(params.strandCount * Math.max(1, Math.round(all.length / 96)), all.length);
+            const step = all.length / want;
+            picked = [];
+            for (let i = 0; i < want; i++) picked.push(all[Math.floor(i * step)]);
+          }
           // Frame-accurate export: apply the shader's motion displacement
           // (mirrored in js/motion.js) so the SVG matches the visible frame.
           let expStrands = picked, expPositions = design.positions;
@@ -550,7 +559,7 @@ function bindExport() {
               }
               return c;
             };
-            expStrands = picked.map(displaceArr);
+            expStrands = picked.map((s) => s.pts ? { ...s, pts: displaceArr(s.pts) } : displaceArr(s));
             expPositions = displaceArr(design.positions);
           }
           const vecArgs = {
