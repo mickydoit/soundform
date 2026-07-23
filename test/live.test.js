@@ -264,6 +264,18 @@ test('clipStrandsToCount truncates every strand to the same revealed fraction', 
   assert.equal(out[1].length, 5 * 3, 'strand b truncated to 50% of its own points');
 });
 
+test('clipStrandsToCount truncates object-strand pts and preserves tone metadata', () => {
+  const obj = { pts: new Float32Array(40 * 3), tone: 0.7, band: 3, ring: 5 };
+  const bare = new Float32Array(10 * 3);
+  const out = clipStrandsToCount([obj, bare], 1000, 500); // 50% revealed
+  assert.equal(out[0].pts.length, 20 * 3, 'object strand pts truncated to 50%');
+  assert.equal(out[0].tone, 0.7);
+  assert.equal(out[0].band, 3);
+  assert.equal(out[0].ring, 5);
+  assert.ok(out[1] instanceof Float32Array, 'bare strand stays a bare array');
+  assert.equal(out[1].length, 5 * 3, 'bare strand truncated to 50%');
+});
+
 test('paint (non-attractor): freeze attaches the revealed strands', async () => {
   const strandA = new Float32Array(200 * 3);
   const { conductor } = harness({

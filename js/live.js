@@ -78,8 +78,10 @@ export function clipStrandsToCount(strands, revealTotal, count) {
   if (!revealTotal || count >= revealTotal) return strands;
   const frac = count / revealTotal;
   return strands.map((s) => {
-    const keep = Math.max(0, Math.floor((s.length / 3) * frac)) * 3;
-    return s.subarray(0, keep);
+    const src = s.pts ?? s;
+    const keep = Math.max(0, Math.floor((src.length / 3) * frac)) * 3;
+    const cut = src.subarray(0, keep);
+    return s.pts ? { ...s, pts: cut } : cut;
   });
 }
 
