@@ -43,3 +43,50 @@ test('qToCubic cubic evaluates identically to the source quadratic', () => {
     assert.ok(Math.abs(quad(t, sy, qy, ey) - cube(t, sy, c1y, c2y, ey)) < 1e-9);
   }
 });
+
+import { buildTraceSVG } from '../js/trace.js';
+
+// Minimal hand-built tracedata: 3 palette entries (0 = background, 1, 2).
+// Layer 1 has one triangle path (L segments); layer 2 has one path with a Q.
+const FIXTURE = {
+  width: 100, height: 80,
+  palette: [
+    { r: 0, g: 0, b: 0, a: 255 },       // 0 background — must be skipped
+    { r: 255, g: 0, b: 0, a: 255 },     // 1 red
+    { r: 0, g: 128, b: 255, a: 255 },   // 2 blue
+  ],
+  layers: [
+    [ /* layer 0: background paths — must not appear */
+      { isholepath: false, segments: [
+        { type: 'L', x1: 0, y1: 0, x2: 100, y2: 0 },
+        { type: 'L', x1: 100, y1: 0, x2: 100, y2: 80 },
+        { type: 'L', x1: 100, y1: 80, x2: 0, y2: 0 } ] } ],
+    [ { isholepath: false, segments: [
+        { type: 'L', x1: 10, y1: 10, x2: 40, y2: 10 },
+        { type: 'L', x1: 40, y1: 10, x2: 25, y2: 40 },
+        { type: 'L', x1: 25, y1: 40, x2: 10, y2: 10 } ] } ],
+    [ { isholepath: false, segments: [
+        { type: 'L', x1: 60, y1: 20, x2: 90, y2: 20 },
+        { type: 'Q', x1: 90, y1: 20, x2: 90, y2: 20, x3: 60, y3: 60 },
+        { type: 'L', x1: 60, y1: 60, x2: 60, y2: 20 } ] } ],
+  ],
+};
+
+test('buildTraceSVG skips the background layer and groups by tone', () => {
+  const svg = buildTraceSVG(FIXTURE, { background: '#0a0a0a' });
+  assert.ok(svg.includes('width="100" height="80"'));
+  assert.ok(svg.includes('<rect id="background"'));
+  assert.ok(svg.includes('fill="#0a0a0a"'));
+  assert.ok(svg.includes('<g id="tone-01"'));   // palette index 1
+  assert.ok(svg.includes('<g id="tone-02"'));   // palette index 2
+  assert.ok(!svg.includes('id="tone-00"'));      // background layer skipped
+  assert.ok(svg.includes('fill="#ff0000"'));     // layer 1 colour
+  assert.ok(svg.includes('fill="#0080ff"'));     // layer 2 colour
+  assert.ok(svg.includes('Q 90 20 60 60'));      // quadratic emitted verbatim
+});
+
+test('buildTraceSVG with null background emits no rect', () => {
+  const svg = buildTraceSVG(FIXTURE, { background: null });
+  assert.ok(!svg.includes('id="background"'));
+  assert.ok(svg.includes('<g id="tone-01"'));
+});
