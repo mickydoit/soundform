@@ -64,3 +64,41 @@ export function buildTraceSVG(tracedata, { background }) {
     '</svg>',
   ].join('\n');
 }
+
+// One traced path → jsPDF lines() input. `start` is the first anchor; each leg
+// holds deltas relative to that segment's OWN start (the running point), so a
+// cubic leg's three pairs are all offset from the point before the curve — the
+// encoding jsPDF's lines() actually uses (chaining them corrupts every segment
+// past the first, the 2026-07-23 bezier bug).
+export function segmentsToPdfLegs(segments) {
+  const start = [segments[0].x1, segments[0].y1];
+  let cx = start[0], cy = start[1];
+  const legs = [];
+  for (const s of segments) {
+    if (s.type === 'Q') {
+      const [c1x, c1y, c2x, c2y] = qToCubic(cx, cy, s.x2, s.y2, s.x3, s.y3);
+      legs.push([c1x - cx, c1y - cy, c2x - cx, c2y - cy, s.x3 - cx, s.y3 - cy]);
+      cx = s.x3; cy = s.y3;
+    } else {
+      legs.push([s.x2 - cx, s.y2 - cy]);
+      cx = s.x2; cy = s.y2;
+    }
+  }
+  return { start, legs };
+}
+
+// Tracedata → PDF draw ops. One entry per palette layer except background (0);
+// each carries an integer 0–255 rgb fill and its paths as jsPDF leg arrays.
+export function buildTracePdfOps(tracedata, { background }) {
+  const { width, height, layers, palette } = tracedata;
+  const out = [];
+  for (let k = 1; k < layers.length; k++) {
+    const paths = (layers[k] || []).filter((p) => p.segments && p.segments.length);
+    if (!paths.length) continue;
+    out.push({
+      color: { r: palette[k].r, g: palette[k].g, b: palette[k].b },
+      paths: paths.map((p) => segmentsToPdfLegs(p.segments)),
+    });
+  }
+  return { width, height, background: background ?? null, layers: out };
+}

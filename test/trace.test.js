@@ -90,3 +90,58 @@ test('buildTraceSVG with null background emits no rect', () => {
   assert.ok(!svg.includes('id="background"'));
   assert.ok(svg.includes('<g id="tone-01"'));
 });
+
+import { segmentsToPdfLegs, buildTracePdfOps } from '../js/trace.js';
+
+test('segmentsToPdfLegs: line legs are deltas from the running point', () => {
+  const segs = [
+    { type: 'L', x1: 10, y1: 10, x2: 40, y2: 10 },
+    { type: 'L', x1: 40, y1: 10, x2: 25, y2: 40 },
+  ];
+  const { start, legs } = segmentsToPdfLegs(segs);
+  assert.deepEqual(start, [10, 10]);
+  assert.deepEqual(legs[0], [30, 0]);      // (40-10, 10-10)
+  assert.deepEqual(legs[1], [-15, 30]);    // (25-40, 40-10) relative to running point (40,10)
+});
+
+test('segmentsToPdfLegs: Q leg is a cubic with all deltas from the segment start', () => {
+  const segs = [{ type: 'Q', x1: 0, y1: 0, x2: 2, y2: 4, x3: 4, y3: 0 }];
+  const { start, legs } = segmentsToPdfLegs(segs);
+  assert.deepEqual(start, [0, 0]);
+  assert.equal(legs[0].length, 6);
+  // C1=(4/3,8/3) C2=(8/3,8/3) end=(4,0), all relative to segment start (0,0)
+  assert.ok(Math.abs(legs[0][0] - 4 / 3) < 1e-9);
+  assert.ok(Math.abs(legs[0][1] - 8 / 3) < 1e-9);
+  assert.ok(Math.abs(legs[0][2] - 8 / 3) < 1e-9);
+  assert.ok(Math.abs(legs[0][3] - 8 / 3) < 1e-9);
+  assert.deepEqual([legs[0][4], legs[0][5]], [4, 0]);
+});
+
+test('segmentsToPdfLegs round-trips: reconstruct the way jsPDF lines() does', () => {
+  // jsPDF: start at `start`; each leg is offset from the CURRENT point;
+  // within a 6-value cubic leg all three pairs are offset from the point
+  // BEFORE the leg (the segment start), not chained to each other.
+  const segs = [
+    { type: 'Q', x1: 1, y1: 2, x2: 5, y2: 9, x3: 7, y3: 3 },
+    { type: 'L', x1: 7, y1: 3, x2: 2, y2: 8 },
+  ];
+  const { start, legs } = segmentsToPdfLegs(segs);
+  let [cx, cy] = start;
+  // leg 0 (cubic): endpoint = current + (dex, dey)
+  const end0 = [cx + legs[0][4], cy + legs[0][5]];
+  assert.deepEqual(end0, [7, 3]);            // matches original x3,y3
+  [cx, cy] = end0;
+  const end1 = [cx + legs[1][0], cy + legs[1][1]];
+  assert.deepEqual(end1, [2, 8]);            // matches original L endpoint
+});
+
+test('buildTracePdfOps skips background layer and carries rgb per layer', () => {
+  const ops = buildTracePdfOps(FIXTURE, { background: '#0a0a0a' });
+  assert.equal(ops.width, 100);
+  assert.equal(ops.height, 80);
+  assert.equal(ops.layers.length, 2);        // layers 1 and 2, not 0
+  assert.deepEqual(ops.layers[0].color, { r: 255, g: 0, b: 0 });
+  assert.deepEqual(ops.layers[1].color, { r: 0, g: 128, b: 255 });
+  assert.ok(ops.layers[0].paths[0].start);
+  assert.ok(ops.layers[0].paths[0].legs.length >= 1);
+});
