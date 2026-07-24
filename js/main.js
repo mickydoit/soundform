@@ -562,11 +562,19 @@ function bindExport() {
             expStrands = picked.map((s) => s.pts ? { ...s, pts: displaceArr(s.pts) } : displaceArr(s));
             expPositions = displaceArr(design.positions);
           }
+          // Match the live canvas's aspect ratio — getMVP() calibrates the
+          // camera to the on-screen container, so a mismatched fixed export
+          // size (e.g. always 1600x1200) stretches the design into an oval.
+          const vecContainer = document.getElementById('renderer-container');
+          const vecAspect = (vecContainer.clientWidth || 1600) / (vecContainer.clientHeight || 1200);
+          const VEC_LONG_EDGE = 1600;
+          const vecWidth = vecAspect >= 1 ? VEC_LONG_EDGE : Math.round(VEC_LONG_EDGE * vecAspect);
+          const vecHeight = vecAspect >= 1 ? Math.round(VEC_LONG_EDGE / vecAspect) : VEC_LONG_EDGE;
           const vecArgs = {
             strands: expStrands,
             positions: expPositions,
             mvp: renderer.getMVP().elements,
-            width: 1600, height: 1200,
+            width: vecWidth, height: vecHeight,
             stops: activeStops(), background: params.transparentBg ? null : params.background,
             weight: params.strokeWeight,
           };
