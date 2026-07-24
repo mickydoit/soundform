@@ -2,7 +2,8 @@ import { AudioEngine } from './audio.js?v=45';
 import { buildFingerprint, buildTrajectory } from './features.js?v=45';
 import { DensityRenderer } from './density.js?v=45';
 import { PALETTES, buildLUT, customRamp, hexToRgb } from './palettes.js?v=45';
-import { exportCanvas, exportStrandSVG, exportStrandPDF, framePlan, exportMP4, loopsForDuration } from './exporter.js?v=45';
+import { exportCanvas, exportStrandSVG, exportStrandPDF, exportTraceSVG, exportTracePDF, framePlan, exportMP4, loopsForDuration } from './exporter.js?v=45';
+import { paletteFromRamp } from './trace.js?v=45';
 import { motionParams, displacePoint } from './motion.js?v=45';
 import { LiveConductor } from './live.js?v=45';
 import { LiveRecorder, MAX_RECORD_SEC } from './recorder.js?v=45';
@@ -18,6 +19,7 @@ let recordStart = 0;
 let fingerprint = null;
 let design = null; // { positions, attr, strands }
 let mp4Busy = false, mp4Cancel = false;
+let traceWorker = null, traceBusy = false;
 
 const isMobile = /Mobi|Android|iPhone|iPad/.test(navigator.userAgent);
 
@@ -39,6 +41,10 @@ const params = {
   motionOn: false, motionPeriod: 8,
   exportRes: 'std', videoDur: 0, transparentBg: false,
   flatView: true, cymStyle: 'auto', growth: 'morph',
+  traceLevels: 8,
+  traceDetail: 'balanced',
+  traceRes: 2000,
+  traceSmooth: 'medium',
 };
 
 let statusEl, vuFill, vuWrap, clearBtn, submitBtn;
@@ -478,6 +484,10 @@ function bindControls() {
   document.getElementById('sel-export-res').addEventListener('change', (e) => { params.exportRes = e.target.value; });
   document.getElementById('sel-video-dur').addEventListener('change', (e) => { params.videoDur = parseInt(e.target.value, 10); });
   document.getElementById('chk-transparent').addEventListener('change', (e) => { params.transparentBg = e.target.checked; });
+  document.getElementById('sel-trace-levels').addEventListener('change', (e) => { params.traceLevels = +e.target.value; });
+  document.getElementById('sel-trace-detail').addEventListener('change', (e) => { params.traceDetail = e.target.value; });
+  document.getElementById('sel-trace-res').addEventListener('change', (e) => { params.traceRes = +e.target.value; });
+  document.getElementById('sel-trace-smooth').addEventListener('change', (e) => { params.traceSmooth = e.target.value; });
   document.getElementById('chk-flat').addEventListener('change', (e) => {
     params.flatView = e.target.checked;
     renderer.setProjection(params.flatView ? 'flat' : 'depth');
@@ -526,6 +536,10 @@ function bindExport() {
     btn.addEventListener('click', async () => {
       try {
         const fmt = btn.dataset.fmt;
+        if (fmt === 'trace-svg' || fmt === 'trace-pdf') {
+          await runTrace(fmt === 'trace-svg' ? 'svg' : 'pdf');
+          return;
+        }
         if (fmt === 'svg' || fmt === 'pdf') {
           if (!design) { setStatus('Create a design first'); return; }
           if (!design.strands.length) {
@@ -629,6 +643,78 @@ function bindExport() {
       } catch (e) { setStatus(`Export error: ${e.message}`); }
     });
   });
+  document.getElementById('trace-cancel').addEventListener('click', () => { endTrace(); setStatus('Trace cancelled'); });
+}
+
+const TRACE_DETAIL = {
+  draft:    { ltres: 3,   qtres: 3 },
+  balanced: { ltres: 1,   qtres: 1 },
+  fine:     { ltres: 0.3, qtres: 0.3 },
+};
+const TRACE_SMOOTH = {
+  low:    { pathomit: 2,  blurradius: 0 },
+  medium: { pathomit: 8,  blurradius: 2 },
+  high:   { pathomit: 16, blurradius: 5 },
+};
+
+async function runTrace(kind) { // kind: 'svg' | 'pdf'
+  if (traceBusy) return;
+  if (!design && appState !== 'live') { setStatus('Create a design first'); return; }
+  traceBusy = true;
+  const panel = document.getElementById('trace-progress');
+  const label = document.getElementById('trace-progress-label');
+  panel.style.display = '';
+  label.textContent = 'Tracing…';
+
+  const container = document.getElementById('renderer-container');
+  const scale = params.traceRes / Math.max(container.clientWidth || 800, container.clientHeight || 600);
+  const transparent = params.transparentBg;
+  const canvas = renderer.renderHiRes(scale, { transparent });
+  if (renderer.exportNote) setStatus(renderer.exportNote);
+  const ctx = canvas.getContext('2d');
+  const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+
+  const detail = TRACE_DETAIL[params.traceDetail];
+  const smooth = TRACE_SMOOTH[params.traceSmooth];
+  const options = {
+    pal: paletteFromRamp(activeStops(), params.traceLevels),
+    colorsampling: 0,
+    numberofcolors: params.traceLevels,
+    ltres: detail.ltres, qtres: detail.qtres,
+    pathomit: smooth.pathomit, blurradius: smooth.blurradius,
+    rightangleenhance: false, roundcoords: 1, linefilter: true,
+  };
+  const background = params.transparentBg ? null : params.background;
+
+  traceWorker = new Worker('js/traceworker.js?v=45'); // classic worker
+  traceWorker.onmessage = (e) => {
+    const m = e.data;
+    if (m.progress != null) { label.textContent = `Tracing… level ${m.level} / ${m.levels}`; return; }
+    if (m.error) { endTrace(); setStatus(`Trace error: ${m.error}`); return; }
+    if (m.done) {
+      try {
+        if (kind === 'svg') {
+          const svg = exportTraceSVG(m.tracedata, { background });
+          const url = URL.createObjectURL(new Blob([svg], { type: 'image/svg+xml' }));
+          const a = Object.assign(document.createElement('a'), { href: url, download: 'soundform-trace.svg' });
+          document.body.appendChild(a); a.click(); document.body.removeChild(a);
+          setTimeout(() => URL.revokeObjectURL(url), 3000);
+        } else {
+          exportTracePDF(m.tracedata, { background });
+        }
+        setStatus('Trace saved');
+      } catch (err) { setStatus(`Trace error: ${err.message}`); }
+      endTrace();
+    }
+  };
+  traceWorker.onerror = (err) => { setStatus(`Trace error: ${err.message}`); endTrace(); };
+  traceWorker.postMessage({ imageData, options });
+}
+
+function endTrace() {
+  if (traceWorker) { traceWorker.terminate(); traceWorker = null; }
+  traceBusy = false;
+  document.getElementById('trace-progress').style.display = 'none';
 }
 
 function setStatus(msg) { if (statusEl) statusEl.textContent = msg; }

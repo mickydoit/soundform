@@ -46,6 +46,8 @@
         <button class="btn-export" data-fmt="webp">WebP</button>
         <button class="btn-export" data-fmt="svg">SVG</button>
         <button class="btn-export" data-fmt="pdf">PDF</button>
+        <button class="btn-export" data-fmt="trace-svg">Trace SVG</button>
+        <button class="btn-export" data-fmt="trace-pdf">Trace PDF</button>
         <button class="btn-export" data-fmt="mp4">MP4</button>
       </div>
     </div>
@@ -182,6 +184,39 @@
         </select>
       </div>
       <label class="color-pick-label"><input type="checkbox" id="chk-transparent"> Transparent background</label>
+      <div class="sl-row">
+        <select id="sel-trace-levels">
+          <option value="4">Trace levels: 4</option>
+          <option value="6">Trace levels: 6</option>
+          <option value="8" selected>Trace levels: 8</option>
+          <option value="12">Trace levels: 12</option>
+        </select>
+      </div>
+      <div class="sl-row">
+        <select id="sel-trace-detail">
+          <option value="draft">Trace detail: Draft</option>
+          <option value="balanced" selected>Trace detail: Balanced</option>
+          <option value="fine">Trace detail: Fine</option>
+        </select>
+      </div>
+      <div class="sl-row">
+        <select id="sel-trace-res">
+          <option value="1200">Trace res: 1200px</option>
+          <option value="2000" selected>Trace res: 2000px</option>
+          <option value="3000">Trace res: 3000px</option>
+        </select>
+      </div>
+      <div class="sl-row">
+        <select id="sel-trace-smooth">
+          <option value="low">Trace smoothing: Low</option>
+          <option value="medium" selected>Trace smoothing: Medium</option>
+          <option value="high">Trace smoothing: High</option>
+        </select>
+      </div>
+      <div class="sl-row" id="trace-progress" style="display:none">
+        <span id="trace-progress-label">Tracing…</span>
+        <button id="trace-cancel" class="vr-btn vr-discard">Cancel</button>
+      </div>
     </div>
 
     <div class="panel-footer">Record → Stop → Create · Drag to rotate · Same sound, same design</div>
