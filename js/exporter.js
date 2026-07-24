@@ -1,5 +1,6 @@
 import { buildVectorPaths, toBezierPath, buildPdfOps } from './strands.js?v=45';
 import { hexToRgb } from './palettes.js?v=45';
+import { buildTraceSVG, buildTracePdfOps } from './trace.js?v=45';
 
 export async function exportCanvas(canvas, format) {
   switch (format) {
@@ -114,6 +115,43 @@ export function exportStrandPDF({ strands, positions, mvp, width, height, stops,
   if (hasAlpha) doc.setGState(new doc.GState({ opacity: 1 }));
 
   doc.save('soundform.pdf');
+}
+
+// Trace export: grouped filled tone-band SVG (one <g id="tone-NN"> per level).
+export function exportTraceSVG(tracedata, { background }) {
+  return buildTraceSVG(tracedata, { background });
+}
+
+// Trace export as native vector PDF: each tone layer drawn as filled paths.
+// Page sizing mirrors exportStrandPDF (A4-ish, orientation by aspect).
+export function exportTracePDF(tracedata, { background }) {
+  const { jsPDF } = window.jspdf;
+  const ops = buildTracePdfOps(tracedata, { background });
+  const { width, height } = ops;
+  const mmW = width > height ? 297 : 210;
+  const mmH = mmW * (height / width);
+  const doc = new jsPDF({
+    orientation: width > height ? 'landscape' : 'portrait',
+    unit: 'mm',
+    format: [mmW, mmH],
+  });
+  const px2mm = mmW / width;
+
+  if (ops.background != null) {
+    const [r, g, b] = hexToRgb(ops.background).map((v) => Math.round(v * 255));
+    doc.setFillColor(r, g, b);
+    doc.rect(0, 0, mmW, mmH, 'F');
+  }
+
+  ops.layers.forEach(({ color, paths }) => {
+    doc.setFillColor(color.r, color.g, color.b);
+    paths.forEach(({ start, legs }) => {
+      // 'F' fills, closed=true closes the subpath; scale px→mm.
+      doc.lines(legs, start[0] * px2mm, start[1] * px2mm, [px2mm, px2mm], 'F', true);
+    });
+  });
+
+  doc.save('soundform-trace.pdf');
 }
 
 // ── MP4 export ─────────────────────────────────────────────────────
