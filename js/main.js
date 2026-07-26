@@ -360,6 +360,7 @@ function bindAudio() {
 
   clearBtn.addEventListener('click', () => {
     stopLive();
+    endTrace(); // abort any in-flight trace so it can't download the cleared design
     if (recorder) recorder.discard();
     hideVideoReady();
     document.getElementById('btn-live').classList.remove('hidden');
@@ -666,36 +667,55 @@ async function runTrace(kind) { // kind: 'svg' | 'pdf'
   panel.style.display = '';
   label.textContent = 'Tracing…';
 
-  const container = document.getElementById('renderer-container');
-  const scale = params.traceRes / Math.max(container.clientWidth || 800, container.clientHeight || 600);
-  const transparent = params.transparentBg;
-  const canvas = renderer.renderHiRes(scale, { transparent });
-  if (renderer.exportNote) setStatus(renderer.exportNote);
-  const ctx = canvas.getContext('2d');
-  const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  // The synchronous setup below can throw before the worker's handlers are
+  // wired (renderHiRes/getImageData can fail on a large trace-res allocation,
+  // getContext can return null under GPU pressure). Without this guard a throw
+  // here would leave traceBusy=true and the panel visible forever, so every
+  // later trace hits the `if (traceBusy) return` guard — the feature would be
+  // dead until reload. Mirror the MP4 path's teardown discipline.
+  let imageData, options, background;
+  try {
+    const container = document.getElementById('renderer-container');
+    const scale = params.traceRes / Math.max(container.clientWidth || 800, container.clientHeight || 600);
+    const transparent = params.transparentBg;
+    const canvas = renderer.renderHiRes(scale, { transparent });
+    if (renderer.exportNote) setStatus(renderer.exportNote);
+    const ctx = canvas.getContext('2d');
+    imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
 
-  const detail = TRACE_DETAIL[params.traceDetail];
-  const smooth = TRACE_SMOOTH[params.traceSmooth];
-  const options = {
-    pal: paletteFromRamp(activeStops(), params.traceLevels),
-    colorsampling: 0,
-    // Must be exactly 1: imagetracer's colorquantization() only classifies
-    // pixels inside `for (cnt < colorquantcycles)`, so an unset/0 value leaves
-    // every pixel at sentinel -1 and every traced layer empty (silent — no
-    // error, background-only export). >1 would let it re-average our
-    // palette-locked `pal` swatches with sampled pixel colours, defeating the
-    // palette-lock. See docs/superpowers/plans task-8 E2E finding.
-    colorquantcycles: 1,
-    numberofcolors: params.traceLevels,
-    ltres: detail.ltres, qtres: detail.qtres,
-    // blurdelta guards blur()'s edge-preservation branch; unset → NaN compare →
-    // branch never fires and blurradius applies as uniform full-image blur.
-    pathomit: smooth.pathomit, blurradius: smooth.blurradius, blurdelta: 20,
-    rightangleenhance: false, roundcoords: 1, linefilter: true,
-  };
-  const background = params.transparentBg ? null : params.background;
+    const detail = TRACE_DETAIL[params.traceDetail];
+    const smooth = TRACE_SMOOTH[params.traceSmooth];
+    options = {
+      // paletteFromRamp puts the ramp's t=0 tone at index 0; the trace treats
+      // layer 0 as background and excludes it, drawing params.background as a
+      // flat rect instead. For custom palettes this always matches (customRamp
+      // seeds stop 0 with params.background). For preset palettes with an
+      // independently-chosen light background the assumption can break — a
+      // known edge case (presets ship dark-backgrounded); see spec §background.
+      pal: paletteFromRamp(activeStops(), params.traceLevels),
+      colorsampling: 0,
+      // Must be exactly 1: imagetracer's colorquantization() only classifies
+      // pixels inside `for (cnt < colorquantcycles)`, so an unset/0 value leaves
+      // every pixel at sentinel -1 and every traced layer empty (silent — no
+      // error, background-only export). >1 would let it re-average our
+      // palette-locked `pal` swatches with sampled pixel colours, defeating the
+      // palette-lock. See docs/superpowers/plans task-8 E2E finding.
+      colorquantcycles: 1,
+      ltres: detail.ltres, qtres: detail.qtres,
+      // blurdelta guards blur()'s edge-preservation branch; unset → NaN compare →
+      // branch never fires and blurradius applies as uniform full-image blur.
+      pathomit: smooth.pathomit, blurradius: smooth.blurradius, blurdelta: 20,
+      rightangleenhance: false, roundcoords: 1, linefilter: true,
+    };
+    background = params.transparentBg ? null : params.background;
 
-  traceWorker = new Worker('js/traceworker.js?v=45'); // classic worker
+    traceWorker = new Worker('js/traceworker.js?v=45'); // classic worker
+  } catch (err) {
+    endTrace();
+    setStatus(`Trace error: ${err.message}`);
+    return;
+  }
+
   traceWorker.onmessage = (e) => {
     const m = e.data;
     if (m.progress != null) { label.textContent = `Tracing… level ${m.level} / ${m.levels}`; return; }
