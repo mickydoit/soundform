@@ -679,9 +679,18 @@ async function runTrace(kind) { // kind: 'svg' | 'pdf'
   const options = {
     pal: paletteFromRamp(activeStops(), params.traceLevels),
     colorsampling: 0,
+    // Must be exactly 1: imagetracer's colorquantization() only classifies
+    // pixels inside `for (cnt < colorquantcycles)`, so an unset/0 value leaves
+    // every pixel at sentinel -1 and every traced layer empty (silent — no
+    // error, background-only export). >1 would let it re-average our
+    // palette-locked `pal` swatches with sampled pixel colours, defeating the
+    // palette-lock. See docs/superpowers/plans task-8 E2E finding.
+    colorquantcycles: 1,
     numberofcolors: params.traceLevels,
     ltres: detail.ltres, qtres: detail.qtres,
-    pathomit: smooth.pathomit, blurradius: smooth.blurradius,
+    // blurdelta guards blur()'s edge-preservation branch; unset → NaN compare →
+    // branch never fires and blurradius applies as uniform full-image blur.
+    pathomit: smooth.pathomit, blurradius: smooth.blurradius, blurdelta: 20,
     rightangleenhance: false, roundcoords: 1, linefilter: true,
   };
   const background = params.transparentBg ? null : params.background;
