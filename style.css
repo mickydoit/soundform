@@ -520,3 +520,14 @@ input[type="color"]::-moz-color-swatch { border: none; border-radius: 50%; }
   background: rgba(184, 167, 224, 0.15); color: #e8e4f4; cursor: pointer; font-size: 12px;
 }
 #video-ready .vr-discard { border-color: rgba(232, 180, 200, 0.35); background: rgba(232, 180, 200, 0.12); }
+
+/* Trace progress row (shown while the trace worker runs). The Cancel button
+   reuses the pastel-rose discard look; vr-btn/vr-discard are scoped to
+   #video-ready, so #trace-cancel is styled directly here. */
+#trace-progress { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+#trace-progress-label { font-size: 12px; color: #b8a7e0; }
+#trace-cancel {
+  padding: 4px 10px; border-radius: 8px;
+  border: 1px solid rgba(232, 180, 200, 0.35); background: rgba(232, 180, 200, 0.12);
+  color: #e8e4f4; cursor: pointer; font-size: 12px;
+}
