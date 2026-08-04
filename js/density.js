@@ -259,6 +259,23 @@ export class DensityRenderer {
     this.splatMat.uniforms.uWeight.value = 1;
   }
 
+  // Reveal only the first `frac` of the current cloud. The generator emits
+  // points in trajectory order, so a fraction is a representative sample of
+  // the whole attractor rather than a lopped-off region. Costs nothing — it is
+  // a draw-range change, no upload — which is why loudness drives this instead
+  // of the Density slider (that one sets GENERATION density and would force a
+  // ~150ms regeneration per volume change).
+  setVisibleFraction(frac) {
+    if (!this.points || this._paintPos) return;   // paint mode owns its own range
+    const total = this.points.geometry.getAttribute('position').count;
+    const n = Math.max(1, Math.min(total, Math.round(total * Math.max(0, Math.min(1, frac)))));
+    this.points.geometry.setDrawRange(0, n);
+    const [w, h] = this._size();
+    this.toneMat.uniforms.uPeak.value = Math.max(8, (n / (w * h)) * 550);
+    this._visibleFraction = frac;
+    this._dirty = true;
+  }
+
   // ── Paint mode: one preallocated buffer painted incrementally ──
   // beginPaint allocates; writePaintPoints copies chunks in (streaming brush
   // appends AND remainder splices); setPaintCount reveals via drawRange.
