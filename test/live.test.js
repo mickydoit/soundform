@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Envelope, KickDetector, trimWindow, fingerprintDelta,
-         MORPH_THRESHOLD } from '../js/live.js';
+         MORPH_THRESHOLD, MORPH_CHECK_INTERVAL, MORPH_CROSSFADE_SEC,
+         recencyWeights } from '../js/live.js';
 
 test('Envelope rises fast (attack) and falls slow (release)', () => {
   const e = new Envelope(0.05, 0.5);
@@ -84,6 +85,76 @@ function harness({ frame = mkFrame(), genDelay = 0, generate = null, getParams =
 }
 
 const settle = () => new Promise(r => setImmediate(r));
+
+// Geometry lagged the sound by ~2s end-to-end. Four costs stacked in series:
+// the flat 4s window diluted new audio (a change only reached full weight after
+// 4s), MORPH_CHECK_INTERVAL added up to 0.75s, then worker generation, then a
+// hardcoded 1.0s crossfade. Measured on a maximal hard switch with generation
+// stubbed to zero: 1.00s to dispatch, 2.00s to finish.
+test('conductor reacts to a changed sound quickly', async () => {
+  const low = mkFrame({ pitchHz: 110, rms: 0.10, centroid: 0.12, spread: 0.30, flux: 0.0015 });
+  const high = mkFrame({
+    pitchHz: 900, rms: 0.30, centroid: 0.70, spread: 0.70, flux: 0.0090,
+    chroma: (() => { const c = new Float32Array(12); c[6] = 1; c[10] = 0.9; c[1] = 0.85; return c; })(),
+  });
+  const frame = { current: low };
+  const { conductor, log } = harness({ frame });
+
+  const FPS = 60, SWITCH = 5;
+  let dispatchedAt = null;
+  for (let i = 0; i < FPS * 11; i++) {
+    const t = i / FPS;
+    if (t >= SWITCH) frame.current = high;
+    const before = log.xfades;
+    conductor.tick(t);
+    await settle();
+    if (t >= SWITCH && log.xfades > before && dispatchedAt === null) dispatchedAt = t - SWITCH;
+  }
+  assert.ok(dispatchedAt !== null, 'never reacted to the changed sound');
+  assert.ok(dispatchedAt < 0.6,
+    `geometry took ${dispatchedAt.toFixed(2)}s to start changing after the sound did`);
+});
+
+// The other half of the responsiveness trade. Checking 5x more often than
+// before gives 5x more chances to fire on a syllable-level blip, and the
+// jitteriest fingerprint channels (pitchMedian, note set) carry the heaviest
+// delta weights. Unchecked this hit 20 morphs / 30s — the hard ceiling set by
+// MORPH_MIN_INTERVAL, i.e. regenerating every time it was allowed to. A design
+// that churns is worse than one that lags.
+test('one speaker talking does not churn the design', async () => {
+  let s = 12345;
+  const rnd = () => (s = (s * 1664525 + 1013904223) >>> 0) / 2 ** 32;
+  const speech = (t) => {                       // one voice, natural variation
+    const syl = 0.5 + 0.5 * Math.sin(2 * Math.PI * 4.2 * t);
+    const voiced = syl > 0.42 && rnd() > 0.12;
+    const hz = 130 * (1 + 0.25 * Math.sin(2 * Math.PI * 0.35 * t)) * (1 + 0.1 * (rnd() - 0.5));
+    const chroma = new Float32Array(12);
+    for (let k = 0; k < 12; k++) chroma[k] = 0.25 * rnd();
+    chroma[((Math.round(12 * Math.log2(hz / 55)) % 12) + 12) % 12] = 1;
+    return { pitchHz: voiced ? hz : 0, pitchConf: voiced ? 0.6 + 0.3 * rnd() : 0.1 * rnd(),
+             chroma, rms: 0.15 * (0.25 + 0.75 * syl) * (voiced ? 1 : 0.35),
+             flux: 0.002 * syl * (voiced ? 1 : 2.2),
+             centroid: 0.14 * (voiced ? 0.75 : 1.6) * (0.85 + 0.3 * rnd()),
+             spread: 0.35 + 0.3 * (voiced ? 0.2 : 0.9) + 0.1 * rnd() };
+  };
+  const frame = { current: speech(0) };
+  const { conductor, log } = harness({ frame });
+  const FPS = 60, DUR = 15;
+  for (let i = 0; i < FPS * DUR; i++) {
+    const t = i / FPS;
+    frame.current = speech(t);
+    conductor.tick(t);
+    await settle();
+  }
+  // Ceiling is DUR / MORPH_MIN_INTERVAL = 10 morphs; pre-debounce this sat at it.
+  assert.ok(log.xfades <= 8,
+    `steady speech churned the design (${log.xfades} morphs in ${DUR}s, ceiling ${DUR / 1.5})`);
+});
+
+test('morph crossfade is short enough to feel responsive', () => {
+  assert.ok(MORPH_CROSSFADE_SEC <= 0.5, `crossfade ${MORPH_CROSSFADE_SEC}s reads as sluggish`);
+  assert.ok(MORPH_CHECK_INTERVAL <= 0.35, `check interval ${MORPH_CHECK_INTERVAL}s adds needless lag`);
+});
 
 test('conductor morphs once on first sound, then respects min interval', async () => {
   const { conductor, log } = harness();

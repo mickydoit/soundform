@@ -7,9 +7,33 @@ import { BrushPace, PAINT_MAX_POINTS } from './paint.js?v=45';
 import { createOrbitBrush } from './generators/attractor.js?v=45';
 
 export const WINDOW_SEC = 4;
-export const MORPH_CHECK_INTERVAL = 0.75;
+export const MORPH_CHECK_INTERVAL = 0.15;
 export const MORPH_MIN_INTERVAL = 1.5;
 export const MORPH_THRESHOLD = 0.18;
+
+// A change must survive this many consecutive checks before it morphs the
+// geometry. Checking every 0.3s instead of 0.75s is most of the responsiveness
+// win, but it also triples the chances to fire on a syllable-level blip — and
+// the two jitteriest fingerprint channels, pitchMedian and the note set, carry
+// the two heaviest weights in fingerprintDelta. Raising the threshold instead
+// would be the wrong lever: it suppresses quiet-but-real changes (a timbre-only
+// shift scores ~0.21) while a loud transient still sails through. Requiring
+// persistence discriminates on the axis that actually matters — a real change
+// stays, a blip does not.
+export const MORPH_CONFIRM_CHECKS = 2;
+export const MORPH_CROSSFADE_SEC = 0.45;
+
+// The window stays 4s — that context is what keeps a design stable — but the
+// fingerprint is no longer a flat mean of it. A flat mean makes new audio reach
+// full weight only after 4 full seconds, which was the largest single term in
+// the sound→geometry lag. An exponential recency weight puts the window's
+// centre of mass ~1.2s back instead of ~2s, so a change registers while the
+// older frames still damp out frame-to-frame jitter.
+export const RECENCY_TAU = 2.5;
+
+export function recencyWeights(frames, nowSec) {
+  return frames.map(({ t }) => Math.exp(-Math.max(0, nowSec - t) / RECENCY_TAU));
+}
 export const LIVE_MIN_FRAMES = 20;
 export const SILENCE_RMS = 0.008;
 
@@ -115,6 +139,7 @@ export class LiveConductor {
     this.colour = null;               // glideStops state
     this.shownFp = null;              // fingerprint of the geometry on screen
     this.lastCheck = 0;
+    this.overChecks = 0;           // consecutive checks over MORPH_THRESHOLD
     this.lastMorph = -Infinity;
     this.inFlight = false;
     this.forceNext = false;
@@ -305,7 +330,15 @@ export class LiveConductor {
     const meanRms = this.frames.reduce((a, x) => a + x.f.rms, 0) / this.frames.length;
     if (meanRms < SILENCE_RMS) return;               // the room is quiet — idle
     const fp = this.windowFingerprint();
-    if (!this.forceNext && fingerprintDelta(fp, this.shownFp) < MORPH_THRESHOLD) return;
+    if (!this.forceNext) {
+      // Debounce: the change has to still be there on the next check. A blip
+      // resets the run; the very first morph of a session is exempt so the
+      // opening design still appears immediately.
+      if (fingerprintDelta(fp, this.shownFp) < MORPH_THRESHOLD) { this.overChecks = 0; return; }
+      this.overChecks = (this.overChecks || 0) + 1;
+      if (this.shownFp && this.overChecks < MORPH_CONFIRM_CHECKS) return;
+    }
+    this.overChecks = 0;
     this.forceNext = false;
     this.inFlight = true;
     const morphGen = this.growGen;
@@ -318,7 +351,7 @@ export class LiveConductor {
         if (!this.running || !out || morphGen !== this.growGen) return;
         this.lastMorph = this._lastNow;
         this.shownFp = fp;
-        this.renderer.crossfadeTo(out.positions, out.attr, 1.0);
+        this.renderer.crossfadeTo(out.positions, out.attr, MORPH_CROSSFADE_SEC);
       })
       .catch(() => { this.inFlight = false; });
   }
@@ -327,7 +360,8 @@ export class LiveConductor {
     const raw = this.frames.map(x => x.f);
     const dur = this.frames.length >= 2
       ? this.frames[this.frames.length - 1].t - this.frames[0].t : 0.25;
-    const fp = buildFingerprint(raw, Math.max(0.25, dur));
+    const now = this.frames.length ? this.frames[this.frames.length - 1].t : 0;
+    const fp = buildFingerprint(raw, Math.max(0.25, dur), recencyWeights(this.frames, now));
     fp.trajectory = buildTrajectory(raw);
     fp.trajectoryChannels = 4;
     return fp;

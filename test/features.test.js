@@ -115,3 +115,49 @@ test('buildTrajectory packs 4 channels and zeroes unvoiced pitch', () => {
   assert.ok(Math.abs(t[3] - Math.log2(220 / 55) / 6) < 1e-6);
   assert.equal(t[7], 0); // low confidence → 0
 });
+
+// The live window is a flat 4s mean, so a new sound only reaches full weight
+// after 4 seconds — the single largest term in the geometry lag. Weighting
+// recent frames higher lets a change register while keeping 4s of context for
+// stability. Uniform weights must stay byte-identical to the unweighted call,
+// because the capture path relies on it (snapshot checksums).
+test('buildFingerprint: uniform weights reproduce the unweighted result', () => {
+  const frames = [];
+  for (let i = 0; i < 40; i++) {
+    const c = new Float32Array(12); c[i % 12] = 1; c[(i + 4) % 12] = 0.7;
+    frames.push({ pitchHz: 110 + i * 4, pitchConf: 0.9, chroma: c,
+                  rms: 0.1 + 0.002 * i, flux: 0.002, centroid: 0.3, spread: 0.4 });
+  }
+  const plain = buildFingerprint(frames, 4);
+  const uniform = buildFingerprint(frames, 4, frames.map(() => 1));
+  for (const k of ['pitchMedian', 'pitchConfidence', 'consonance', 'velocity',
+                   'volMean', 'centroid', 'spread', 'seed']) {
+    assert.equal(uniform[k], plain[k], `weighted-uniform changed ${k}`);
+  }
+  assert.deepEqual([...uniform.noteSet], [...plain.noteSet]);
+});
+
+test('buildFingerprint: recency weighting tracks a changed sound faster', () => {
+  const mk = (hz, cent, spread, pc) => {
+    const c = new Float32Array(12); c[pc] = 1; c[(pc + 7) % 12] = 0.8;
+    return { pitchHz: hz, pitchConf: 0.9, chroma: c, rms: 0.15, flux: 0.002,
+             centroid: cent, spread };
+  };
+  // 3s of a low hum, then 1s of a high bright tone — the moment 1s after a
+  // change, with a 4s window.
+  const frames = [];
+  for (let i = 0; i < 45; i++) frames.push(mk(110, 0.15, 0.3, 0));
+  for (let i = 0; i < 15; i++) frames.push(mk(880, 0.75, 0.7, 6));
+  const target = buildFingerprint(Array.from({ length: 60 }, () => mk(880, 0.75, 0.7, 6)), 4);
+
+  const flat = buildFingerprint(frames, 4);
+  const w = [];
+  for (let i = 0; i < frames.length; i++) w.push(Math.exp(-((frames.length - 1 - i) / 60 * 4) / 1.2));
+  const recent = buildFingerprint(frames, 4, w);
+
+  const dist = (fp) => Math.abs(fp.pitchMedian - target.pitchMedian)
+                     + Math.abs(fp.centroid - target.centroid)
+                     + Math.abs(fp.spread - target.spread);
+  assert.ok(dist(recent) < dist(flat) * 0.6,
+    `recency weighting barely helped (flat ${dist(flat).toFixed(3)} vs weighted ${dist(recent).toFixed(3)})`);
+});

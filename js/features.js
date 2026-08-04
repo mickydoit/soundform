@@ -118,12 +118,49 @@ export function bestTriad(chroma) {
 const clamp01 = v => Math.max(0, Math.min(1, v));
 const median = a => { const s = [...a].sort((x, y) => x - y); return s[s.length >> 1] ?? 0; };
 
-export function buildFingerprint(frames, durationSec) {
-  const voiced = frames.filter(f => f.pitchConf > 0.5 && f.pitchHz > 0);
-  const pitchConfidence = clamp01(voiced.length / Math.max(1, frames.length));
+// Weighted median matching `median` exactly at uniform weight: the strict `>`
+// picks the upper-middle element, the same one `s[s.length >> 1]` returns.
+const weightedMedian = (vals, ws) => {
+  if (!vals.length) return 0;
+  const order = vals.map((_, i) => i).sort((a, b) => vals[a] - vals[b]);
+  let total = 0;
+  for (const i of order) total += ws[i];
+  let acc = 0;
+  for (const i of order) { acc += ws[i]; if (acc > total / 2) return vals[i]; }
+  return vals[order[order.length - 1]];
+};
+
+// `weights` is optional and live-only: one weight per frame, letting the caller
+// emphasise recent audio. Omitted (or uniform) it reproduces the unweighted
+// result exactly, which the capture path depends on — recorded output is pinned
+// by snapshot checksums. Weighting applies to the central-tendency aggregates
+// only; pitchRange, contour, onset count and attackSlope describe the shape or
+// the extremes of the window, where recency would distort rather than sharpen.
+export function buildFingerprint(frames, durationSec, weights = null) {
+  const w = weights ?? null;
+  const wAt = (i) => (w ? w[i] : 1);
+  // Weighted mean over all frames, by a per-frame accessor.
+  const wMean = (pick) => {
+    let num = 0, den = 0;
+    for (let i = 0; i < frames.length; i++) { const k = wAt(i); num += pick(frames[i]) * k; den += k; }
+    return den > 0 ? num / den : 0;
+  };
+
+  const voicedIdx = [];
+  for (let i = 0; i < frames.length; i++) {
+    const f = frames[i];
+    if (f.pitchConf > 0.5 && f.pitchHz > 0) voicedIdx.push(i);
+  }
+  const voiced = voicedIdx.map(i => frames[i]);
+  let voicedW = 0, allW = 0;
+  for (let i = 0; i < frames.length; i++) allW += wAt(i);
+  for (const i of voicedIdx) voicedW += wAt(i);
+  const pitchConfidence = clamp01(allW > 0 ? voicedW / allW : 0);
 
   const logs = voiced.map(f => Math.log2(f.pitchHz / 55) / 6); // 55 Hz–3520 Hz → 0..1
-  const pitchMedian = voiced.length ? clamp01(median(logs)) : 0.5;
+  const pitchMedian = voiced.length
+    ? clamp01(w ? weightedMedian(logs, voicedIdx.map(wAt)) : median(logs))
+    : 0.5;
   const pitchRange = voiced.length
     ? clamp01((Math.max(...logs) - Math.min(...logs)) * 6 / 3)
     : 0;
@@ -136,12 +173,13 @@ export function buildFingerprint(frames, durationSec) {
     }
   }
 
-  // RMS-weighted chroma histogram
+  // RMS-weighted chroma histogram (times the recency weight, when given)
   const chroma = new Float32Array(12);
   let wSum = 0;
-  for (const f of frames) {
-    for (let i = 0; i < 12; i++) chroma[i] += f.chroma[i] * f.rms;
-    wSum += f.rms;
+  for (let n = 0; n < frames.length; n++) {
+    const f = frames[n], k = wAt(n);
+    for (let i = 0; i < 12; i++) chroma[i] += f.chroma[i] * f.rms * k;
+    wSum += f.rms * k;
   }
   let cMax = 0;
   for (const v of chroma) cMax = Math.max(cMax, v);
@@ -159,7 +197,8 @@ export function buildFingerprint(frames, durationSec) {
 
   // Velocity: onset peaks per second blended with mean onset strength
   const fluxes = frames.map(f => f.flux);
-  const fMean = fluxes.reduce((a, b) => a + b, 0) / Math.max(1, fluxes.length);
+  const fMean = w ? wMean(f => f.flux)
+                  : fluxes.reduce((a, b) => a + b, 0) / Math.max(1, fluxes.length);
   const fStd = Math.sqrt(fluxes.reduce((a, b) => a + (b - fMean) ** 2, 0) / Math.max(1, fluxes.length));
   let onsets = 0;
   for (let i = 1; i < fluxes.length - 1; i++) {
@@ -170,15 +209,21 @@ export function buildFingerprint(frames, durationSec) {
 
   // Dynamics
   const rmses = frames.map(f => f.rms);
-  const volMean = clamp01(rmses.reduce((a, b) => a + b, 0) / Math.max(1, rmses.length) * 2.5);
-  const vVar = rmses.reduce((a, b) => a + (b - volMean / 2.5) ** 2, 0) / Math.max(1, rmses.length);
+  const rmsMean = w ? wMean(f => f.rms)
+                    : rmses.reduce((a, b) => a + b, 0) / Math.max(1, rmses.length);
+  const volMean = clamp01(rmsMean * 2.5);
+  const vVar = w
+    ? wMean(f => (f.rms - volMean / 2.5) ** 2)
+    : rmses.reduce((a, b) => a + (b - volMean / 2.5) ** 2, 0) / Math.max(1, rmses.length);
   const volVar = clamp01(Math.sqrt(vVar) * 5);
   let rise = 0;
   for (let i = 1; i < rmses.length; i++) rise = Math.max(rise, rmses[i] - rmses[i - 1]);
   const attackSlope = clamp01(rise * 8);
 
-  const centroid = clamp01(frames.reduce((a, f) => a + f.centroid, 0) / Math.max(1, frames.length));
-  const spread = clamp01(frames.reduce((a, f) => a + f.spread, 0) / Math.max(1, frames.length));
+  const centroid = clamp01(w ? wMean(f => f.centroid)
+    : frames.reduce((a, f) => a + f.centroid, 0) / Math.max(1, frames.length));
+  const spread = clamp01(w ? wMean(f => f.spread)
+    : frames.reduce((a, f) => a + f.spread, 0) / Math.max(1, frames.length));
 
   // Deterministic seed from the quantised fingerprint
   const q = v => Math.round(v * 255);
