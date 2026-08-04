@@ -639,23 +639,57 @@ test('attractor live: speech spreads across the system space', () => {
     `speakers on different systems still look alike (worst pair ${pair} overlap ${worst.toFixed(3)})`);
 });
 
-test('attractor live: params.lockedSystem overrides routing', () => {
+// Cell-occupancy Jaccard overlap, same construction as the 'speech spreads
+// across the system space' test above: system identity dominates geometry
+// (two designs from the same system overlap 0.60-0.88 by cell, two from
+// different systems only 0.10-0.39), so overlap is a reliable proxy for
+// "landed on the same system" without requiring byte-identical output from
+// two different fingerprints.
+function cellsOf(out) {
+  const s = new Set(); const n = out.positions.length / 3;
+  for (let i = 0; i < n; i++) {
+    const q = (d) => Math.min(19, Math.max(0, Math.floor((out.positions[i * 3 + d] + 1.3) / 2.6 * 20)));
+    s.add((q(0) * 20 + q(1)) * 20 + q(2));
+  }
+  return s;
+}
+function jaccard(a, b) {
+  let inter = 0; for (const v of a) if (b.has(v)) inter++;
+  return inter / (a.size + b.size - inter);
+}
+
+test('attractor live: params.lockedSystem produces the locked system\'s geometry', () => {
   const p = { ...baseParams, density: 30000, liveVariance: true };
   // A fingerprint that routes somewhere specific on its own...
   const fp = speechFingerprint(SPEAKERS['male calm']);
   const natural = pickSystemLive(fp);
   const other = natural === 'aizawa' ? 'lorenz' : 'aizawa';
 
-  // ...must produce the locked system's geometry when locked to something else.
-  const lockedOut = generate(fp, { ...p, lockedSystem: other });
-  const nativeOther = generate(fp, { ...p, lockedSystem: other });
-  assert.deepEqual([...lockedOut.positions.slice(0, 60)], [...nativeOther.positions.slice(0, 60)],
-    'locking must be deterministic');
+  // Find a speaker profile that lands on `other` UNFORCED, so we have a real
+  // reference for what `other`'s geometry actually looks like — not just
+  // another call locked to the same thing (which would prove nothing beyond
+  // determinism, already guaranteed for the whole module).
+  const nativeName = Object.keys(SPEAKERS).find(
+    n => pickSystemLive(speechFingerprint(SPEAKERS[n])) === other);
+  assert.ok(nativeName, `no SPEAKERS profile naturally routes to ${other}`);
+  const nativeFp = speechFingerprint(SPEAKERS[nativeName]);
+  assert.equal(pickSystemLive(nativeFp), other, 'fixture must naturally route to the target system');
 
-  const unlocked = generate(fp, p);
-  let same = true;
-  for (let i = 0; i < 60; i++) if (unlocked.positions[i] !== lockedOut.positions[i]) { same = false; break; }
-  assert.ok(!same, 'lockedSystem had no effect');
+  const lockedOut = generate(fp, { ...p, lockedSystem: other });     // fp forced onto `other`
+  const nativeOther = generate(nativeFp, p);                         // different fp, naturally on `other`
+  const unlocked = generate(fp, p);                                  // fp, naturally on `natural`
+
+  // `fp` and `nativeFp` are different fingerprints, so their coefficients
+  // differ even on the same system — exact position equality would not hold
+  // and would be the wrong bar. What must hold is that locking makes `fp`
+  // read as `other`'s geometry, not `natural`'s: overlap with a native
+  // `other` design must swamp overlap with `fp`'s own unlocked (natural)
+  // design.
+  const overlapWithTarget = jaccard(cellsOf(lockedOut), cellsOf(nativeOther));
+  const overlapWithNatural = jaccard(cellsOf(lockedOut), cellsOf(unlocked));
+  assert.ok(overlapWithTarget > overlapWithNatural,
+    `locked output should resemble a native ${other} design (overlap ${overlapWithTarget.toFixed(3)}) ` +
+    `far more than fp's own natively-routed ${natural} design (overlap ${overlapWithNatural.toFixed(3)})`);
 });
 
 test('attractor: lockedSystem does not affect the capture path', () => {
@@ -664,6 +698,24 @@ test('attractor: lockedSystem does not affect the capture path', () => {
   const b = generate(fp, { ...baseParams, density: 30000, lockedSystem: 'lorenz' });
   assert.deepEqual([...a.positions.slice(0, 300)], [...b.positions.slice(0, 300)],
     'capture output must ignore lockedSystem');
+  // Capture must ignore lockedSystem entirely, including an invalid value —
+  // the live-path-only validation added below must not reach this branch.
+  assert.doesNotThrow(() => generate(fp, { ...baseParams, density: 30000, lockedSystem: 'not-a-system' }),
+    'capture path must not validate a field it never reads');
+});
+
+test('attractor live: unknown lockedSystem throws, naming the bad value and the valid names', () => {
+  const fp = testFingerprint();
+  const p = { ...baseParams, density: 30000, liveVariance: true };
+  assert.throws(() => generate(fp, { ...p, lockedSystem: 'not-a-system' }), (err) => {
+    assert.match(err.message, /not-a-system/);
+    for (const name of ['thomas', 'halvorsen', 'aizawa', 'lorenz', 'sinemap']) {
+      assert.match(err.message, new RegExp(name));
+    }
+    return true;
+  });
+  // '' is falsy but non-nullish, so `??` alone would not catch it.
+  assert.throws(() => generate(fp, { ...p, lockedSystem: '' }), /unknown params\.lockedSystem/);
 });
 
 test('attractor live: flow systems respond to timbre, not just pitch', () => {

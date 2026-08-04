@@ -295,7 +295,13 @@ export function generate(fp, params, onProgress) {
   // variety comes from the axes, never from system roulette.
   // Live locks the system for a whole session (params.lockedSystem) so the
   // design is modulated rather than swapped. Capture ignores it entirely —
-  // recorded output is pinned by snapshot checksums.
+  // recorded output is pinned by snapshot checksums. Validated only on the
+  // live path: an unknown name (including '', which ?? does not catch since
+  // it is non-nullish) must fail loudly here, not as a cryptic
+  // "Cannot read properties of undefined" a few lines down in the retry loop.
+  if (arch && params.lockedSystem != null && !(params.lockedSystem in SYSTEMS)) {
+    throw new Error(`generate(): unknown params.lockedSystem "${params.lockedSystem}" — must be one of ${Object.keys(SYSTEMS).join(', ')}`);
+  }
   const name = arch ? (params.lockedSystem ?? pickSystemLive(fp)) : pickSystem(fp);
   const sys = SYSTEMS[name];
   const rnd = mulberry32(fp.seed);
