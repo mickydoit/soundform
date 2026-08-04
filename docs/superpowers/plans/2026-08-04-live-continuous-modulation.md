@@ -14,7 +14,8 @@
 - **Capture path must stay byte-identical.** `test/snapshot.test.js` (52 tests) pins recorded output by checksum. Every change here is live-only, gated on `params.liveVariance` / conductor state. If a snapshot test fails, the change leaked into capture — fix the change, do not regenerate goldens.
 - **Cache-bust convention:** every `?v=NN` occurrence moves together. Currently `v=46` across 35 occurrences in `index.html`, `js/*.js`, `js/generators/index.js`. Bump only when shipping, as one commit.
 - **Generator files** live in `js/generators/` and are imported with `?v=46` from `js/generators/index.js`.
-- **Existing invariants that must keep passing:** the attractor locality test (`steady sound keeps a stable design across morphs`), the churn test (`one speaker talking does not churn the design`, ≤8 morphs/15s), and `attractor live: speech spreads across the system space`.
+- **Existing invariants that must keep passing:** the attractor locality test (`steady sound keeps a stable design across morphs`) and `attractor live: speech spreads across the system space`.
+- **The churn test is expected to change in Task 6** (ruled by the human at pre-flight). `one speaker talking does not churn the design` counts crossfades; under continuous modulation constant crossfading IS the deformation, so the count is no longer the invariant. Rewrite it to assert **zero system changes per session**. Do not loosen the number and leave it counting crossfades — that would keep a guard that no longer guards anything.
 - **Baseline:** 315 tests passing at commit `edf5818`.
 - Node's test runner runs each file in a separate process, and `test/live.test.js`, `test/paint.test.js`, `test/snapshot.test.js` all import helpers from `test/generators.test.js` — so adding a test there inflates the reported total by 4× its count. This is expected.
 
@@ -865,7 +866,7 @@ Expected: PASS
 - [ ] **Step 7: Run the full suite**
 
 Run: `npm test`
-Expected: 345 passing. The churn test (`one speaker talking does not churn the design`) now measures modulation, not morphing — if it fails, the assertion needs rewriting to count *system changes* (which must be 0) rather than crossfades. Do that rather than loosening the number.
+Expected: 342 passing. The churn test (`one speaker talking does not churn the design`) now measures modulation, not morphing — if it fails, the assertion needs rewriting to count *system changes* (which must be 0) rather than crossfades. Do that rather than loosening the number.
 
 - [ ] **Step 8: Commit**
 
@@ -947,7 +948,7 @@ In the `clearBtn` click handler (line 361), after `stopLive();`, add:
 - [ ] **Step 5: Verify nothing regressed**
 
 Run: `npm test`
-Expected: 345 passing (`main.js` is DOM-bound and has no unit tests; this confirms no import-time breakage).
+Expected: 342 passing (`main.js` is DOM-bound and has no unit tests; this confirms no import-time breakage).
 
 - [ ] **Step 6: Commit**
 
@@ -1128,7 +1129,7 @@ Expected: fewer than 15 splices per 30s, largest single upload ≤ 40,000 points
 - [ ] **Step 9: Run the full suite**
 
 Run: `npm test`
-Expected: 349 passing
+Expected: 344 passing
 
 - [ ] **Step 10: Commit**
 
@@ -1155,7 +1156,7 @@ grep -rno "?v=47" index.html js/*.js js/generators/*.js | wc -l   # expect 36 (3
 - [ ] **Step 2: Run the full suite**
 
 Run: `npm test`
-Expected: 349 passing, 0 failing
+Expected: 344 passing, 0 failing
 
 - [ ] **Step 3: Commit and merge**
 
