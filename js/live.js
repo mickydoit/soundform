@@ -4,7 +4,7 @@
 import { buildFingerprint, buildTrajectory } from './features.js?v=46';
 import { liveTarget, glideStops, stopsToHex } from './livecolor.js?v=46';
 import { BrushPace, PAINT_MAX_POINTS } from './paint.js?v=46';
-import { createOrbitBrush } from './generators/attractor.js?v=46';
+import { createOrbitBrush, pickSystemLive } from './generators/attractor.js?v=46';
 
 export const WINDOW_SEC = 4;
 export const MORPH_CHECK_INTERVAL = 0.15;
@@ -138,6 +138,7 @@ export class LiveConductor {
     this.chromaSmooth = new Float32Array(12);
     this.colour = null;               // glideStops state
     this.shownFp = null;              // fingerprint of the geometry on screen
+    this.lockedSystem = null;         // attractor system, fixed for the session
     this.lastCheck = 0;
     this.overChecks = 0;           // consecutive checks over MORPH_THRESHOLD
     this.lastMorph = -Infinity;
@@ -164,6 +165,7 @@ export class LiveConductor {
   setGrowthMode(mode) {
     this.growthMode = mode;
     this.growGen++;
+    this.lockedSystem = null;         // a fresh canvas re-picks the form
     this.paint = mode === 'paint'
       ? { pace: new BrushPace(), brush: null, count: 0, revealTotal: 0, strands: [], segments: [0],
           pendingGen: false, retried: false, done: false, begun: false }
@@ -244,7 +246,8 @@ export class LiveConductor {
     const gen = this.growGen;
     this.generate(fp, { mode: p.mode, density: max, complexity: p.complexity,
                         symmetry: p.symmetry, twist: p.twist, strandCount: 8,
-                        cymStyle: p.cymStyle, liveVariance: true })
+                        cymStyle: p.cymStyle, liveVariance: true,
+                        lockedSystem: this._lockSystem(fp) })
       .then((out) => {
         st.pendingGen = false;
         if (!this.running || gen !== this.growGen) return;
@@ -344,8 +347,9 @@ export class LiveConductor {
     const morphGen = this.growGen;
     const p = this.getParams();
     this.generate(fp, { mode: p.mode, density: p.liveDensity, complexity: p.complexity,
-                        symmetry: p.symmetry, twist: p.twist, strandCount: 96,
-                        cymStyle: p.cymStyle, liveVariance: true })
+                        symmetry: p.symmetry, twist: p.twist, strandCount: 8,
+                        cymStyle: p.cymStyle, liveVariance: true,
+                        lockedSystem: this._lockSystem(fp) })
       .then((out) => {
         this.inFlight = false;
         if (!this.running || !out || morphGen !== this.growGen) return;
@@ -354,6 +358,17 @@ export class LiveConductor {
         this.renderer.crossfadeTo(out.positions, out.attr, MORPH_CROSSFADE_SEC);
       })
       .catch(() => { this.inFlight = false; });
+  }
+
+  // The form is chosen once, from the first sound that is worth fingerprinting,
+  // and held for the rest of the session. Everything after that is modulation
+  // of that one design — which is the whole point: system identity dominates
+  // appearance (same-system designs overlap 0.60-0.88 by cell occupancy,
+  // cross-system only 0.10-0.39), so re-picking mid-session reads as swapping
+  // designs, not as responding to a voice.
+  _lockSystem(fp) {
+    if (!this.lockedSystem) this.lockedSystem = pickSystemLive(fp);
+    return this.lockedSystem;
   }
 
   windowFingerprint() {

@@ -421,8 +421,12 @@ test('stale morph generation never lands after switching to paint', async () => 
   let resolveGen = null;
   const { conductor, log } = harness({
     generate: (fp, p) => new Promise((res) => {
-      // paint-mode requests resolve instantly; the morph one is held open
-      if (p.liveVariance && p.density > 900 && p.strandCount === 8) {
+      // paint-mode requests resolve instantly; the morph one is held open.
+      // Both calls now carry strandCount: 8 (Task 5 lowered the structural
+      // call to match), so discriminate on density instead: paint reveals
+      // request up to PAINT_MAX_POINTS (600k), structural morphs request
+      // liveDensity (1000 here).
+      if (p.liveVariance && p.density > 50000) {
         res({ positions: new Float32Array(p.density * 3), attr: new Float32Array(p.density), strands: [] });
       } else {
         resolveGen = () => res({ positions: new Float32Array(30), attr: new Float32Array(10), strands: [] });
@@ -436,4 +440,35 @@ test('stale morph generation never lands after switching to paint', async () => 
   resolveGen();                                           // stale morph resolves late
   await settle();
   assert.equal(log.xfades, 0, 'stale morph must not crossfade over the painting');
+});
+
+test('conductor locks the attractor system for the whole session', async () => {
+  const seen = [];
+  const frame = { current: mkFrame() };
+  const { conductor } = harness({
+    frame,
+    generate: async (fp, p) => { seen.push(p.lockedSystem); return { positions: new Float32Array(3), attr: new Float32Array(1), strands: [] }; },
+  });
+  // wildly different sounds across the session
+  const variants = [
+    mkFrame({ pitchHz: 110, centroid: 0.1, rms: 0.1 }),
+    mkFrame({ pitchHz: 880, centroid: 0.8, rms: 0.3, flux: 0.02 }),
+    mkFrame({ pitchHz: 220, centroid: 0.3, rms: 0.05 }),
+    mkFrame({ pitchHz: 1400, centroid: 0.9, rms: 0.35, flux: 0.03 }),
+  ];
+  for (let i = 0; i < 60 * 20; i++) {
+    frame.current = variants[Math.floor(i / (60 * 5)) % variants.length];
+    conductor.tick(i / 60);
+    await settle();
+  }
+  assert.ok(seen.length >= 2, `expected several generations, got ${seen.length}`);
+  assert.ok(seen.every((s) => typeof s === 'string' && s.length > 0), 'every call must carry lockedSystem');
+  assert.equal(new Set(seen).size, 1, `system changed mid-session: ${[...new Set(seen)].join(', ')}`);
+});
+
+test('conductor releases the lock on clear / growth-mode switch', () => {
+  const { conductor } = harness();
+  for (let i = 0; i < 40; i++) conductor.tick(i / 60);
+  conductor.setGrowthMode('paint');
+  assert.equal(conductor.lockedSystem, null, 'switching mode must release the lock');
 });
