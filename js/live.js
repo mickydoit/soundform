@@ -151,7 +151,6 @@ export class LiveConductor {
     this.lockedSystem = null;         // attractor system, fixed for the session
     this.auto = new AutoParams();     // voice-driven slider values
     this.onAutoParams = null;         // (values) => void, for the UI sliders
-    this.lastModulate = -Infinity;
     this.lastCheck = 0;
     this.overChecks = 0;           // consecutive checks over MORPH_THRESHOLD
     this.lastMorph = -Infinity;
@@ -349,7 +348,7 @@ export class LiveConductor {
     // Once a system is locked, the design is modulated on a fast fixed cadence
     // rather than morphed on a delta threshold — there is no longer anything to
     // switch TO, so waiting for a big change would just make it unresponsive.
-    const modulating = !!this.lockedSystem;
+    const modulating = !!this.lockedSystem && base.mode === 'attractor';
     const interval = modulating ? MODULATE_INTERVAL : MORPH_CHECK_INTERVAL;
     const minGap = modulating ? MODULATE_INTERVAL : MORPH_MIN_INTERVAL;
     const due = nowSec - this.lastCheck >= interval || this.forceNext;
@@ -383,13 +382,18 @@ export class LiveConductor {
                         lockedSystem: this._lockSystem(fp) })
       .then((out) => {
         this.inFlight = false;
-        if (!this.running || !out || morphGen !== this.growGen) return;
+        if (!this.running || morphGen !== this.growGen) return;
+        // A failed generation still has to arm the backoff gate: with the
+        // debounce bypassed while modulating, leaving lastMorph untouched
+        // would make the next tick immediately eligible again — a zero-gap
+        // retry loop against a generator that keeps failing.
+        if (!out) { this.lastMorph = this._lastNow; return; }
         this.lastMorph = this._lastNow;
         this.shownFp = fp;
         this.renderer.crossfadeTo(out.positions, out.attr,
           this.lockedSystem ? MODULATE_CROSSFADE_SEC : MORPH_CROSSFADE_SEC);
       })
-      .catch(() => { this.inFlight = false; });
+      .catch(() => { this.inFlight = false; this.lastMorph = this._lastNow; });
   }
 
   // The form is chosen once, from the first sound that is worth fingerprinting,

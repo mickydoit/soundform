@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Envelope, KickDetector, trimWindow, fingerprintDelta,
          MORPH_THRESHOLD, MORPH_CHECK_INTERVAL, MORPH_CROSSFADE_SEC,
-         MODULATE_CROSSFADE_SEC,
+         MODULATE_CROSSFADE_SEC, MODULATE_INTERVAL,
          recencyWeights } from '../js/live.js';
 
 test('Envelope rises fast (attack) and falls slow (release)', () => {
@@ -65,14 +65,14 @@ const mkFrame = (o = {}) => ({
 });
 
 function harness({ frame = mkFrame(), genDelay = 0, generate = null, getParams = null } = {}) {
-  const log = { xfades: 0, waves: [], stops: [], paintBegun: 0, paintWrites: [], paintCounts: [] };
+  const log = { xfades: 0, waves: [], stops: [], paintBegun: 0, paintWrites: [], paintCounts: [], visibleFractions: [] };
   const conductor = new LiveConductor({
     audio: { getMusicalFrame: () => frame.current ?? frame },
     renderer: {
       setWave: (a, f) => log.waves.push([a, f]),
       setParams: () => {}, setPlaying: () => {}, setLoopPeriod: () => {},
       crossfadeTo: () => { log.xfades++; },
-      setVisibleFraction: () => {},
+      setVisibleFraction: (v) => log.visibleFractions.push(v),
       beginPaint: (m) => { log.paintBegun = m; },
       writePaintPoints: (o, p) => { log.paintWrites.push([o, p.length / 3]); },
       setPaintCount: (n) => { log.paintCounts.push(n); },
@@ -158,7 +158,10 @@ test('one speaker talking does not churn the design', async () => {
     conductor.tick(t);
     await settle();
   }
-  assert.ok(seenSystems.length > 0, 'expected at least one regeneration');
+  // Floor of 1 would pass vacuously on a regression that collapsed modulation
+  // to a single generation; DUR / MODULATE_INTERVAL is ~40-50 under correct
+  // behaviour, so 10 is a real floor without being brittle to exact timing.
+  assert.ok(seenSystems.length >= 10, `expected sustained modulation, got ${seenSystems.length}`);
   assert.equal(new Set(seenSystems).size, 1,
     `system changed mid-session under one speaker: ${[...new Set(seenSystems)].join(', ')}`);
   assert.equal(conductor.lockedSystem, seenSystems[0], 'conductor.lockedSystem must match what generate saw');
@@ -524,11 +527,21 @@ test('live modulation deforms continuously instead of swapping designs', async (
     assert.ok(d < 0.2, `complexity jumped ${d.toFixed(3)} between consecutive generations`);
   }
   assert.ok(log.xfades >= 6, 'modulation must reach the renderer');
+  // The harness's getParams supplies a constant p.complexity (0.5). If the
+  // generate call were wired to p.complexity instead of the glided auto
+  // value, every consecutive delta above would trivially be 0 < 0.2 and this
+  // test would pass on a regression that disconnected the voice entirely.
+  const cs = gens.map(g => g.complexity);
+  assert.ok(Math.max(...cs) - Math.min(...cs) > 0.05, 'complexity never moved — auto params not reaching generate');
 });
 
 test('modulation crossfade is short enough to read as deformation', () => {
   assert.ok(MODULATE_CROSSFADE_SEC <= 0.2,
     `${MODULATE_CROSSFADE_SEC}s reads as a dissolve between designs, not a deformation`);
+});
+
+test('modulation interval is not faster than generation can complete', () => {
+  assert.ok(MODULATE_INTERVAL >= 0.2, `${MODULATE_INTERVAL}s regenerates faster than generation completes`);
 });
 
 test('conductor reports auto parameters for the sliders', async () => {
@@ -541,4 +554,71 @@ test('conductor reports auto parameters for the sliders', async () => {
   for (const k of ['complexity', 'twist', 'scale', 'visibleFraction']) {
     assert.ok(typeof last[k] === 'number' && Number.isFinite(last[k]), `${k} missing from auto params`);
   }
+});
+
+// _lockSystem() records a lock for every mode (Task 5's behaviour, needed so
+// paint's attractor brush and future mode switches have somewhere to read
+// from), but the fast modulation cadence must only engage when that lock is
+// actually consumed — today, only attractor mode passes lockedSystem into the
+// generator. Without the mode gate, cymatics/radial/oscillo/harmonic would
+// all regenerate unconditionally every MODULATE_INTERVAL with no fingerprint
+// anchoring identity, which is exactly the "chopping and changing" this task
+// exists to remove.
+test('modulation cadence does not engage outside attractor mode', async () => {
+  const gens = [];
+  const frame = { current: mkFrame() };
+  const { conductor } = harness({
+    frame,
+    generate: async (fp, p) => { gens.push(p); return { positions: new Float32Array(3), attr: new Float32Array(1), strands: [] }; },
+    getParams: () => ({ mode: 'cymatics', complexity: 0.5, symmetry: 1, twist: 0,
+                        cymStyle: 'auto', liveDensity: 1000, exposure: 30, scale: 1, grain: 1 }),
+  });
+  const DUR = 10, FPS = 60;
+  for (let i = 0; i < FPS * DUR; i++) {
+    conductor.tick(i / FPS);
+    await settle();
+  }
+  assert.ok(conductor.lockedSystem, 'lock is still recorded regardless of mode (Task 5 behaviour)');
+  // Steady sound in a mode that does not consume the lock: this must fall
+  // back to the debounced morph cadence (one morph, then min-interval), not
+  // the fast modulation cadence — MODULATE_INTERVAL would produce ~40
+  // regenerations in 10s if the mode gate were missing.
+  assert.equal(gens.length, 1,
+    `non-attractor mode regenerated on the modulation cadence (${gens.length} calls in ${DUR}s)`);
+});
+
+// While modulating, the fingerprint-delta debounce is bypassed entirely, so
+// the only thing standing between a persistently failing generator and a
+// zero-gap retry loop (which, combined with the main-thread synchronous
+// worker fallback, is a hard UI freeze) is lastMorph advancing on failure
+// paths too, not just on success.
+test('a generator that always rejects does not produce an unbounded dispatch storm', async () => {
+  let calls = 0;
+  const frame = { current: mkFrame() };
+  const { conductor } = harness({
+    frame,
+    generate: async () => { calls++; throw new Error('boom'); },
+  });
+  const DUR = 10, FPS = 60;
+  for (let i = 0; i < FPS * DUR; i++) {
+    conductor.tick(i / FPS);
+    await settle();
+  }
+  assert.ok(calls <= Math.ceil(DUR / MODULATE_INTERVAL) + 2,
+    `failing generator dispatched ${calls} times in ${DUR}s — no backpressure`);
+});
+
+// setVisibleFraction is the "costs nothing" half of the auto-params layer —
+// it must actually reach the renderer and move with loudness, not just be
+// called with an unread value.
+test('auto visibleFraction responds to loudness', async () => {
+  const frame = { current: mkFrame({ rms: 0.05 }) };
+  const { conductor, log } = harness({ frame });
+  for (let i = 0; i < 120; i++) { conductor.tick(i / 60); await settle(); }
+  assert.ok(log.visibleFractions.length > 0, 'setVisibleFraction never called');
+  const quiet = log.visibleFractions[log.visibleFractions.length - 1];
+  frame.current = mkFrame({ rms: 0.35 });
+  for (let i = 120; i < 300; i++) { conductor.tick(i / 60); await settle(); }
+  const loud = log.visibleFractions[log.visibleFractions.length - 1];
+  assert.ok(loud > quiet, `visibleFraction did not rise with loudness (quiet=${quiet}, loud=${loud})`);
 });
