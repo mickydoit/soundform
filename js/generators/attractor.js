@@ -293,7 +293,10 @@ export function generate(fp, params, onProgress) {
   // Capture keeps the harmony rules; live routes on register × delivery. Both
   // mappings are fixed and continuous, so they stay stable and learnable — the
   // variety comes from the axes, never from system roulette.
-  const name = arch ? pickSystemLive(fp) : pickSystem(fp);
+  // Live locks the system for a whole session (params.lockedSystem) so the
+  // design is modulated rather than swapped. Capture ignores it entirely —
+  // recorded output is pinned by snapshot checksums.
+  const name = arch ? (params.lockedSystem ?? pickSystemLive(fp)) : pickSystem(fp);
   const sys = SYSTEMS[name];
   const rnd = mulberry32(fp.seed);
   const jitter = fp.velocity * 0.012 * (0.5 + params.complexity) * (arch ? 1 + arch.wildness : 1);

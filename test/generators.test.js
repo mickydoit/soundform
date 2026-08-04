@@ -639,6 +639,33 @@ test('attractor live: speech spreads across the system space', () => {
     `speakers on different systems still look alike (worst pair ${pair} overlap ${worst.toFixed(3)})`);
 });
 
+test('attractor live: params.lockedSystem overrides routing', () => {
+  const p = { ...baseParams, density: 30000, liveVariance: true };
+  // A fingerprint that routes somewhere specific on its own...
+  const fp = speechFingerprint(SPEAKERS['male calm']);
+  const natural = pickSystemLive(fp);
+  const other = natural === 'aizawa' ? 'lorenz' : 'aizawa';
+
+  // ...must produce the locked system's geometry when locked to something else.
+  const lockedOut = generate(fp, { ...p, lockedSystem: other });
+  const nativeOther = generate(fp, { ...p, lockedSystem: other });
+  assert.deepEqual([...lockedOut.positions.slice(0, 60)], [...nativeOther.positions.slice(0, 60)],
+    'locking must be deterministic');
+
+  const unlocked = generate(fp, p);
+  let same = true;
+  for (let i = 0; i < 60; i++) if (unlocked.positions[i] !== lockedOut.positions[i]) { same = false; break; }
+  assert.ok(!same, 'lockedSystem had no effect');
+});
+
+test('attractor: lockedSystem does not affect the capture path', () => {
+  const fp = testFingerprint();
+  const a = generate(fp, { ...baseParams, density: 30000 });
+  const b = generate(fp, { ...baseParams, density: 30000, lockedSystem: 'lorenz' });
+  assert.deepEqual([...a.positions.slice(0, 300)], [...b.positions.slice(0, 300)],
+    'capture output must ignore lockedSystem');
+});
+
 test('attractor live: flow systems respond to timbre, not just pitch', () => {
   // Isolates the exact defect: liveAxes was computed on line 163 and then never
   // read by the sys.flow branch, so the ONLY sound→shape channel for a flow
