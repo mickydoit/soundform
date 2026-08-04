@@ -222,6 +222,15 @@ function applyRenderParams() {
 
 // 10 Hz, not 60: writing slider values every frame thrashes layout for a
 // change no one can perceive at that rate.
+//
+// Deliberately does NOT call applyRenderParams(): live.js's tick() already
+// calls renderer.setParams with the kick/grain/rotation modulation layered
+// on top of these base values every single frame, unconditionally. Calling
+// applyRenderParams() here would push the flat, unmodulated values straight
+// to the renderer and stomp that modulation (including for exposure/grain/
+// autoRotate, which this feature never owns) until the next tick overwrote
+// it again — a periodic snap-to-flat stutter. Writing params[key] is enough;
+// the next tick reads it fresh via getParams().
 function paintAutoSliders(vals, nowMs) {
   if (nowMs - lastAutoPaint < 100) return;
   lastAutoPaint = nowMs;
@@ -234,7 +243,6 @@ function paintAutoSliders(vals, nowMs) {
     const valEl = document.getElementById(id.replace('sl-', 'val-'));
     if (valEl) valEl.textContent = (+vals[key]).toFixed(2);
   }
-  applyRenderParams();
 }
 
 // ── Audio flow (same UX as before) ────────────────────────────────
