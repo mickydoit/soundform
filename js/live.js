@@ -187,6 +187,7 @@ export class LiveConductor {
       this.renderer.beginPaint(max);
       this.shownFp = fp;
       if (p.mode === 'attractor') {
+        this._lockSystem(fp);           // record the choice createOrbitBrush makes independently
         st.brush = createOrbitBrush(fp, { complexity: p.complexity });
       } else {
         this._requestReveal(fp, p, max, 0);

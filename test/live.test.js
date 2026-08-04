@@ -472,3 +472,20 @@ test('conductor releases the lock on clear / growth-mode switch', () => {
   conductor.setGrowthMode('paint');
   assert.equal(conductor.lockedSystem, null, 'switching mode must release the lock');
 });
+
+// Paint mode with the default mode: 'attractor' never calls conductor.generate
+// at all — createOrbitBrush picks its own system independently. The lock must
+// still be recorded (Task 6 depends on it existing), and it must agree with
+// the brush's own choice since both are derived from the same fingerprint.
+test('conductor locks the system in attractor-mode paint, matching the brush', async () => {
+  const frame = { current: mkFrame() };
+  const { conductor } = harness({ frame });
+  conductor.setGrowthMode('paint');
+  for (let i = 0; i < 90; i++) conductor.tick(i / 30); // enough sound to begin the brush
+  await settle();
+  assert.ok(conductor.paint.brush, 'brush should have been created');
+  assert.ok(typeof conductor.lockedSystem === 'string' && conductor.lockedSystem.length > 0,
+    'lockedSystem must be recorded, not left null');
+  assert.equal(conductor.lockedSystem, conductor.paint.brush.system,
+    'recorded lock must match the system the brush actually chose');
+});
