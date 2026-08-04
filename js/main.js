@@ -47,6 +47,12 @@ const params = {
   traceSmooth: 'medium',
 };
 
+// Sliders the voice drives while live. Touching one hands it back to the user
+// for the rest of the session; the rest keep tracking. Clear resets all.
+const AUTO_SLIDERS = { complexity: 'sl-complexity', twist: 'sl-twist', scale: 'sl-scale' };
+const autoOwned = { complexity: true, twist: true, scale: true };
+let lastAutoPaint = 0;
+
 let statusEl, vuFill, vuWrap, clearBtn, submitBtn;
 
 window.addEventListener('DOMContentLoaded', () => {
@@ -214,6 +220,23 @@ function applyRenderParams() {
   });
 }
 
+// 10 Hz, not 60: writing slider values every frame thrashes layout for a
+// change no one can perceive at that rate.
+function paintAutoSliders(vals, nowMs) {
+  if (nowMs - lastAutoPaint < 100) return;
+  lastAutoPaint = nowMs;
+  for (const [key, id] of Object.entries(AUTO_SLIDERS)) {
+    if (!autoOwned[key]) continue;
+    const el = document.getElementById(id);
+    if (!el) continue;
+    params[key] = vals[key];
+    el.value = String(vals[key]);
+    const valEl = document.getElementById(id.replace('sl-', 'val-'));
+    if (valEl) valEl.textContent = (+vals[key]).toFixed(2);
+  }
+  applyRenderParams();
+}
+
 // ── Audio flow (same UX as before) ────────────────────────────────
 function bindAudio() {
   const btnMic = document.getElementById('btn-mic');
@@ -360,6 +383,7 @@ function bindAudio() {
 
   clearBtn.addEventListener('click', () => {
     stopLive();
+    for (const k of Object.keys(autoOwned)) autoOwned[k] = true;
     endTrace(); // abort any in-flight trace so it can't download the cleared design
     if (recorder) recorder.discard();
     hideVideoReady();
@@ -392,6 +416,8 @@ function enterLive() {
   conductor = makeConductor();
   conductor.setGrowthMode(params.growth);
   conductor.onGrowStatus = (msg) => setStatus(msg);
+  for (const k of Object.keys(autoOwned)) autoOwned[k] = true;
+  conductor.onAutoParams = (vals) => paintAutoSliders(vals, performance.now());
   conductor.start();
   setStatus('Live — listening');
 }
@@ -506,6 +532,7 @@ function bindControls() {
     const el = document.getElementById(id);
     const valEl = document.getElementById(id.replace('sl-', 'val-'));
     el.addEventListener('input', () => {
+      if (key in autoOwned) autoOwned[key] = false;   // manual takes over for the session
       params[key] = parse(el.value);
       if (valEl) valEl.textContent = el.value;
       if (!regen) applyRenderParams();
