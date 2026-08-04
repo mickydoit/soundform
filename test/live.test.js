@@ -65,13 +65,13 @@ const mkFrame = (o = {}) => ({
 });
 
 function harness({ frame = mkFrame(), genDelay = 0, generate = null, getParams = null } = {}) {
-  const log = { xfades: 0, waves: [], stops: [], paintBegun: 0, paintWrites: [], paintCounts: [], visibleFractions: [] };
+  const log = { xfades: 0, xfadeDurations: [], waves: [], stops: [], paintBegun: 0, paintWrites: [], paintCounts: [], visibleFractions: [] };
   const conductor = new LiveConductor({
     audio: { getMusicalFrame: () => frame.current ?? frame },
     renderer: {
       setWave: (a, f) => log.waves.push([a, f]),
       setParams: () => {}, setPlaying: () => {}, setLoopPeriod: () => {},
-      crossfadeTo: () => { log.xfades++; },
+      crossfadeTo: (positions, attr, dur) => { log.xfades++; log.xfadeDurations.push(dur); },
       setVisibleFraction: (v) => log.visibleFractions.push(v),
       beginPaint: (m) => { log.paintBegun = m; },
       writePaintPoints: (o, p) => { log.paintWrites.push([o, p.length / 3]); },
@@ -621,4 +621,42 @@ test('auto visibleFraction responds to loudness', async () => {
   for (let i = 120; i < 300; i++) { conductor.tick(i / 60); await settle(); }
   const loud = log.visibleFractions[log.visibleFractions.length - 1];
   assert.ok(loud > quiet, `visibleFraction did not rise with loudness (quiet=${quiet}, loud=${loud})`);
+});
+
+// crossfadeTo's duration must track the same gate as the modulation cadence
+// itself (`modulating`, i.e. locked AND attractor mode) — not raw
+// `lockedSystem`, which Task 5 sets for every mode regardless of whether that
+// mode consumes it. Using raw lockedSystem here would give cymatics/radial/
+// oscillo/harmonic morphs the fast 0.15s crossfade after their first design,
+// even though Critical 1 correctly kept their regeneration on the slow,
+// debounced cadence — a flash cut where a dissolve was intended.
+test('crossfade duration matches the modulation gate, not raw lockedSystem', async () => {
+  // Attractor mode: once modulating, crossfades use the fast modulation duration.
+  const attractorFrame = { current: mkFrame() };
+  const { conductor: ac, log: alog } = harness({ frame: attractorFrame });
+  for (let i = 0; i < 60 * 3; i++) { ac.tick(i / 60); await settle(); }
+  assert.ok(alog.xfadeDurations.length >= 2, 'expected several attractor crossfades');
+  assert.ok(alog.xfadeDurations.slice(1).every((d) => d === MODULATE_CROSSFADE_SEC),
+    `attractor crossfades after the first must use MODULATE_CROSSFADE_SEC, got ${alog.xfadeDurations.slice(1)}`);
+
+  // Cymatics mode: lockedSystem is still recorded (Task 5), but the mode does
+  // not consume it — every morph, including ones AFTER lockedSystem is set,
+  // must keep the slower MORPH_CROSSFADE_SEC dissolve.
+  const cymFrame = { current: mkFrame() };
+  const { conductor: cc, log: clog } = harness({
+    frame: cymFrame,
+    getParams: () => ({ mode: 'cymatics', complexity: 0.5, symmetry: 1, twist: 0,
+                        cymStyle: 'auto', liveDensity: 1000, exposure: 30, scale: 1, grain: 1 }),
+  });
+  for (let i = 0; i < 70; i++) cc.tick(i / 30);   // first morph — sets lockedSystem
+  await settle();
+  assert.equal(clog.xfades, 1);
+  assert.ok(cc.lockedSystem, 'lock is recorded even though cymatics does not consume it');
+  const c2 = new Float32Array(12); c2[2] = 1; c2[6] = 0.85; c2[9] = 0.9; // different chord
+  cymFrame.current = mkFrame({ pitchHz: 880, chroma: c2 });
+  for (let i = 70; i < 220; i++) cc.tick(i / 30);  // 5 more seconds, real sound change
+  await settle();
+  assert.ok(clog.xfades >= 2, 'expected a second cymatics morph after lockedSystem was set');
+  assert.ok(clog.xfadeDurations.slice(1).every((d) => d === MORPH_CROSSFADE_SEC),
+    `cymatics morphs after lockedSystem is set must use MORPH_CROSSFADE_SEC, got ${clog.xfadeDurations.slice(1)}`);
 });

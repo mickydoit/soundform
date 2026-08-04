@@ -391,7 +391,7 @@ export class LiveConductor {
         this.lastMorph = this._lastNow;
         this.shownFp = fp;
         this.renderer.crossfadeTo(out.positions, out.attr,
-          this.lockedSystem ? MODULATE_CROSSFADE_SEC : MORPH_CROSSFADE_SEC);
+          modulating ? MODULATE_CROSSFADE_SEC : MORPH_CROSSFADE_SEC);
       })
       .catch(() => { this.inFlight = false; this.lastMorph = this._lastNow; });
   }
