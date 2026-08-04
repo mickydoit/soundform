@@ -268,7 +268,7 @@ export class DensityRenderer {
   setVisibleFraction(frac) {
     if (!this.points || this._paintPos) return;   // paint mode owns its own range
     const total = this.points.geometry.getAttribute('position').count;
-    const n = Math.max(1, Math.min(total, Math.round(total * Math.max(0, Math.min(1, frac)))));
+    const n = Math.min(total, Math.max(1, Math.round(total * Math.max(0, Math.min(1, frac)))));
     this.points.geometry.setDrawRange(0, n);
     const [w, h] = this._size();
     this.toneMat.uniforms.uPeak.value = Math.max(8, (n / (w * h)) * 550);
@@ -410,6 +410,7 @@ export class DensityRenderer {
   crossfadeTo(positions, attr, dur = 1.0) {
     if (!this.points || this.fallback) { this.setCloud(positions, attr); return; }
     this._disposeFading();                       // a still-running fade completes instantly
+    this._paintPos = null; this._paintAttr = null;  // a crossfaded cloud is not a paint buffer
     this._fading = { points: this.points, mat: this.points.material, t: 0, dur };
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
