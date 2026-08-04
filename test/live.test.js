@@ -55,7 +55,7 @@ test('fingerprintDelta crosses the morph threshold on a real change', () => {
   assert.ok(fingerprintDelta(a, near) < MORPH_THRESHOLD);
 });
 
-import { LiveConductor, LIVE_MIN_FRAMES, clipStrandsToCount, sliceSegments } from '../js/live.js';
+import { LiveConductor, LIVE_MIN_FRAMES, clipStrandsToCount, sliceSegments, PAINT_SPLICE_CHUNK } from '../js/live.js';
 
 const mkFrame = (o = {}) => ({
   pitchHz: 220, pitchConf: 0.9, rms: 0.15, flux: 0.002,
@@ -403,6 +403,55 @@ test('paint (non-attractor): reveal requests a full design then advances', async
   assert.ok(log.paintWrites.some(([o]) => o === 0), 'design written at offset 0');
   assert.ok(log.paintCounts[log.paintCounts.length - 1] > 500, 'reveal advanced');
   assert.equal(log.xfades, 0);
+});
+
+test('paint splice never overwrites points already on screen', async () => {
+  // _requestReveal captured spliceFrom at REQUEST time, but generation is
+  // async and st.count keeps advancing - so completion wrote over up to ~2000
+  // points the user could already see. That is the visible "jump".
+  const violations = [];
+  let visible = 0;
+  const frame = { current: mkFrame({ rms: 0.3 }) };
+  let resolveGen = null;
+  const { conductor } = harness({
+    frame,
+    generate: () => new Promise((res) => { resolveGen = () => res({
+      positions: new Float32Array(60000 * 3), attr: new Float32Array(60000), strands: [] }); }),
+    getParams: () => ({ mode: 'cymatics', cymStyle: 'auto', complexity: 0.5, symmetry: 1, twist: 0,
+                        liveDensity: 1000, exposure: 30, scale: 1, grain: 1, paintMaxPoints: 60000 }),
+  });
+  conductor.setGrowthMode('paint');
+  conductor.paintMax = 60000;
+  const r = conductor.renderer;
+  r.setPaintCount = (n) => { visible = n; };
+  r.writePaintPoints = (offset, pos) => {
+    if (offset < visible) violations.push({ offset, visible, n: pos.length / 3 });
+  };
+  for (let i = 0; i < 60 * 8; i++) {
+    conductor.tick(i / 60);
+    if (i === 120 && resolveGen) { resolveGen(); resolveGen = null; }
+    await settle();
+  }
+  assert.equal(violations.length, 0,
+    `splice overwrote visible points: ${JSON.stringify(violations[0])}`);
+});
+
+test('paint splice writes in bounded chunks', async () => {
+  const sizes = [];
+  const frame = { current: mkFrame({ rms: 0.3 }) };
+  const { conductor } = harness({
+    frame,
+    generate: async () => ({ positions: new Float32Array(600000 * 3), attr: new Float32Array(600000), strands: [] }),
+    getParams: () => ({ mode: 'cymatics', cymStyle: 'auto', complexity: 0.5, symmetry: 1, twist: 0,
+                        liveDensity: 1000, exposure: 30, scale: 1, grain: 1, paintMaxPoints: 600000 }),
+  });
+  conductor.setGrowthMode('paint');
+  conductor.paintMax = 600000;
+  conductor.renderer.writePaintPoints = (o, pos) => sizes.push(pos.length / 3);
+  for (let i = 0; i < 60 * 6; i++) { conductor.tick(i / 60); await settle(); }
+  const biggest = Math.max(0, ...sizes);
+  assert.ok(biggest <= PAINT_SPLICE_CHUNK,
+    `single write of ${biggest} points (~${(biggest * 16 / 1e6).toFixed(1)} MB) will hitch the frame`);
 });
 
 test('paint: geometry sliders steer the painting, never wipe it', async () => {

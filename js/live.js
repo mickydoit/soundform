@@ -33,6 +33,11 @@ export const MORPH_CROSSFADE_SEC = 0.45;
 export const MODULATE_INTERVAL = 0.25;
 export const MODULATE_CROSSFADE_SEC = 0.15;
 
+// A reveal splice replaces the whole unpainted remainder — up to 600k points,
+// which is 7.2 MB of positions plus 2.4 MB of attributes uploaded in a single
+// frame. That is a guaranteed hitch. Write it across frames instead.
+export const PAINT_SPLICE_CHUNK = 40_000;
+
 // The window stays 4s — that context is what keeps a design stable — but the
 // fingerprint is no longer a flat mean of it. A flat mean makes new audio reach
 // full weight only after 4 full seconds, which was the largest single term in
@@ -180,7 +185,7 @@ export class LiveConductor {
     this.lockedSystem = null;         // a fresh canvas re-picks the form
     this.paint = mode === 'paint'
       ? { pace: new BrushPace(), brush: null, count: 0, revealTotal: 0, strands: [], segments: [0],
-          pendingGen: false, retried: false, done: false, begun: false }
+          pendingGen: false, retried: false, done: false, begun: false, pending: null }
       : null;
   }
 
@@ -188,6 +193,20 @@ export class LiveConductor {
     const p = this.getParams();
     const max = this.paintMax ?? p.paintMaxPoints ?? PAINT_MAX_POINTS;
     const st = this.paint;
+
+    // Drain a queued splice a chunk at a time so no single frame uploads
+    // megabytes. Always stays ahead of the reveal: `next` only ever moves
+    // forward, and the reveal cannot pass it because it is capped by revealTotal.
+    if (st.pending) {
+      const q = st.pending;
+      const end = Math.min(q.total, q.next + PAINT_SPLICE_CHUNK);
+      if (end > q.next) {
+        this.renderer.writePaintPoints(q.next,
+          q.positions.subarray(q.next * 3, end * 3), q.attr.subarray(q.next, end));
+        q.next = end;
+      }
+      if (q.next >= q.total) st.pending = null;
+    }
 
     // Start the canvas once we have enough sound to fingerprint.
     if (!st.begun) {
@@ -239,7 +258,15 @@ export class LiveConductor {
     const meanRms = this.frames.reduce((a, x) => a + x.f.rms, 0) / this.frames.length;
     if (meanRms < SILENCE_RMS) return;
     const fp = this.windowFingerprint();
-    if (!st.forceSteer && fingerprintDelta(fp, this.shownFp) < MORPH_THRESHOLD) return;
+    // Same debounce as the morph path. Without it Paint fired on a single
+    // threshold crossing, and after the check interval dropped 0.75s -> 0.15s
+    // that meant 15 design splices per 30s of one person talking.
+    if (!st.forceSteer) {
+      if (fingerprintDelta(fp, this.shownFp) < MORPH_THRESHOLD) { st.overChecks = 0; return; }
+      st.overChecks = (st.overChecks || 0) + 1;
+      if (st.overChecks < MORPH_CONFIRM_CHECKS) return;
+    }
+    st.overChecks = 0;
     st.forceSteer = false;
     this.lastMorph = nowSec;
     this.shownFp = fp;
@@ -271,11 +298,13 @@ export class LiveConductor {
         }
         st.retried = false;
         const total = out.attr.length;
-        const from = Math.min(spliceFrom, total);
-        this.renderer.writePaintPoints(from,
-          out.positions.subarray(from * 3), out.attr.subarray(from));
+        // Recompute from the CURRENT count, not the one captured when this
+        // generation was requested — the brush kept moving while the worker ran,
+        // and writing from the stale offset repaints points already on screen.
+        const from = Math.min(Math.max(spliceFrom, st.count), total);
         st.revealTotal = total;
         st.strands = out.strands;
+        st.pending = { positions: out.positions, attr: out.attr, next: from, total };
       })
       .catch(() => { st.pendingGen = false; });
   }
