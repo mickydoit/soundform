@@ -8,15 +8,50 @@ const SYSTEMS = {
   thomas: {
     dt: 0.06, flow: true,
     coeffs: fp => ({ b: lerp(0.10, 0.165, 1 - fp.pitchMedian) }),
-    step: (p, c) => [Math.sin(p[1]) - c.b * p[0], Math.sin(p[2]) - c.b * p[1], Math.sin(p[0]) - c.b * p[2]],
+    // bx/by/bz are live-only. They are undefined on the capture path, where all
+    // three fall back to the single symmetric b — byte-identical to before.
+    step: (p, c) => [
+      Math.sin(p[1]) - (c.bx ?? c.b) * p[0],
+      Math.sin(p[2]) - (c.by ?? c.b) * p[1],
+      Math.sin(p[0]) - (c.bz ?? c.b) * p[2]],
+    // Thomas has a single damping term, so pitch alone barely moves it. Equal
+    // damping on all three axes is the *symmetric special case*; mild per-axis
+    // asymmetry re-lobes the knot. Asymmetry stays gentle because thomas already
+    // sits close to the occupancy check's 400-cell floor, and a strong split
+    // tips it into a limit cycle (b also stays under the b ≈ 0.208 boundary).
+    liveCoeffs: (c, ax) => {
+      const b = lerp(0.168, 0.098, ax[4]);
+      c.b = b;
+      c.bx = b * lerp(0.93, 1.07, ax[1]);
+      c.by = b * lerp(0.93, 1.07, ax[2]);
+      c.bz = b * lerp(0.93, 1.07, ax[3]);
+    },
+    liveTarget: safe => ({ ...safe, bx: safe.b, by: safe.b, bz: safe.b }),
   },
   halvorsen: {
     dt: 0.012, flow: true,
     coeffs: fp => ({ a: lerp(1.4, 2.2, fp.pitchMedian) }),
-    step: (p, c) => [
-      -c.a * p[0] - 4 * p[1] - 4 * p[2] - p[1] * p[1],
-      -c.a * p[1] - 4 * p[2] - 4 * p[0] - p[2] * p[2],
-      -c.a * p[2] - 4 * p[0] - 4 * p[1] - p[0] * p[0]],
+    // kx/ky/kz are the cross-coupling, a symmetric 4 on the capture path.
+    step: (p, c) => {
+      const kx = c.kx ?? 4, ky = c.ky ?? 4, kz = c.kz ?? 4;
+      return [
+        -c.a * p[0] - kx * p[1] - kx * p[2] - p[1] * p[1],
+        -c.a * p[1] - ky * p[2] - ky * p[0] - p[2] * p[2],
+        -c.a * p[2] - kz * p[0] - kz * p[1] - p[0] * p[0]];
+    },
+    // Halvorsen is the most fragile of the four — a polynomial system that
+    // diverges under Euler outside a tight band, so `a` hugs the classic 1.4.
+    // `a` alone is nearly useless as a live knob anyway: it mostly changes the
+    // attractor's SIZE, and finalize() pins r95 = 1, normalising that away.
+    // The visible knob is breaking the three-fold cyclic symmetry.
+    liveCoeffs: (c, ax) => {
+      c.a = lerp(1.36, 1.92, ax[4]);
+      const k = lerp(3.88, 4.12, ax[1]);
+      c.kx = k * lerp(0.96, 1.04, ax[1]);
+      c.ky = k * lerp(0.96, 1.04, ax[2]);
+      c.kz = k * lerp(0.96, 1.04, ax[3]);
+    },
+    liveTarget: safe => ({ ...safe, kx: 4, ky: 4, kz: 4 }),
   },
   aizawa: {
     dt: 0.015, flow: true,
@@ -25,6 +60,18 @@ const SYSTEMS = {
       (p[2] - c.b) * p[0] - c.d * p[1],
       c.d * p[0] + (p[2] - c.b) * p[1],
       c.c + c.a * p[2] - (p[2] ** 3) / 3 - (p[0] ** 2 + p[1] ** 2) * (1 + c.e * p[2]) + c.f * p[2] * p[0] ** 3],
+    // a/b/c/f were fixed constants, so only two of six coefficients ever heard
+    // the sound. All six move now, over modest ranges around the classic
+    // (0.95, 0.7, 0.6, 3.5, 0.25, 0.1); f stays tight because it scales an
+    // x³ term that diverges quickly.
+    liveCoeffs: (c, ax) => {
+      c.d = lerp(3.00, 3.95, ax[4]);
+      c.b = lerp(0.60, 0.80, ax[0]);
+      c.e = lerp(0.19, 0.31, ax[1]);
+      c.a = lerp(0.88, 1.00, ax[2]);   // a > 1 grows the z term until it diverges
+      c.c = lerp(0.50, 0.70, ax[3]);
+      c.f = lerp(0.07, 0.12, ax[2]);
+    },
   },
   // Lorenz butterfly — replaces Dadras, which was unstable under plain Euler
   // (diverged or fell into limit cycles across most of its coefficient range).
@@ -36,6 +83,11 @@ const SYSTEMS = {
       c.s * (p[1] - p[0]),
       p[0] * (c.r - p[2]) - p[1],
       p[0] * p[1] - c.b * p[2]],
+    liveCoeffs: (c, ax) => {
+      c.r = lerp(28.0, 46.0, ax[4]);
+      c.s = lerp(8.5, 12.5, ax[2]);
+      c.b = lerp(2.35, 3.25, ax[1]);
+    },
   },
   sinemap: {
     flow: false, // discrete map, like the reference sine-map images
@@ -69,11 +121,88 @@ function liveAxes(fp) {
   ];
 }
 
+// Real sound occupies only a narrow band of each axis. Measured across seven
+// speech profiles run through buildFingerprint, brightness spans 0.12–0.36 and
+// roughness 0.34–0.51 of the nominal 0–1 — speech F0 covers barely a quarter of
+// the 6-octave pitch scale, and a 4s window averages the rest toward the middle.
+// Driving coefficients straight off those leaves each system's validated range
+// almost unexplored, which is why every speaker collapsed onto one design.
+//
+// `expandAxes` re-centres each axis on its real-world midpoint and stretches it
+// through a tanh. The middle spreads out, the tails saturate smoothly instead of
+// clamping flat (so a whistle or a clap still reaches the extremes), and the
+// mapping stays monotonic and seed-free — a small drift is still a small move,
+// which is what keeps a steady sound on a stable design.
+const AXIS_CENTRE = [0.26, 0.40, 0.32, 0.48];
+const AXIS_GAIN = 3.4;
+
+// Pitch gets a fifth axis of its own, with a steeper gain. It is the most
+// audible difference between two voices, but liveAxes only ever sees it blended
+// 60/40 with centroid into `brightness` — which puts a male and a female
+// speaker just 0.09 apart there, so the single most obvious thing about a voice
+// was the thing most averaged away. Speech F0 occupies roughly 0.13–0.40 of the
+// 6-octave scale, hence the low centre and the hard stretch.
+const PITCH_CENTRE = 0.26, PITCH_GAIN = 4;
+
+// The pitch axis is HALF stretched, half raw. A pure tanh centred on the speech
+// band saturates everything above it — musical pitch 0.55 and 0.85 both map to
+// ~0.95, so a chord and a whistle become the same input. Averaging the stretch
+// with the raw value keeps the speech band expanded while the upper register
+// still spreads monotonically across its own range.
+function pitchAxis(fp) {
+  const stretched = 0.5 + 0.5 * Math.tanh(PITCH_GAIN * (fp.pitchMedian - PITCH_CENTRE));
+  return 0.5 * stretched + 0.5 * fp.pitchMedian;
+}
+
+// -> [brightness, roughness, energy, percussiveness, pitch], all expanded.
+function expandAxes(axes, fp) {
+  const out = axes.map((v, i) => 0.5 + 0.5 * Math.tanh(AXIS_GAIN * (v - AXIS_CENTRE[i])));
+  out.push(pitchAxis(fp));
+  return out;
+}
+
+// CAPTURE-PATH routing. Harmony picks the system for a recorded take, and this
+// must not change: test/snapshot.test.js pins recorded output by checksum.
 export function pickSystem(fp) {
   if (fp.pitchConfidence < 0.35 || fp.velocity > 0.75) return 'sinemap'; // percussive/noisy
   if (fp.consonance > 0.55 && fp.majorLeaning) return fp.noteCount <= 3 ? 'thomas' : 'aizawa';
   if (fp.consonance > 0.55) return 'halvorsen'; // minor
   return 'lorenz'; // dissonant
+}
+
+// LIVE routing. Harmony is the wrong selector for a live mic: chroma
+// triad-matching scores ordinary voiced speech as tonal (consonance 0.61–0.77
+// measured), so every speaker cleared the > 0.55 gate and landed on aizawa or
+// halvorsen — two designs, whatever anyone said. And system identity dominates
+// everything else: two designs from the same system overlap 0.60–0.88 by cell
+// occupancy, two from different systems only 0.10–0.39. No coefficient inside a
+// system's stable band escapes its silhouette (aizawa always reads as a sphere
+// with an axial spike), so variety has to come from the routing.
+//
+// Live therefore routes on two axes you can hear yourself crossing: vocal
+// REGISTER (expanded pitch) and DELIVERY (percussiveness — calm vs animated).
+// Roughness was the obvious second axis and is the wrong one: all seven speech
+// profiles measured 0.34–0.51 on it, clustered right on the boundary, which
+// separates poorly AND flips easily.
+//
+// This is NOT the v=34 fract-hash that got reverted. The boundaries are fixed
+// and the axes are continuous and seed-free, so one voice maps to one system
+// every time — no teleporting between designs on window drift.
+// Register is split three ways, not two. Two would put a mid chord and a high
+// whistle in the same cell — speech only spans the bottom of the pitch scale,
+// so a boundary placed to separate voices leaves everything musical above it
+// lumped together. LOW/MID covers the vocal range, HIGH catches whistles and
+// the top of the singing register.
+const REGISTER_LOW = 0.38, REGISTER_HIGH = 0.80;
+
+export function pickSystemLive(fp) {
+  // Breathy, unvoiced or percussive input keeps the discrete sine-map web.
+  if (fp.pitchConfidence < 0.35 || fp.velocity > 0.75) return 'sinemap';
+  const ax = expandAxes(liveAxes(fp), fp);
+  const calm = ax[3] < 0.5;
+  if (ax[4] < REGISTER_LOW) return calm ? 'halvorsen' : 'lorenz';
+  if (ax[4] < REGISTER_HIGH) return calm ? 'aizawa' : 'thomas';
+  return calm ? 'thomas' : 'lorenz';   // six cells over four flow systems
 }
 
 function cloudStdDev(pos, n) {
@@ -161,10 +290,10 @@ function validateOccupancy(out) {
 export function generate(fp, params, onProgress) {
   const arch = params.liveVariance ? formArchetype(fp) : null;
   const axes = arch ? liveAxes(fp) : null;
-  // System from the character rules in both paths: the mapping stays stable
-  // and learnable (whistle = swirl, speech = web); live variety comes from
-  // the wide smooth coefficient axes below, not from system roulette.
-  const name = pickSystem(fp);
+  // Capture keeps the harmony rules; live routes on register × delivery. Both
+  // mappings are fixed and continuous, so they stay stable and learnable — the
+  // variety comes from the axes, never from system roulette.
+  const name = arch ? pickSystemLive(fp) : pickSystem(fp);
   const sys = SYSTEMS[name];
   const rnd = mulberry32(fp.seed);
   const jitter = fp.velocity * 0.012 * (0.5 + params.complexity) * (arch ? 1 + arch.wildness : 1);
@@ -176,11 +305,30 @@ export function generate(fp, params, onProgress) {
   for (let attempt = 0; attempt < 8; attempt++) {
     const fpAdj = attempt === 0 ? fp : { ...fp, pitchMedian: (fp.pitchMedian + attempt * 0.618) % 1, contour: fp.contour.map(v => (v + attempt * 0.618) % 1) };
     const c = sys.coeffs(fpAdj, rnd);
-    if (sys.flow) {
-      // Flow systems already map pitch across their full validated coefficient
-      // range in coeffs(fp) — that IS the sound→shape correspondence. Live
-      // keeps the identical excursion; widening it just strays into the
-      // systems' periodic/collapsed margins (occupancy rejects → fallback).
+    if (sys.flow && arch) {
+      // Live: drive the system's OWN coefficients from the expanded character
+      // axes. This branch previously applied only the excursion multiplier
+      // below — which reads params.complexity, not the sound — so `axes` was
+      // computed and thrown away, and the sole sound→shape channel was whatever
+      // coeffs(fp) happened to read (pitchMedian, plus centroid for aizawa).
+      const safe = (sys.liveTarget ?? (s => s))({ ...c });
+      sys.liveCoeffs(c, expandAxes(axes, fp));
+      // Graceful retry: pull the live coefficients back toward the validated
+      // capture-path set rather than jittering them, so a rejected design
+      // degrades toward a known-good shape instead of rolling the dice again.
+      // Attempt 0 leaves the axis mapping exactly as chosen.
+      if (attempt) {
+        const t = attempt / 8;
+        for (const key of Object.keys(c)) {
+          if (typeof c[key] === 'number' && typeof safe[key] === 'number') {
+            c[key] = lerp(c[key], safe[key], t);
+          }
+        }
+      }
+    } else if (sys.flow) {
+      // Capture path, unchanged: flow systems map pitch across their full
+      // validated coefficient range in coeffs(fp), and that IS the sound→shape
+      // correspondence for a recorded take.
       for (const key of Object.keys(c)) {
         if (typeof c[key] === 'number' && key !== 'e') {
           c[key] = c[key] * lerp(0.92, 1.08, ((excursion * 7 + attempt) % 1));
@@ -272,7 +420,10 @@ export function generate(fp, params, onProgress) {
 // glide toward each steer() target so the ribbons bend rather than jump,
 // and a stagnation guard jolts the orbit out of collapsed loops.
 export function createOrbitBrush(fp, params = {}) {
-  const name = pickSystem(fp);
+  // Paint is a live mode, so it takes the live routing. The system is fixed for
+  // the whole painting — steer() bends the coefficients within it, and swapping
+  // systems mid-stroke would break the canvas rather than bend it.
+  const name = pickSystemLive(fp);
   const sys = SYSTEMS[name];
   const rnd = mulberry32(fp.seed);
   const complexity = params.complexity ?? 0.5;
@@ -281,12 +432,10 @@ export function createOrbitBrush(fp, params = {}) {
     const c = sys.coeffs(f, rnd);
     const axes = liveAxes(f);
     if (sys.flow) {
-      const excursion = 0.5 + complexity;
-      for (const key of Object.keys(c)) {
-        if (typeof c[key] === 'number' && key !== 'e') {
-          c[key] = c[key] * lerp(0.92, 1.08, (excursion * 7) % 1);
-        }
-      }
+      // Same dead-axes defect as the batch path: this used to apply only a
+      // complexity-derived multiplier, so steering a flow-system brush with a
+      // new fingerprint barely moved it.
+      sys.liveCoeffs(c, expandAxes(axes, f));
     } else {
       const arch = formArchetype(f);
       c.a = lerp(1.2, 4.2, 0.5 * f.contour[1] + 0.5 * axes[0]);

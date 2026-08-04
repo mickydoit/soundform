@@ -1,11 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { generate, registeredModes } from '../js/generators/index.js';
-import { pickSystem } from '../js/generators/attractor.js';
+import { pickSystem, pickSystemLive } from '../js/generators/attractor.js';
 import { sphericalY, makeValueNoise3, recipe } from '../js/generators/harmonic.js';
 import { mulberry32 } from '../js/generators/common.js';
 import { padStrands } from '../js/generators/radial.js';
 import { toneRuns } from '../js/generators/cymatics.js';
+import { buildFingerprint, buildTrajectory } from '../js/features.js';
 
 export function testFingerprint(overrides = {}) {
   const chroma = new Float32Array(12); chroma[0] = 1; chroma[4] = 0.8; chroma[7] = 0.7;
@@ -19,6 +20,9 @@ export function testFingerprint(overrides = {}) {
 }
 
 export const baseParams = { mode: 'attractor', density: 30000, complexity: 0.5, symmetry: 1, twist: 0, strandCount: 96 };
+
+// The four continuous-flow systems; sinemap is the discrete map.
+const SYSTEM_IS_FLOW = new Set(['thomas', 'halvorsen', 'aizawa', 'lorenz']);
 
 function stats(positions) {
   const n = positions.length / 3;
@@ -539,6 +543,125 @@ test('attractor live: five distinct sound characters produce five distinct shape
         `characters ${i} and ${j} produced near-identical attractors`);
     }
   }
+});
+
+// REAL speech, not a hand-written fixture. The fixtures above label
+// `pitchConfidence: 0.3, consonance: 0.3` as "speech", but a genuine 4s window
+// of talking measures pitchConfidence 0.45–0.57 and consonance 0.61–0.77 — it
+// clears both pickSystem gates and lands on aizawa/halvorsen, NOT the sinemap
+// "web" the comments assume. That mismatch is why every speaker collapsed onto
+// the same two designs in the live app while these tests stayed green.
+// Frames go through the real buildFingerprint so the compression of the pitch
+// axis (speech F0 occupies only ~0.13–0.40 of the 6-octave scale) is preserved.
+export function speechFingerprint({ f0, jitter, voicedFrac, rate, loud, bright, seed }) {
+  const FPS = 60, WIN = 4;
+  let s = seed;
+  const rnd = () => (s = (s * 1664525 + 1013904223) >>> 0) / 2 ** 32;
+  const frames = [];
+  for (let i = 0; i < FPS * WIN; i++) {
+    const t = i / FPS;
+    const syl = 0.5 + 0.5 * Math.sin(2 * Math.PI * rate * t);   // syllable envelope
+    const voiced = syl > (1 - voicedFrac) && rnd() > 0.12;      // consonants/pauses
+    const hz = f0 * (1 + 0.25 * Math.sin(2 * Math.PI * 0.35 * t + seed)) * (1 + jitter * (rnd() - 0.5));
+    const chroma = new Float32Array(12);
+    for (let k = 0; k < 12; k++) chroma[k] = 0.25 * rnd();
+    chroma[((Math.round(12 * Math.log2(hz / 55)) % 12) + 12) % 12] = 1;
+    frames.push({
+      pitchHz: voiced ? hz : 0,
+      pitchConf: voiced ? 0.6 + 0.3 * rnd() : 0.1 * rnd(),
+      chroma, rms: loud * (0.25 + 0.75 * syl) * (voiced ? 1 : 0.35),
+      flux: 0.002 * syl * (voiced ? 1 : 2.2) * loud,
+      centroid: bright * (voiced ? 0.75 : 1.6) * (0.85 + 0.3 * rnd()),
+      spread: 0.35 + 0.3 * (voiced ? 0.2 : 0.9) + 0.1 * rnd(),
+    });
+  }
+  const fp = buildFingerprint(frames, WIN);
+  fp.trajectory = buildTrajectory(frames);
+  fp.trajectoryChannels = 4;
+  return fp;
+}
+
+export const SPEAKERS = {
+  'male calm':       { f0: 110, jitter: .05, voicedFrac: .55, rate: 3.5, loud: .10, bright: .10, seed: 1 },
+  'male animated':   { f0: 130, jitter: .12, voicedFrac: .65, rate: 5.0, loud: .18, bright: .14, seed: 2 },
+  'female calm':     { f0: 200, jitter: .05, voicedFrac: .58, rate: 3.8, loud: .11, bright: .16, seed: 3 },
+  'female animated': { f0: 240, jitter: .13, voicedFrac: .68, rate: 5.5, loud: .20, bright: .21, seed: 4 },
+  'child excited':   { f0: 300, jitter: .15, voicedFrac: .60, rate: 6.0, loud: .22, bright: .26, seed: 5 },
+  'deep slow drawl': { f0:  85, jitter: .04, voicedFrac: .70, rate: 2.2, loud: .13, bright: .08, seed: 7 },
+};
+
+test('attractor live: speech spreads across the system space', () => {
+  // The defect: every speaker cleared pickSystem's consonance > 0.55 gate and
+  // landed on aizawa or halvorsen — two designs no matter who spoke. Measured
+  // on these seven profiles: 3 systems total, and the aizawa speakers overlapped
+  // 0.88 by cell occupancy.
+  //
+  // The bar is deliberately NOT "every pair of speakers differs". Two calm low
+  // male voices SHOULD look alike — that is the locality guarantee pinned by
+  // 'steady sound keeps a stable design', and the same principle the
+  // five-characters test states. What must hold is that speech reaches a real
+  // spread of systems, that a change of register or delivery moves you to a
+  // different one, and that when two speakers DO land on different systems the
+  // designs are unmistakably different.
+  const fps = Object.fromEntries(
+    Object.entries(SPEAKERS).map(([n, cfg]) => [n, speechFingerprint(cfg)]));
+  const systems = new Set(Object.values(fps).map(pickSystemLive));
+  assert.ok(systems.size >= 4,
+    `speech collapsed onto ${systems.size} system(s): ${[...systems].sort().join(', ')}`);
+
+  assert.notEqual(pickSystemLive(fps['male calm']), pickSystemLive(fps['male animated']),
+    'delivery (calm vs animated) must change the system');
+  assert.notEqual(pickSystemLive(fps['male calm']), pickSystemLive(fps['female calm']),
+    'register (low vs high) must change the system');
+
+  const cellsOf = (fp) => {
+    const out = generate(fp, { ...baseParams, density: 30000, liveVariance: true });
+    const s = new Set(); const n = out.positions.length / 3;
+    for (let i = 0; i < n; i++) {
+      const q = (d) => Math.min(19, Math.max(0, Math.floor((out.positions[i * 3 + d] + 1.3) / 2.6 * 20)));
+      s.add((q(0) * 20 + q(1)) * 20 + q(2));
+    }
+    return s;
+  };
+  const names = Object.keys(SPEAKERS);
+  const sets = Object.fromEntries(names.map(n => [n, cellsOf(fps[n])]));
+  let worst = 0, pair = '';
+  for (let i = 0; i < names.length; i++) {
+    for (let j = i + 1; j < names.length; j++) {
+      const a = names[i], b = names[j];
+      if (pickSystemLive(fps[a]) === pickSystemLive(fps[b])) continue;  // same cell: similarity is intended
+      let inter = 0; for (const v of sets[a]) if (sets[b].has(v)) inter++;
+      const jac = inter / (sets[a].size + sets[b].size - inter);
+      if (jac > worst) { worst = jac; pair = `${a} vs ${b}`; }
+    }
+  }
+  assert.ok(worst < 0.5,
+    `speakers on different systems still look alike (worst pair ${pair} overlap ${worst.toFixed(3)})`);
+});
+
+test('attractor live: flow systems respond to timbre, not just pitch', () => {
+  // Isolates the exact defect: liveAxes was computed on line 163 and then never
+  // read by the sys.flow branch, so the ONLY sound→shape channel for a flow
+  // system was whatever sys.coeffs(fp) happened to read — pitchMedian, and for
+  // aizawa also centroid. Everything else about the sound was discarded.
+  //
+  // `spread` is the clean probe: it feeds liveAxes[1] (roughness) but touches
+  // nothing else on a flow path — wildness reads consonance/volVar/attackSlope,
+  // jitter reads velocity, and thomas's coefficient reads only pitchMedian.
+  // Before the fix these two fingerprints generate byte-identical clouds.
+  const smooth = testFingerprint({ spread: 0.10, seed: 4242 });
+  const rough = testFingerprint({ spread: 0.85, seed: 4242 });
+  // Live routing must agree, so this measures the coefficients and not the
+  // routing — spread feeds roughness, which live routing does NOT read.
+  assert.equal(pickSystemLive(smooth), pickSystemLive(rough), 'fixture must hold the system fixed');
+  assert.ok(SYSTEM_IS_FLOW.has(pickSystemLive(smooth)), 'fixture must exercise a flow system');
+
+  const p = { ...baseParams, density: 30000, liveVariance: true };
+  const a = generate(smooth, p).positions, b = generate(rough, p).positions;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) diff++;
+  assert.ok(diff / a.length > 0.5,
+    `timbre change left the flow attractor untouched (${((diff / a.length) * 100).toFixed(1)}% of coordinates moved)`);
 });
 
 test('attractor live: loudness drives size', () => {
