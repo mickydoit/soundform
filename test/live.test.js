@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Envelope, KickDetector, trimWindow, fingerprintDelta,
          MORPH_THRESHOLD, MORPH_CHECK_INTERVAL, MORPH_CROSSFADE_SEC,
+         MODULATE_CROSSFADE_SEC,
          recencyWeights } from '../js/live.js';
 
 test('Envelope rises fast (attack) and falls slow (release)', () => {
@@ -71,6 +72,7 @@ function harness({ frame = mkFrame(), genDelay = 0, generate = null, getParams =
       setWave: (a, f) => log.waves.push([a, f]),
       setParams: () => {}, setPlaying: () => {}, setLoopPeriod: () => {},
       crossfadeTo: () => { log.xfades++; },
+      setVisibleFraction: () => {},
       beginPaint: (m) => { log.paintBegun = m; },
       writePaintPoints: (o, p) => { log.paintWrites.push([o, p.length / 3]); },
       setPaintCount: (n) => { log.paintCounts.push(n); },
@@ -115,12 +117,15 @@ test('conductor reacts to a changed sound quickly', async () => {
     `geometry took ${dispatchedAt.toFixed(2)}s to start changing after the sound did`);
 });
 
-// The other half of the responsiveness trade. Checking 5x more often than
-// before gives 5x more chances to fire on a syllable-level blip, and the
-// jitteriest fingerprint channels (pitchMedian, note set) carry the heaviest
-// delta weights. Unchecked this hit 20 morphs / 30s — the hard ceiling set by
-// MORPH_MIN_INTERVAL, i.e. regenerating every time it was allowed to. A design
-// that churns is worse than one that lags.
+// Once a system is locked, continuous modulation means the design regenerates
+// on every fast tick rather than waiting for a debounced threshold — frequent
+// crossfading is now correct, it IS the deformation the voice drives. What
+// still must never happen is the *system* changing mid-session: that is the
+// difference between "the design breathes" and "the design got swapped out
+// from under the listener". So this test no longer caps crossfade count; it
+// asserts the invariant that actually matters — one speaker, talking
+// continuously, must see the locked attractor system stay exactly one value
+// for the whole session, no matter how much the geometry itself deforms.
 test('one speaker talking does not churn the design', async () => {
   let s = 12345;
   const rnd = () => (s = (s * 1664525 + 1013904223) >>> 0) / 2 ** 32;
@@ -138,7 +143,14 @@ test('one speaker talking does not churn the design', async () => {
              spread: 0.35 + 0.3 * (voiced ? 0.2 : 0.9) + 0.1 * rnd() };
   };
   const frame = { current: speech(0) };
-  const { conductor, log } = harness({ frame });
+  const seenSystems = [];
+  const { conductor } = harness({
+    frame,
+    generate: async (fp, p) => {
+      seenSystems.push(p.lockedSystem);
+      return { positions: new Float32Array(3), attr: new Float32Array(1), strands: [] };
+    },
+  });
   const FPS = 60, DUR = 15;
   for (let i = 0; i < FPS * DUR; i++) {
     const t = i / FPS;
@@ -146,9 +158,10 @@ test('one speaker talking does not churn the design', async () => {
     conductor.tick(t);
     await settle();
   }
-  // Ceiling is DUR / MORPH_MIN_INTERVAL = 10 morphs; pre-debounce this sat at it.
-  assert.ok(log.xfades <= 8,
-    `steady speech churned the design (${log.xfades} morphs in ${DUR}s, ceiling ${DUR / 1.5})`);
+  assert.ok(seenSystems.length > 0, 'expected at least one regeneration');
+  assert.equal(new Set(seenSystems).size, 1,
+    `system changed mid-session under one speaker: ${[...new Set(seenSystems)].join(', ')}`);
+  assert.equal(conductor.lockedSystem, seenSystems[0], 'conductor.lockedSystem must match what generate saw');
 });
 
 test('morph crossfade is short enough to feel responsive', () => {
@@ -488,4 +501,44 @@ test('conductor locks the system in attractor-mode paint, matching the brush', a
     'lockedSystem must be recorded, not left null');
   assert.equal(conductor.lockedSystem, conductor.paint.brush.system,
     'recorded lock must match the system the brush actually chose');
+});
+
+test('live modulation deforms continuously instead of swapping designs', async () => {
+  const gens = [];
+  const frame = { current: mkFrame() };
+  const { conductor, log } = harness({
+    frame,
+    generate: async (fp, p) => { gens.push({ complexity: p.complexity, twist: p.twist }); return { positions: new Float32Array(3), attr: new Float32Array(1), strands: [] }; },
+  });
+  for (let i = 0; i < 60 * 12; i++) {
+    const t = i / 60;
+    frame.current = mkFrame({ centroid: 0.2 + 0.5 * Math.min(1, t / 10), rms: 0.12 + 0.1 * Math.min(1, t / 10) });
+    conductor.tick(t);
+    await settle();
+  }
+  assert.ok(gens.length >= 6, `expected continuous regeneration, got ${gens.length}`);
+  // consecutive regenerations must differ only slightly - that is what makes it
+  // a deformation rather than a swap
+  for (let i = 1; i < gens.length; i++) {
+    const d = Math.abs(gens[i].complexity - gens[i - 1].complexity);
+    assert.ok(d < 0.2, `complexity jumped ${d.toFixed(3)} between consecutive generations`);
+  }
+  assert.ok(log.xfades >= 6, 'modulation must reach the renderer');
+});
+
+test('modulation crossfade is short enough to read as deformation', () => {
+  assert.ok(MODULATE_CROSSFADE_SEC <= 0.2,
+    `${MODULATE_CROSSFADE_SEC}s reads as a dissolve between designs, not a deformation`);
+});
+
+test('conductor reports auto parameters for the sliders', async () => {
+  const seen = [];
+  const { conductor } = harness();
+  conductor.onAutoParams = (v) => seen.push(v);
+  for (let i = 0; i < 120; i++) { conductor.tick(i / 60); await settle(); }
+  assert.ok(seen.length > 0, 'onAutoParams never fired');
+  const last = seen[seen.length - 1];
+  for (const k of ['complexity', 'twist', 'scale', 'visibleFraction']) {
+    assert.ok(typeof last[k] === 'number' && Number.isFinite(last[k]), `${k} missing from auto params`);
+  }
 });

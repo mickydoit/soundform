@@ -5,6 +5,7 @@ import { buildFingerprint, buildTrajectory } from './features.js?v=46';
 import { liveTarget, glideStops, stopsToHex } from './livecolor.js?v=46';
 import { BrushPace, PAINT_MAX_POINTS } from './paint.js?v=46';
 import { createOrbitBrush, pickSystemLive } from './generators/attractor.js?v=46';
+import { AutoParams, featuresFromFingerprint } from './autoparams.js?v=46';
 
 export const WINDOW_SEC = 4;
 export const MORPH_CHECK_INTERVAL = 0.15;
@@ -22,6 +23,15 @@ export const MORPH_THRESHOLD = 0.18;
 // stays, a blip does not.
 export const MORPH_CONFIRM_CHECKS = 2;
 export const MORPH_CROSSFADE_SEC = 0.45;
+
+// Continuous modulation of a LOCKED design, as distinct from morphing between
+// designs. Cadence is bounded by generation cost (~110ms for 250k points with
+// 8 strands), and the crossfade only has to hide point-identity shuffle: a
+// chaotic regeneration reshuffles which point is where even when the attractor
+// SET barely moves, and additive density rendering makes an identically
+// distributed cloud look identical, so a brief blend is enough.
+export const MODULATE_INTERVAL = 0.25;
+export const MODULATE_CROSSFADE_SEC = 0.15;
 
 // The window stays 4s — that context is what keeps a design stable — but the
 // fingerprint is no longer a flat mean of it. A flat mean makes new audio reach
@@ -139,6 +149,9 @@ export class LiveConductor {
     this.colour = null;               // glideStops state
     this.shownFp = null;              // fingerprint of the geometry on screen
     this.lockedSystem = null;         // attractor system, fixed for the session
+    this.auto = new AutoParams();     // voice-driven slider values
+    this.onAutoParams = null;         // (values) => void, for the UI sliders
+    this.lastModulate = -Infinity;
     this.lastCheck = 0;
     this.overChecks = 0;           // consecutive checks over MORPH_THRESHOLD
     this.lastMorph = -Infinity;
@@ -319,6 +332,13 @@ export class LiveConductor {
     this.colour = glideStops(this.colour, liveTarget(this.chromaSmooth, f.centroid), dt);
     this.applyStops(stopsToHex(this.colour));
 
+    // ── auto parameters: the voice moves the sliders ──
+    if (this.shownFp) {
+      const vals = this.auto.step(featuresFromFingerprint(this.shownFp, f.rms * 4), dt);
+      this.renderer.setVisibleFraction(vals.visibleFraction);
+      if (this.onAutoParams) this.onAutoParams(vals);
+    }
+
     // ── paint mode: the sound is the brush ──
     if (this.growthMode === 'paint') {
       this._paintTick(nowSec, f, kick, dt);
@@ -326,15 +346,24 @@ export class LiveConductor {
     }
 
     // ── structural layer: throttled fingerprint check → crossfade morph ──
-    const due = nowSec - this.lastCheck >= MORPH_CHECK_INTERVAL || this.forceNext;
-    const allowed = !this.inFlight && nowSec - this.lastMorph >= MORPH_MIN_INTERVAL
+    // Once a system is locked, the design is modulated on a fast fixed cadence
+    // rather than morphed on a delta threshold — there is no longer anything to
+    // switch TO, so waiting for a big change would just make it unresponsive.
+    const modulating = !!this.lockedSystem;
+    const interval = modulating ? MODULATE_INTERVAL : MORPH_CHECK_INTERVAL;
+    const minGap = modulating ? MODULATE_INTERVAL : MORPH_MIN_INTERVAL;
+    const due = nowSec - this.lastCheck >= interval || this.forceNext;
+    const allowed = !this.inFlight && nowSec - this.lastMorph >= minGap
                  && this.frames.length >= LIVE_MIN_FRAMES;
     if (!due || !allowed) return;
     this.lastCheck = nowSec;
     const meanRms = this.frames.reduce((a, x) => a + x.f.rms, 0) / this.frames.length;
     if (meanRms < SILENCE_RMS) return;               // the room is quiet — idle
     const fp = this.windowFingerprint();
-    if (!this.forceNext) {
+    // While modulating, every tick regenerates: the auto parameters have moved
+    // even when the fingerprint has not, and the whole point is a design that
+    // breathes with the voice rather than one that waits for a threshold.
+    if (!this.forceNext && !modulating) {
       // Debounce: the change has to still be there on the next check. A blip
       // resets the run; the very first morph of a session is exempt so the
       // opening design still appears immediately.
@@ -347,8 +376,9 @@ export class LiveConductor {
     this.inFlight = true;
     const morphGen = this.growGen;
     const p = this.getParams();
-    this.generate(fp, { mode: p.mode, density: p.liveDensity, complexity: p.complexity,
-                        symmetry: p.symmetry, twist: p.twist, strandCount: 8,
+    const a = this.auto.value;
+    this.generate(fp, { mode: p.mode, density: p.liveDensity, complexity: a.complexity,
+                        symmetry: p.symmetry, twist: a.twist, strandCount: 8,
                         cymStyle: p.cymStyle, liveVariance: true,
                         lockedSystem: this._lockSystem(fp) })
       .then((out) => {
@@ -356,7 +386,8 @@ export class LiveConductor {
         if (!this.running || !out || morphGen !== this.growGen) return;
         this.lastMorph = this._lastNow;
         this.shownFp = fp;
-        this.renderer.crossfadeTo(out.positions, out.attr, MORPH_CROSSFADE_SEC);
+        this.renderer.crossfadeTo(out.positions, out.attr,
+          this.lockedSystem ? MODULATE_CROSSFADE_SEC : MORPH_CROSSFADE_SEC);
       })
       .catch(() => { this.inFlight = false; });
   }
