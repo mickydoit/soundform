@@ -4,6 +4,23 @@ import { mulberry32, finalize, resamplePolyline, formArchetype } from './common.
 // coefficients inside pre-validated chaotic ranges; velocity adds turbulence.
 const lerp = (a, b, t) => a + (b - a) * t;
 
+// Complexity biases a coefficient toward the end of its range that reads as
+// more elaborate. cx = 0.5 is neutral (the axis-derived value, unchanged);
+// cx = 1 pushes fully toward `toward`; cx = 0 fully away. The push is capped
+// at 30% of the remaining distance (narrowed from an initial 60%: measurement
+// showed aizawa's `d` crosses a bifurcation boundary well before the 60% mark
+// — cell occupancy nearly doubles and the design jumps to a different-looking
+// regime rather than a modulated one — so coefficients never reach the
+// validated range's edge, where validateOccupancy starts rejecting and
+// generate() falls back to the capture path — a fallback discards live
+// variance entirely).
+const complexify = (v, lo, hi, cx, toward) => {
+  const t = Math.max(-1, Math.min(1, (cx - 0.5) * 2)) * 0.3;
+  const end = toward === 'hi' ? hi : lo;
+  const away = toward === 'hi' ? lo : hi;
+  return t >= 0 ? lerp(v, end, t) : lerp(v, away, -t);
+};
+
 const SYSTEMS = {
   thomas: {
     dt: 0.06, flow: true,
@@ -19,8 +36,8 @@ const SYSTEMS = {
     // asymmetry re-lobes the knot. Asymmetry stays gentle because thomas already
     // sits close to the occupancy check's 400-cell floor, and a strong split
     // tips it into a limit cycle (b also stays under the b ≈ 0.208 boundary).
-    liveCoeffs: (c, ax) => {
-      const b = lerp(0.168, 0.098, ax[4]);
+    liveCoeffs: (c, ax, cx = 0.5) => {
+      const b = complexify(lerp(0.168, 0.098, ax[4]), 0.168, 0.098, cx, 'hi');
       c.b = b;
       c.bx = b * lerp(0.93, 1.07, ax[1]);
       c.by = b * lerp(0.93, 1.07, ax[2]);
@@ -44,12 +61,13 @@ const SYSTEMS = {
     // `a` alone is nearly useless as a live knob anyway: it mostly changes the
     // attractor's SIZE, and finalize() pins r95 = 1, normalising that away.
     // The visible knob is breaking the three-fold cyclic symmetry.
-    liveCoeffs: (c, ax) => {
+    liveCoeffs: (c, ax, cx = 0.5) => {
       c.a = lerp(1.36, 1.92, ax[4]);
       const k = lerp(3.88, 4.12, ax[1]);
-      c.kx = k * lerp(0.96, 1.04, ax[1]);
-      c.ky = k * lerp(0.96, 1.04, ax[2]);
-      c.kz = k * lerp(0.96, 1.04, ax[3]);
+      const spread = 0.04 * (0.5 + cx);            // 0.02 .. 0.06
+      c.kx = k * (1 + spread * (ax[1] * 2 - 1));
+      c.ky = k * (1 + spread * (ax[2] * 2 - 1));
+      c.kz = k * (1 + spread * (ax[3] * 2 - 1));
     },
     liveTarget: safe => ({ ...safe, kx: 4, ky: 4, kz: 4 }),
   },
@@ -64,8 +82,8 @@ const SYSTEMS = {
     // the sound. All six move now, over modest ranges around the classic
     // (0.95, 0.7, 0.6, 3.5, 0.25, 0.1); f stays tight because it scales an
     // x³ term that diverges quickly.
-    liveCoeffs: (c, ax) => {
-      c.d = lerp(3.00, 3.95, ax[4]);
+    liveCoeffs: (c, ax, cx = 0.5) => {
+      c.d = complexify(lerp(3.00, 3.95, ax[4]), 3.00, 3.95, cx, 'hi');
       c.b = lerp(0.60, 0.80, ax[0]);
       c.e = lerp(0.19, 0.31, ax[1]);
       c.a = lerp(0.88, 1.00, ax[2]);   // a > 1 grows the z term until it diverges
@@ -83,8 +101,8 @@ const SYSTEMS = {
       c.s * (p[1] - p[0]),
       p[0] * (c.r - p[2]) - p[1],
       p[0] * p[1] - c.b * p[2]],
-    liveCoeffs: (c, ax) => {
-      c.r = lerp(28.0, 46.0, ax[4]);
+    liveCoeffs: (c, ax, cx = 0.5) => {
+      c.r = complexify(lerp(28.0, 46.0, ax[4]), 28.0, 46.0, cx, 'hi');
       c.s = lerp(8.5, 12.5, ax[2]);
       c.b = lerp(2.35, 3.25, ax[1]);
     },
@@ -321,7 +339,7 @@ export function generate(fp, params, onProgress) {
       // computed and thrown away, and the sole sound→shape channel was whatever
       // coeffs(fp) happened to read (pitchMedian, plus centroid for aizawa).
       const safe = (sys.liveTarget ?? (s => s))({ ...c });
-      sys.liveCoeffs(c, expandAxes(axes, fp));
+      sys.liveCoeffs(c, expandAxes(axes, fp), params.complexity ?? 0.5);
       // Graceful retry: pull the live coefficients back toward the validated
       // capture-path set rather than jittering them, so a rejected design
       // degrades toward a known-good shape instead of rolling the dice again.
@@ -444,7 +462,7 @@ export function createOrbitBrush(fp, params = {}) {
       // Same dead-axes defect as the batch path: this used to apply only a
       // complexity-derived multiplier, so steering a flow-system brush with a
       // new fingerprint barely moved it.
-      sys.liveCoeffs(c, expandAxes(axes, f));
+      sys.liveCoeffs(c, expandAxes(axes, f), complexity);
     } else {
       const arch = formArchetype(f);
       c.a = lerp(1.2, 4.2, 0.5 * f.contour[1] + 0.5 * axes[0]);

@@ -125,6 +125,35 @@ test('attractor: low-pitch thomas routing does not collapse to a limit cycle', (
   assert.ok(cells.size >= 400, `occupied cells ${cells.size} — looks like a limit cycle`);
 });
 
+test('attractor live: complexity changes the form', () => {
+  // Before this lever existed, the complexity slider moved a live flow
+  // attractor by 0.000-0.004 cell overlap — i.e. not at all.
+  const fp = speechFingerprint(SPEAKERS['male calm']);
+  const p = { ...baseParams, density: 30000, liveVariance: true, lockedSystem: 'aizawa' };
+  const cells = (cx) => {
+    const out = generate(fp, { ...p, complexity: cx });
+    const s = new Set();
+    for (let i = 0; i < out.positions.length / 3; i++) {
+      const q = (d) => Math.min(21, Math.max(0, Math.floor((out.positions[i * 3 + d] + 1.6) / 3.2 * 22)));
+      s.add((q(0) * 22 + q(1)) * 22 + q(2));
+    }
+    return s;
+  };
+  const lo = cells(0.15), hi = cells(1.0);
+  let inter = 0; for (const v of lo) if (hi.has(v)) inter++;
+  const jac = inter / (lo.size + hi.size - inter);
+  assert.ok(jac < 0.85, `complexity barely changed the form (overlap ${jac.toFixed(3)})`);
+  // but it must remain the SAME attractor, not a different one
+  assert.ok(jac > 0.15, `complexity changed the form beyond recognition (overlap ${jac.toFixed(3)})`);
+});
+
+test('attractor: complexity lever does not leak into capture', () => {
+  const fp = testFingerprint();
+  const a = generate(fp, { ...baseParams, density: 30000, complexity: 0.2 });
+  const b = generate(fp, { ...baseParams, density: 30000, complexity: 0.2 });
+  assert.deepEqual([...a.positions.slice(0, 300)], [...b.positions.slice(0, 300)]);
+});
+
 test('radial generator', () => {
   checkGenerator('radial');
 });
