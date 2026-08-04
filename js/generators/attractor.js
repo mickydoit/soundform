@@ -60,11 +60,17 @@ const SYSTEMS = {
     // diverges under Euler outside a tight band, so `a` hugs the classic 1.4.
     // `a` alone is nearly useless as a live knob anyway: it mostly changes the
     // attractor's SIZE, and finalize() pins r95 = 1, normalising that away.
-    // The visible knob is breaking the three-fold cyclic symmetry.
+    // The visible knob is breaking the three-fold cyclic symmetry — so this
+    // range has to carry ALL of halvorsen's complexity response. A 0.02..0.06
+    // range measured 0.79-0.945 Jaccard overlap across six speaker profiles
+    // (5/6 >= 0.85, "barely changed the form" by this project's own bar).
+    // Widened to 0.14..0.34: measured worst-case (of six profiles) 0.811,
+    // with no profile below 0.15 either — see complexify()'s comment for how
+    // this range was walked without tripping the fallback-rate gate.
     liveCoeffs: (c, ax, cx = 0.5) => {
       c.a = lerp(1.36, 1.92, ax[4]);
       const k = lerp(3.88, 4.12, ax[1]);
-      const spread = 0.04 * (0.5 + cx);            // 0.02 .. 0.06
+      const spread = 0.14 + 0.20 * cx;             // 0.14 .. 0.34
       c.kx = k * (1 + spread * (ax[1] * 2 - 1));
       c.ky = k * (1 + spread * (ax[2] * 2 - 1));
       c.kz = k * (1 + spread * (ax[3] * 2 - 1));

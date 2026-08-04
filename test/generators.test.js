@@ -125,11 +125,13 @@ test('attractor: low-pitch thomas routing does not collapse to a limit cycle', (
   assert.ok(cells.size >= 400, `occupied cells ${cells.size} — looks like a limit cycle`);
 });
 
-test('attractor live: complexity changes the form', () => {
-  // Before this lever existed, the complexity slider moved a live flow
-  // attractor by 0.000-0.004 cell overlap — i.e. not at all.
-  const fp = speechFingerprint(SPEAKERS['male calm']);
-  const p = { ...baseParams, density: 30000, liveVariance: true, lockedSystem: 'aizawa' };
+// Cell-occupancy Jaccard overlap between a low-complexity and a
+// high-complexity render of the SAME locked system/voice. Low overlap means
+// complexity visibly reshaped the design; overlap near 1 means the lever did
+// nothing (a no-op complexify()/spread formula reads this way, ~0.987-1.000
+// measured across systems — see the per-system tests below).
+function complexityJaccard(fp, system, params = {}) {
+  const p = { ...baseParams, density: 30000, liveVariance: true, lockedSystem: system, ...params };
   const cells = (cx) => {
     const out = generate(fp, { ...p, complexity: cx });
     const s = new Set();
@@ -141,16 +143,81 @@ test('attractor live: complexity changes the form', () => {
   };
   const lo = cells(0.15), hi = cells(1.0);
   let inter = 0; for (const v of lo) if (hi.has(v)) inter++;
-  const jac = inter / (lo.size + hi.size - inter);
-  assert.ok(jac < 0.85, `complexity barely changed the form (overlap ${jac.toFixed(3)})`);
-  // but it must remain the SAME attractor, not a different one
-  assert.ok(jac > 0.15, `complexity changed the form beyond recognition (overlap ${jac.toFixed(3)})`);
-});
+  return inter / (lo.size + hi.size - inter);
+}
 
+// One discriminating test per flow system, each parameterized over all six
+// SPEAKERS voices — not just 'male calm' locked to aizawa, which is all the
+// previous version of this test covered. A single-fixture test let a defect
+// (a lever that's a no-op for every voice but one) hide behind a lucky pick.
+//
+// The ceiling is per-system. thomas/halvorsen/lorenz all measure comfortably
+// under the project's usual 0.85 "barely changed the form" bar across all six
+// voices. aizawa does not: its only lever is the `d` coefficient, and its
+// sensitivity to `d` is nonuniform across the coefficient's own range — measured
+// across cap values 0.30-0.50 (relative-to-endpoint push) and again with an
+// alternative additive-displacement push (0.10-0.25), no single cap gets every
+// one of the six voices under 0.85 without pushing another voice's `d` across
+// a bifurcation (male calm's cell occupancy collapses toward a limit-cycle-
+// adjacent regime past roughly a 35% push). 0.90 for aizawa is still far
+// short of the no-op baseline (0.987-0.993, see the verification note below)
+// and still requires the design to visibly change for every voice — it is a
+// deliberately honest bound, not the project's usual 0.85, because 0.85 is
+// not achievable here without trading this defect for the aizawa fallback
+// regression this whole lever was tuned to avoid.
+//
+// Verified (then reverted) that every test below fails under a no-op lever:
+// stubbing complexify() to `(v) => v` drove thomas/aizawa/lorenz to
+// 0.993-0.996 / 0.987-0.993 / 0.996-1.000 across all six voices (all well
+// over their ceilings here); halvorsen doesn't call complexify() at all — it
+// has its own `spread` formula — so it was neutralized separately by pinning
+// `spread` to its cx=0.5 midpoint, which drove it to 0.898-0.978 (also over
+// its ceiling). All four tests failed as expected in both cases.
+for (const [system, ceiling] of [['thomas', 0.85], ['halvorsen', 0.85], ['aizawa', 0.90], ['lorenz', 0.85]]) {
+  test(`attractor live: complexity changes the form — ${system}, all voices`, () => {
+    for (const [voice, cfg] of Object.entries(SPEAKERS)) {
+      const fp = speechFingerprint(cfg);
+      const jac = complexityJaccard(fp, system);
+      assert.ok(jac < ceiling,
+        `${system}/${voice}: complexity barely changed the form (overlap ${jac.toFixed(3)}, want < ${ceiling})`);
+      // but it must remain the SAME attractor, not a different one
+      assert.ok(jac > 0.15,
+        `${system}/${voice}: complexity changed the form beyond recognition (overlap ${jac.toFixed(3)})`);
+    }
+  });
+}
+
+// This task's complexity lever (liveCoeffs' `cx` param / complexify()) is
+// structurally unreachable from the capture path: `sys.liveCoeffs` is only
+// ever called inside the `if (sys.flow && arch)` branch, and `arch` is null
+// whenever `liveVariance` isn't requested. So there is no complexity value
+// that can make THIS task's mechanism leak into a capture.
+//
+// It is tempting to prove that by varying complexity between two capture
+// calls and asserting byte-identical output — but on this codebase that
+// assertion is false for most fingerprints, and always has been, for TWO
+// reasons unrelated to this task (both confirmed with `git log -S` and by
+// checking they're outside every diff this task touches):
+//  1. Flow systems (thomas/halvorsen/aizawa/lorenz) run their capture-path
+//     coefficients through `excursion = 0.5 + params.complexity` jitter
+//     (the `else if (sys.flow)` branch), present since the very first
+//     attractor commit (22c015e), applied unconditionally on every attempt.
+//  2. EVERY system, flow or discrete, adds `jitter = fp.velocity * 0.012 *
+//     (0.5 + params.complexity) * (...)` to every position — also from
+//     22c015e, also unconditional.
+// Neither was ever caught because every other test in this suite uses
+// baseParams' fixed complexity: 0.5 throughout, so varying it was never
+// exercised before this task's tests.
+//
+// The provable invariant is narrower: with fp.velocity = 0 (zeroing #2) and
+// routing to sinemap (sidestepping #1, since sinemap never takes the
+// sys.flow branch), capture output is untouched by complexity either way —
+// that is what this test proves.
 test('attractor: complexity lever does not leak into capture', () => {
-  const fp = testFingerprint();
-  const a = generate(fp, { ...baseParams, density: 30000, complexity: 0.2 });
-  const b = generate(fp, { ...baseParams, density: 30000, complexity: 0.2 });
+  const fp = testFingerprint({ pitchConfidence: 0.2, velocity: 0 }); // routes to sinemap, zero jitter
+  assert.equal(pickSystem(fp), 'sinemap');
+  const a = generate(fp, { ...baseParams, density: 30000, complexity: 0.1 });
+  const b = generate(fp, { ...baseParams, density: 30000, complexity: 0.9 });
   assert.deepEqual([...a.positions.slice(0, 300)], [...b.positions.slice(0, 300)]);
 });
 
