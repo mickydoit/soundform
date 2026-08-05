@@ -409,14 +409,36 @@ test('paint splice never overwrites points already on screen', async () => {
   // _requestReveal captured spliceFrom at REQUEST time, but generation is
   // async and st.count keeps advancing - so completion wrote over up to ~2000
   // points the user could already see. That is the visible "jump".
+  //
+  // A single reveal with a constant fingerprint (the earlier version of this
+  // test) only ever exercises spliceFrom = 0 — st.count can't have advanced
+  // before the FIRST generation resolves, because revealTotal is still 0 and
+  // the brush-advance branch is gated on revealTotal > 0. That can't tell the
+  // fixed `Math.max(spliceFrom, st.count)` apart from the old, buggy
+  // `spliceFrom` alone; both give 0. To actually exercise the staleness bug
+  // this drives a SECOND, steering-triggered reveal (via forceMorph, the same
+  // lever a settings tweak uses) while the brush keeps advancing on the
+  // first-revealed design, and only resolves that second generation once
+  // st.count has genuinely moved past the spliceFrom it captured — the exact
+  // interleaving the brief describes.
   const violations = [];
   let visible = 0;
   const frame = { current: mkFrame({ rms: 0.3 }) };
-  let resolveGen = null;
+  let genCall = 0;
+  let resolveFirst = null, resolveSecond = null;
+  let capturedSpliceFrom = null;
   const { conductor } = harness({
     frame,
-    generate: () => new Promise((res) => { resolveGen = () => res({
-      positions: new Float32Array(60000 * 3), attr: new Float32Array(60000), strands: [] }); }),
+    generate: () => {
+      genCall++;
+      if (genCall === 1) {
+        return new Promise((res) => { resolveFirst = () => res({
+          positions: new Float32Array(60000 * 3), attr: new Float32Array(60000), strands: [] }); });
+      }
+      capturedSpliceFrom = conductor.paint.count;   // the spliceFrom this call will use
+      return new Promise((res) => { resolveSecond = () => res({
+        positions: new Float32Array(60000 * 3), attr: new Float32Array(60000), strands: [] }); });
+    },
     getParams: () => ({ mode: 'cymatics', cymStyle: 'auto', complexity: 0.5, symmetry: 1, twist: 0,
                         liveDensity: 1000, exposure: 30, scale: 1, grain: 1, paintMaxPoints: 60000 }),
   });
@@ -427,11 +449,29 @@ test('paint splice never overwrites points already on screen', async () => {
   r.writePaintPoints = (offset, pos) => {
     if (offset < visible) violations.push({ offset, visible, n: pos.length / 3 });
   };
-  for (let i = 0; i < 60 * 8; i++) {
+
+  let secondRequested = false, countAtResolution = null;
+  for (let i = 0; i < 60 * 30; i++) {
     conductor.tick(i / 60);
-    if (i === 120 && resolveGen) { resolveGen(); resolveGen = null; }
+    if (resolveFirst) { resolveFirst(); resolveFirst = null; }   // let revealTotal populate ASAP
+    if (!secondRequested && conductor.paint.count > 20000) {
+      conductor.forceMorph();       // real steering reveal, spliceFrom = st.count now
+      secondRequested = true;
+    }
+    if (secondRequested && resolveSecond && conductor.paint.count > 40000) {
+      countAtResolution = conductor.paint.count;   // st.count has moved well past capturedSpliceFrom
+      resolveSecond(); resolveSecond = null;
+    }
     await settle();
   }
+
+  assert.equal(genCall, 2,
+    'test setup sanity: expected one initial reveal and one steering-triggered reveal');
+  assert.ok(countAtResolution !== null && capturedSpliceFrom !== null
+    && countAtResolution > capturedSpliceFrom,
+    'test setup sanity: st.count must advance past the captured spliceFrom before the second ' +
+    `generation resolves (spliceFrom=${capturedSpliceFrom}, count at resolution=${countAtResolution}) ` +
+    '- otherwise this test cannot distinguish the fix from the pre-fix code');
   assert.equal(violations.length, 0,
     `splice overwrote visible points: ${JSON.stringify(violations[0])}`);
 });
