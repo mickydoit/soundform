@@ -2,7 +2,7 @@
 // layer at a time so the UI can show real per-level progress. imagetracer's
 // imagedataToTracedata() is one synchronous call with no progress hook, so we
 // drive its exposed stage functions ourselves.
-importScripts('vendor/imagetracer.js?v=46');
+importScripts('vendor/imagetracer.js?v=47');
 
 self.onmessage = (e) => {
   const { imageData, options } = e.data;

@@ -1,4 +1,4 @@
-import { detectPitch, chromaFromFFT, spectralFlux } from './features.js?v=46';
+import { detectPitch, chromaFromFFT, spectralFlux } from './features.js?v=47';
 
 export class AudioEngine {
   constructor() {
