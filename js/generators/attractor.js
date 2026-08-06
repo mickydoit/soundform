@@ -36,8 +36,32 @@ const SYSTEMS = {
     // asymmetry re-lobes the knot. Asymmetry stays gentle because thomas already
     // sits close to the occupancy check's 400-cell floor, and a strong split
     // tips it into a limit cycle (b also stays under the b ≈ 0.208 boundary).
+    //
+    // I3: thomas was the worst system on the branch — consecutive-regeneration
+    // cell occupancy Jaccard as low as 0.013 (250k, production density), with
+    // capture-path fallbacks (generate()'s retry loop exhausting and handing
+    // back a completely different, non-thomas design — see the fallback note
+    // at generate()). Same defect shape as aizawa's I2: the ax[4]-driven base
+    // for `b` spanned the SAME full 0.168..0.098 range complexify() targets,
+    // so ordinary per-tick fingerprint sampling noise on ax[4] could already
+    // put `b` near the range's edge before complexify() pushed it further,
+    // tipping it across a regime boundary and into repeated rejects. Narrowing
+    // the ax-driven base to 0.148..0.118 (a 3.5x tighter band) while leaving
+    // complexify()'s own lo/hi targets at the original wide 0.168/0.098 — same
+    // fix shape as aizawa's `d` — keeps the complexity push exactly as strong
+    // (a fixed fraction of the wide range) while per-tick drift on `b` no
+    // longer approaches the boundary on its own. Measured after (5-voice set:
+    // the original 3 M7 fixtures + the 2 that exposed this, 250k, one
+    // consistent live-session config): min 0.622 (was 0.013), 0/110 steps
+    // under 0.50 (was 4/110), 3/110 under 0.70 (was 15/110, and matches the
+    // pre-existing dips already present in the original 3 fixtures before
+    // this branch), 0 capture-path fallbacks across 115 live calls (was 3).
+    // complexify()'s own worst-voice separation (six SPEAKERS profiles)
+    // improved too: 0.760 (was ~0.803), comfortably under the system's 0.85
+    // ceiling — narrowing the noise-driven base left more of complexify()'s
+    // push undiluted by drift, rather than trading the lever away.
     liveCoeffs: (c, ax, cx = 0.5) => {
-      const b = complexify(lerp(0.168, 0.098, ax[4]), 0.168, 0.098, cx, 'hi');
+      const b = complexify(lerp(0.148, 0.118, ax[4]), 0.168, 0.098, cx, 'hi');
       c.b = b;
       c.bx = b * lerp(0.93, 1.07, ax[1]);
       c.by = b * lerp(0.93, 1.07, ax[2]);

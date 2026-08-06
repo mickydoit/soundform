@@ -789,6 +789,14 @@ const M7_VOICES = {
     { f0: 250, rate: 3.8, bright: 0.12, jitter: 0.06, voicedFrac: 0.6, loud: 0.14, seed: 2326 },
     { f0: 300, rate: 5.0, bright: 0.16, jitter: 0.06, voicedFrac: 0.6, loud: 0.14, seed: 2407 },
     { f0: 220, rate: 2.2, bright: 0.26, jitter: 0.06, voicedFrac: 0.6, loud: 0.14, seed: 2284 },
+    // These two were missed by the original three fixtures: a code-review
+    // ablation of this branch's complexify()-on-`b` addition (attractor.js,
+    // commit cb61fa2) showed these voices hit the capture-path fallback
+    // (attractor.js:488) repeatedly, tanking consecutive-regeneration
+    // overlap to 0.013/0.110 — the M7 test passed (min 0.653) without them
+    // only because the original three never exercised the fallback.
+    { f0: 150, rate: 5.2, bright: 0.22, jitter: 0.06, voicedFrac: 0.6, loud: 0.14, seed: 9023 },
+    { f0: 330, rate: 2.4, bright: 0.22, jitter: 0.06, voicedFrac: 0.6, loud: 0.14, seed: 9037 },
   ],
   halvorsen: [
     { f0: 70, rate: 3.0, bright: 0.12, jitter: 0.06, voicedFrac: 0.6, loud: 0.14, seed: 2006 },
