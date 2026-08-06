@@ -1111,3 +1111,31 @@ test('resume refuses when there is nothing to resume', async () => {
   assert.equal(conductor.resume({ positions: new Float32Array(3), attr: new Float32Array(1) }, 1000), false,
     'a morph session must not be resumable as a painting');
 });
+
+test('freezing mid-rebuild does not truncate the painting', async () => {
+  // Slicing a partially rewritten buffer would permanently shrink the canvas.
+  // Unreachable today only because freeze needs LIVE_MIN_FRAMES frames while a
+  // rebuild finishes in PAINT_MAX / PAINT_SPLICE_CHUNK ticks — a coincidence
+  // between three unrelated constants, so freeze completes the rebuild itself.
+  // Time stays continuous across the resume so the rolling window keeps its
+  // frames and freeze is willing while the rebuild is still pending.
+  const frame = { current: mkFrame({ rms: 0.3 }) };
+  const { conductor } = harness({ frame });
+  conductor.setGrowthMode('paint');
+  let t = 0;
+  for (let i = 0; i < 400; i++, t += 1 / 60) { conductor.tick(t); await settle(); }
+  const first = conductor.freeze();
+  const painted = conductor.paint.count;
+  assert.ok(painted > PAINT_SPLICE_CHUNK, 'fixture must need more than one chunk');
+
+  conductor.resume(first.cloud, 600000);
+  t += 1 / 60; conductor.tick(t); await settle();     // one chunk written
+  assert.ok(conductor.paint.restore, 'fixture must still be mid-rebuild');
+  assert.ok(conductor.paint.count < painted, 'fixture must be partially rebuilt');
+
+  const second = conductor.freeze();
+  assert.ok(second, 'freeze must succeed — the window still holds its frames');
+  assert.equal(conductor.paint.restore, null, 'freeze must finish a pending rebuild');
+  assert.equal(conductor.paint.count, painted, 'freeze must not truncate the painting');
+  assert.equal(second.cloud.attr.length, painted, 'the captured cloud must be whole');
+});

@@ -497,6 +497,23 @@ export class LiveConductor {
     const out = { fingerprint: this.windowFingerprint(), stops: stopsToHex(this.colour) };
     if (this.growthMode === 'paint' && this.paint && this.paint.count > 0) {
       const st = this.paint;
+      // Capturing mid-rebuild would slice a partially rewritten buffer and
+      // permanently truncate the painting. Today that is unreachable — freeze
+      // needs LIVE_MIN_FRAMES frames and a rebuild always finishes within
+      // PAINT_MAX / PAINT_SPLICE_CHUNK = 15 ticks — but that is a coincidence
+      // between three unrelated constants, not a guarantee. Finish the rebuild
+      // instead of depending on it. The loop is already stopped, so the cost of
+      // one large write here is nothing.
+      if (st.restore) {
+        const q = st.restore;
+        if (q.total > q.next) {
+          this.renderer.writePaintPoints(q.next,
+            q.positions.subarray(q.next * 3, q.total * 3), q.attr.subarray(q.next, q.total));
+        }
+        st.count = q.total;
+        this.renderer.setPaintCount(q.total);
+        st.restore = null;
+      }
       out.cloud = this.renderer.getPaintSlice(st.count);
       out.cloud.strands = st.brush
         ? sliceSegments(out.cloud.positions, st.segments, st.count)
