@@ -1,8 +1,8 @@
-import * as attractor from './attractor.js?v=49';
-import * as radial from './radial.js?v=49';
-import * as cymatics from './cymatics.js?v=49';
-import * as harmonic from './harmonic.js?v=49';
-import * as oscillo from './oscillo.js?v=49';
+import * as attractor from './attractor.js?v=50';
+import * as radial from './radial.js?v=50';
+import * as cymatics from './cymatics.js?v=50';
+import * as harmonic from './harmonic.js?v=50';
+import * as oscillo from './oscillo.js?v=50';
 
 const REGISTRY = { attractor: attractor.generate, radial: radial.generate, cymatics: cymatics.generate, harmonic: harmonic.generate, oscillo: oscillo.generate };
 

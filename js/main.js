@@ -1,13 +1,13 @@
-import { AudioEngine } from './audio.js?v=49';
-import { buildFingerprint, buildTrajectory } from './features.js?v=49';
-import { DensityRenderer } from './density.js?v=49';
-import { PALETTES, buildLUT, customRamp, hexToRgb } from './palettes.js?v=49';
-import { exportCanvas, exportStrandSVG, exportStrandPDF, exportTraceSVG, exportTracePDF, framePlan, exportMP4, loopsForDuration } from './exporter.js?v=49';
-import { paletteFromRamp } from './trace.js?v=49';
-import { motionParams, displacePoint } from './motion.js?v=49';
-import { LiveConductor } from './live.js?v=49';
-import { LiveRecorder, MAX_RECORD_SEC } from './recorder.js?v=49';
-import { selectRingSubset } from './strands.js?v=49';
+import { AudioEngine } from './audio.js?v=50';
+import { buildFingerprint, buildTrajectory } from './features.js?v=50';
+import { DensityRenderer } from './density.js?v=50';
+import { PALETTES, buildLUT, customRamp, hexToRgb } from './palettes.js?v=50';
+import { exportCanvas, exportStrandSVG, exportStrandPDF, exportTraceSVG, exportTracePDF, framePlan, exportMP4, loopsForDuration } from './exporter.js?v=50';
+import { paletteFromRamp } from './trace.js?v=50';
+import { motionParams, displacePoint } from './motion.js?v=50';
+import { LiveConductor } from './live.js?v=50';
+import { LiveRecorder, MAX_RECORD_SEC } from './recorder.js?v=50';
+import { selectRingSubset } from './strands.js?v=50';
 
 const audio = new AudioEngine();
 let renderer = null;
@@ -130,7 +130,7 @@ function regenerate() {
     setStatus('Design created — drag to rotate · adjust sliders');
   };
   try {
-    if (!worker) worker = new Worker('js/worker.js?v=49', { type: 'module' });
+    if (!worker) worker = new Worker('js/worker.js?v=50', { type: 'module' });
     worker.onmessage = (e) => {
       if (e.data.progress !== undefined) setStatus(`Generating… ${Math.round(e.data.progress * 100)}%`);
       else if (e.data.error) setStatus(`Generation error: ${e.data.error}`);
@@ -144,7 +144,7 @@ function regenerate() {
 }
 
 async function fallbackGenerate(onResult) {
-  const { generate } = await import('./generators/index.js?v=49');
+  const { generate } = await import('./generators/index.js?v=50');
   onResult(generate(fingerprint, { ...params, strandCount: 96 }));
 }
 
@@ -153,7 +153,7 @@ async function fallbackGenerate(onResult) {
 function workerGenerate(fingerprint, params) {
   return new Promise((resolve) => {
     try {
-      if (!liveWorker) liveWorker = new Worker('js/worker.js?v=49', { type: 'module' });
+      if (!liveWorker) liveWorker = new Worker('js/worker.js?v=50', { type: 'module' });
       liveWorker.onmessage = (e) => {
         if (e.data.done) resolve(e.data);
         else if (e.data.error) resolve(null);
@@ -176,7 +176,7 @@ async function liveGenerate(fp, p) {
   // result as "generation failed, retry later" (see tick()), so surface a
   // throw the same way rather than letting it become an unhandled rejection.
   try {
-    const { generate } = await import('./generators/index.js?v=49');
+    const { generate } = await import('./generators/index.js?v=50');
     return generate(fp, p);
   } catch {
     return null;
@@ -865,7 +865,7 @@ async function runTrace(kind) { // kind: 'svg' | 'pdf'
     };
     background = params.transparentBg ? null : params.background;
 
-    traceWorker = new Worker('js/traceworker.js?v=49'); // classic worker
+    traceWorker = new Worker('js/traceworker.js?v=50'); // classic worker
   } catch (err) {
     endTrace();
     setStatus(`Trace error: ${err.message}`);
