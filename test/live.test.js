@@ -1033,14 +1033,75 @@ test('resume rebuilds the paint buffer and continues from the same count', async
   const ok = conductor.resume(out.cloud, 600000);
   assert.equal(ok, true, 'resume must succeed on a resumable session');
   assert.equal(log.paintBegun, 600000, 'resume must re-allocate the paint buffer');
-  assert.deepEqual(log.paintWrites[0], [0, frozenAt],
-    'resume must write the frozen cloud back from offset 0');
-  assert.equal(conductor.paint.count, frozenAt, 'resume must not rewind the painting');
-  assert.ok(conductor.running, 'resume must restart the loop');
+  assert.ok(conductor.running, 'resume must make the conductor live again');
+
+  // The cloud is re-materialised across frames, so drive ticks until it is whole.
+  for (let i = 0; i < 40 && conductor.paint.restore; i++) { conductor.tick(10 + i / 60); await settle(); }
+  assert.equal(conductor.paint.restore, null, 're-materialise must complete');
+  assert.equal(conductor.paint.count, frozenAt, 'resume must land back on the frozen count');
+  assert.equal(log.paintWrites[0][0], 0, 'the rebuild must start at offset 0');
 
   // and it keeps painting from there
-  for (let i = 0; i < 60; i++) { conductor.tick(10 + i / 60); await settle(); }
+  for (let i = 0; i < 60; i++) { conductor.tick(11 + i / 60); await settle(); }
   assert.ok(conductor.paint.count > frozenAt, 'painting must continue past the frozen count');
+});
+
+test('resume re-materialises in bounded chunks, never one huge upload', async () => {
+  // A full painting is 600k points — 7.2 MB of positions plus 2.4 MB of attrs.
+  // Writing that in a single frame is the same hitch PAINT_SPLICE_CHUNK exists
+  // to prevent for splices.
+  const frame = { current: mkFrame({ rms: 0.3 }) };
+  const { conductor, log } = harness({ frame });
+  conductor.setGrowthMode('paint');
+  for (let i = 0; i < 400; i++) { conductor.tick(i / 60); await settle(); }
+  const out = conductor.freeze();
+  const frozenAt = conductor.paint.count;
+  assert.ok(frozenAt > PAINT_SPLICE_CHUNK,
+    `fixture must paint more than one chunk (got ${frozenAt})`);
+
+  log.paintWrites.length = 0;
+  conductor.resume(out.cloud, 600000);
+  for (let i = 0; i < 200 && conductor.paint.restore; i++) { conductor.tick(20 + i / 60); await settle(); }
+  const biggest = Math.max(...log.paintWrites.map(([, n]) => n));
+  assert.ok(biggest <= PAINT_SPLICE_CHUNK,
+    `single ${biggest}-point write on resume will hitch the frame`);
+  assert.ok(log.paintWrites.length > 1, 'a multi-chunk painting must take multiple writes');
+});
+
+test('resume is not re-entrant', async () => {
+  // resumePainting() awaits microphone permission before calling this; a second
+  // click during that gap would restore twice and install a second animation
+  // loop on the same conductor, doubling the tick rate.
+  const frame = { current: mkFrame({ rms: 0.3 }) };
+  const { conductor, log } = harness({ frame });
+  conductor.setGrowthMode('paint');
+  for (let i = 0; i < 200; i++) { conductor.tick(i / 60); await settle(); }
+  const out = conductor.freeze();
+  log.paintBegun = 0;
+  assert.equal(conductor.resume(out.cloud, 600000), true, 'first resume must succeed');
+  assert.equal(conductor.resume(out.cloud, 600000), false,
+    'a second resume while already running must be refused');
+  assert.equal(log.paintBegun, 600000, 'the buffer must be re-allocated exactly once');
+});
+
+test('the brush stays parked until a resumed canvas is whole', async () => {
+  // Revealing past the written frontier would draw uninitialised points as a
+  // blob at the origin, so the reveal count must track the rebuild exactly.
+  const frame = { current: mkFrame({ rms: 0.3 }) };
+  const { conductor } = harness({ frame });
+  conductor.setGrowthMode('paint');
+  for (let i = 0; i < 400; i++) { conductor.tick(i / 60); await settle(); }
+  const out = conductor.freeze();
+  const frozenAt = conductor.paint.count;
+  conductor.resume(out.cloud, 600000);
+  let sawPartial = false;
+  for (let i = 0; i < 200 && conductor.paint.restore; i++) {
+    conductor.tick(20 + i / 60); await settle();
+    assert.ok(conductor.paint.count <= frozenAt,
+      `revealed ${conductor.paint.count} of a ${frozenAt}-point rebuild — past the written frontier`);
+    if (conductor.paint.count < frozenAt) sawPartial = true;
+  }
+  assert.ok(sawPartial, 'fixture must actually exercise a partial rebuild');
 });
 
 test('resume refuses when there is nothing to resume', async () => {

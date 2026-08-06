@@ -1,13 +1,13 @@
-import { AudioEngine } from './audio.js?v=48';
-import { buildFingerprint, buildTrajectory } from './features.js?v=48';
-import { DensityRenderer } from './density.js?v=48';
-import { PALETTES, buildLUT, customRamp, hexToRgb } from './palettes.js?v=48';
-import { exportCanvas, exportStrandSVG, exportStrandPDF, exportTraceSVG, exportTracePDF, framePlan, exportMP4, loopsForDuration } from './exporter.js?v=48';
-import { paletteFromRamp } from './trace.js?v=48';
-import { motionParams, displacePoint } from './motion.js?v=48';
-import { LiveConductor } from './live.js?v=48';
-import { LiveRecorder, MAX_RECORD_SEC } from './recorder.js?v=48';
-import { selectRingSubset } from './strands.js?v=48';
+import { AudioEngine } from './audio.js?v=49';
+import { buildFingerprint, buildTrajectory } from './features.js?v=49';
+import { DensityRenderer } from './density.js?v=49';
+import { PALETTES, buildLUT, customRamp, hexToRgb } from './palettes.js?v=49';
+import { exportCanvas, exportStrandSVG, exportStrandPDF, exportTraceSVG, exportTracePDF, framePlan, exportMP4, loopsForDuration } from './exporter.js?v=49';
+import { paletteFromRamp } from './trace.js?v=49';
+import { motionParams, displacePoint } from './motion.js?v=49';
+import { LiveConductor } from './live.js?v=49';
+import { LiveRecorder, MAX_RECORD_SEC } from './recorder.js?v=49';
+import { selectRingSubset } from './strands.js?v=49';
 
 const audio = new AudioEngine();
 let renderer = null;
@@ -130,7 +130,7 @@ function regenerate() {
     setStatus('Design created — drag to rotate · adjust sliders');
   };
   try {
-    if (!worker) worker = new Worker('js/worker.js?v=48', { type: 'module' });
+    if (!worker) worker = new Worker('js/worker.js?v=49', { type: 'module' });
     worker.onmessage = (e) => {
       if (e.data.progress !== undefined) setStatus(`Generating… ${Math.round(e.data.progress * 100)}%`);
       else if (e.data.error) setStatus(`Generation error: ${e.data.error}`);
@@ -144,7 +144,7 @@ function regenerate() {
 }
 
 async function fallbackGenerate(onResult) {
-  const { generate } = await import('./generators/index.js?v=48');
+  const { generate } = await import('./generators/index.js?v=49');
   onResult(generate(fingerprint, { ...params, strandCount: 96 }));
 }
 
@@ -153,7 +153,7 @@ async function fallbackGenerate(onResult) {
 function workerGenerate(fingerprint, params) {
   return new Promise((resolve) => {
     try {
-      if (!liveWorker) liveWorker = new Worker('js/worker.js?v=48', { type: 'module' });
+      if (!liveWorker) liveWorker = new Worker('js/worker.js?v=49', { type: 'module' });
       liveWorker.onmessage = (e) => {
         if (e.data.done) resolve(e.data);
         else if (e.data.error) resolve(null);
@@ -176,7 +176,7 @@ async function liveGenerate(fp, p) {
   // result as "generation failed, retry later" (see tick()), so surface a
   // throw the same way rather than letting it become an unhandled rejection.
   try {
-    const { generate } = await import('./generators/index.js?v=48');
+    const { generate } = await import('./generators/index.js?v=49');
     return generate(fp, p);
   } catch {
     return null;
@@ -479,18 +479,27 @@ async function resumePainting() {
   // never painted.
   if (!pausedPaint || !paintedCapture) return;
   const { conductor: paused, max } = pausedPaint;
+  const resumeBtn = document.getElementById('btn-resume-paint');
+  if (resumeBtn.disabled) return;      // already awaiting the mic
+  resumeBtn.disabled = true;
   try {
     await audio.startMic();
   } catch (e) {
     setStatus(`Mic error: ${e.message}`);
+    resumeBtn.disabled = false;
     return;
   }
+  resumeBtn.disabled = false;
   if (!paused.resume(paintedCapture, max)) {
     setStatus('Nothing left to resume — that painting is finished');
     dropPausedPaint();
     return;
   }
-  design = paintedCapture;
+  // Match enterLive(): during live there is no captured design. Leaving the
+  // frozen cloud in `design` made SVG/PDF export silently hand back the
+  // snapshot from where the painting was paused, with nothing on screen to
+  // say so — the vector guard at the export site keys on `design` being null.
+  design = null;
   conductor = paused;
   pausedPaint = null;
   appState = 'live';
@@ -856,7 +865,7 @@ async function runTrace(kind) { // kind: 'svg' | 'pdf'
     };
     background = params.transparentBg ? null : params.background;
 
-    traceWorker = new Worker('js/traceworker.js?v=48'); // classic worker
+    traceWorker = new Worker('js/traceworker.js?v=49'); // classic worker
   } catch (err) {
     endTrace();
     setStatus(`Trace error: ${err.message}`);

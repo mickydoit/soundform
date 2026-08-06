@@ -1,11 +1,11 @@
 // Live mode conductor: rolling feature window, instant envelopes, kick
 // detection, and structural morph scheduling. All I/O (audio, renderer,
 // worker, palette) is injected — this module is node-testable.
-import { buildFingerprint, buildTrajectory } from './features.js?v=48';
-import { liveTarget, glideStops, stopsToHex } from './livecolor.js?v=48';
-import { BrushPace, PAINT_MAX_POINTS } from './paint.js?v=48';
-import { createOrbitBrush, pickSystemLive } from './generators/attractor.js?v=48';
-import { AutoParams, featuresFromFingerprint } from './autoparams.js?v=48';
+import { buildFingerprint, buildTrajectory } from './features.js?v=49';
+import { liveTarget, glideStops, stopsToHex } from './livecolor.js?v=49';
+import { BrushPace, PAINT_MAX_POINTS } from './paint.js?v=49';
+import { createOrbitBrush, pickSystemLive } from './generators/attractor.js?v=49';
+import { AutoParams, featuresFromFingerprint } from './autoparams.js?v=49';
 
 export const WINDOW_SEC = 4;
 export const MORPH_CHECK_INTERVAL = 0.15;
@@ -194,7 +194,7 @@ export class LiveConductor {
     this.lockedSystem = null;         // a fresh canvas re-picks the form
     this.paint = mode === 'paint'
       ? { pace: new BrushPace(), brush: null, count: 0, revealTotal: 0, strands: [], segments: [0],
-          pendingGen: false, retried: false, done: false, begun: false, pending: null }
+          pendingGen: false, retried: false, done: false, begun: false, pending: null , restore: null }
       : null;
   }
 
@@ -202,6 +202,23 @@ export class LiveConductor {
     const p = this.getParams();
     const max = this.paintMax ?? p.paintMaxPoints ?? PAINT_MAX_POINTS;
     const st = this.paint;
+
+    // Re-materialising a resumed painting. Unlike a splice — which fills the
+    // buffer AHEAD of the reveal frontier — this is rebuilding what is already
+    // meant to be on screen, so the visible count has to follow the written
+    // frontier exactly: revealing past it would draw uninitialised points as a
+    // blob at the origin. The brush stays parked until the canvas is whole.
+    if (st.restore) {
+      const q = st.restore;
+      const end = Math.min(q.total, q.next + PAINT_SPLICE_CHUNK);
+      this.renderer.writePaintPoints(q.next,
+        q.positions.subarray(q.next * 3, end * 3), q.attr.subarray(q.next, end));
+      q.next = end;
+      st.count = end;
+      this.renderer.setPaintCount(end);
+      if (q.next >= q.total) st.restore = null;
+      return;
+    }
 
     // Drain a queued splice a chunk at a time so no single frame uploads
     // megabytes. Always stays ahead of the reveal by a comfortable margin:
@@ -505,14 +522,23 @@ export class LiveConductor {
   }
 
   resume(cloud, maxPoints) {
+    // Re-entrancy guard. The caller has to await microphone permission before
+    // getting here, and a second click during that gap would otherwise restore
+    // twice and install a second animation loop on the same conductor —
+    // doubling the tick rate, the paint speed and the generation dispatches.
+    if (this.running) return false;
     if (!this.canResume()) return false;
     const st = this.paint;
     const n = Math.min(st.count, cloud ? cloud.attr.length : 0);
     if (!n) return false;
     this.renderer.beginPaint(maxPoints);
-    this.renderer.writePaintPoints(0, cloud.positions.subarray(0, n * 3), cloud.attr.subarray(0, n));
-    st.count = n;
-    this.renderer.setPaintCount(n);
+    // Re-materialise across frames rather than in one write. A full painting is
+    // 600k points — 7.2 MB of positions plus 2.4 MB of attributes — and pushing
+    // that in a single frame is the same hitch PAINT_SPLICE_CHUNK exists to
+    // prevent. Revealing it in chunks also reads better than a hard pop.
+    st.restore = { positions: cloud.positions, attr: cloud.attr, next: 0, total: n };
+    st.count = 0;
+    this.renderer.setPaintCount(0);
     // A splice queued when we froze refers to the pre-freeze buffer; the
     // reveal will re-request one from the current sound if it needs it.
     st.pending = null;
