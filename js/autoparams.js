@@ -5,10 +5,12 @@
 // Range each auto-driven parameter sweeps. Deliberately narrower than the
 // slider's full span — the extremes of twist and scale are compositional
 // choices, not something a voice should be able to slam into.
+// NOTE: `scale` was removed at the user's request — the design resizing itself
+// as you got louder was not wanted. Size is manual again (the Scale slider) and
+// loudness reads through visibleFraction and clifford's relief instead.
 export const AUTO_RANGE = {
   complexity:     [0.15, 1.0],
   twist:          [-0.9, 0.9],
-  scale:          [0.75, 1.5],
   visibleFraction:[0.35, 1.0],
 };
 
@@ -19,7 +21,6 @@ export const AUTO_RANGE = {
 export const AUTO_TAU = {
   complexity: 1.2,
   twist: 2.0,
-  scale: 0.8,
   visibleFraction: 0.25,
 };
 
@@ -31,7 +32,6 @@ const lerp = (a, b, t) => a + (b - a) * t;
 const DRIVER = {
   complexity: 'brightness',
   twist: 'roughness',
-  scale: 'energy',
   visibleFraction: 'loudness',
 };
 

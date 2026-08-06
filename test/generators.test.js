@@ -21,8 +21,13 @@ export function testFingerprint(overrides = {}) {
 
 export const baseParams = { mode: 'attractor', density: 30000, complexity: 0.5, symmetry: 1, twist: 0, strandCount: 96 };
 
-// The four continuous-flow systems; sinemap is the discrete map.
-const SYSTEM_IS_FLOW = new Set(['thomas', 'halvorsen', 'aizawa', 'lorenz']);
+// halvorsen is the continuous flow system; clifford is the 2D discrete map.
+const SYSTEM_IS_FLOW = new Set(['halvorsen']);
+const ALL_SYSTEMS = ['halvorsen', 'clifford'];
+// Fingerprints that route to each system. Routing is on vocal register:
+// pitchMedian below REGISTER_SPLIT (0.257, ~160 Hz) gives halvorsen.
+const LOW_PITCH = { pitchMedian: 0.15 };
+const HIGH_PITCH = { pitchMedian: 0.60 };
 
 function stats(positions) {
   const n = positions.length / 3;
@@ -67,30 +72,30 @@ test('attractor: different fingerprints → different geometry', () => {
 });
 
 test('attractor: pickSystem routing table', () => {
-  assert.equal(pickSystem(testFingerprint({ consonance: 0.8, majorLeaning: true, noteCount: 3 })), 'thomas');
-  assert.equal(pickSystem(testFingerprint({ consonance: 0.8, majorLeaning: true, noteCount: 5, noteSet: [0, 2, 4, 7, 9] })), 'aizawa');
-  assert.equal(pickSystem(testFingerprint({ consonance: 0.8, majorLeaning: false })), 'halvorsen');
-  assert.equal(pickSystem(testFingerprint({ consonance: 0.1 })), 'lorenz');
-  assert.equal(pickSystem(testFingerprint({ pitchConfidence: 0.2 })), 'sinemap');
-  assert.equal(pickSystem(testFingerprint({ velocity: 0.8 })), 'sinemap');
+  // Two systems, split on vocal register at pitchMedian 0.257 (~160 Hz).
+  assert.equal(pickSystem(testFingerprint({ pitchMedian: 0.10 })), 'halvorsen');
+  assert.equal(pickSystem(testFingerprint({ pitchMedian: 0.25 })), 'halvorsen');
+  assert.equal(pickSystem(testFingerprint({ pitchMedian: 0.30 })), 'clifford');
+  assert.equal(pickSystem(testFingerprint({ pitchMedian: 0.90 })), 'clifford');
+  // harmony no longer routes: the same notes at different registers differ
+  const tonal = { consonance: 0.8, majorLeaning: true, noteCount: 3 };
+  assert.notEqual(pickSystem(testFingerprint({ ...tonal, pitchMedian: 0.1 })),
+                  pickSystem(testFingerprint({ ...tonal, pitchMedian: 0.9 })));
 });
 
-test('attractor: all five systems bounded, non-degenerate, deterministic', () => {
+
+test('attractor: both systems bounded, non-degenerate, deterministic', () => {
   const routingFingerprints = {
-    thomas: testFingerprint({ consonance: 0.8, majorLeaning: true, noteCount: 3 }),
-    aizawa: testFingerprint({ consonance: 0.8, majorLeaning: true, noteCount: 5, noteSet: [0, 2, 4, 7, 9] }),
-    halvorsen: testFingerprint({ consonance: 0.8, majorLeaning: false }),
-    lorenz: testFingerprint({ consonance: 0.1 }),
-    sinemap: testFingerprint({ pitchConfidence: 0.2 }),
+    halvorsen: testFingerprint(LOW_PITCH),
+    clifford: testFingerprint(HIGH_PITCH),
   };
   const seeds = [1, 123456789, 987654321];
   for (const [name, fp] of Object.entries(routingFingerprints)) {
     assert.equal(pickSystem(fp), name, `routing fixture mismatch for ${name}`);
-    for (const seed of seeds) {
-      checkGenerator('attractor', { ...fp, seed });
-    }
+    for (const seed of seeds) checkGenerator('attractor', { ...fp, seed });
   }
 });
+
 
 // Regression repros for the strand-finiteness fix: these coefficient/seed
 // combinations continue past a clean cloud into a strand-phase escape for
@@ -101,13 +106,13 @@ test('attractor: all five systems bounded, non-degenerate, deterministic', () =>
 // now exercises the same guard on lorenz. checkGenerator asserts every strand
 // value is finite, so these must pass post-fix.
 test('attractor: strand-phase escape repros stay finite after retry', () => {
-  const halvorsenEscape = testFingerprint({ consonance: 0.8, majorLeaning: false, pitchMedian: 0.431, seed: 143 });
+  const halvorsenEscape = testFingerprint({ pitchMedian: 0.20, seed: 143 });
   assert.equal(pickSystem(halvorsenEscape), 'halvorsen');
   checkGenerator('attractor', halvorsenEscape);
 
-  const dissonantEscape = testFingerprint({ consonance: 0.1, pitchMedian: 1, centroid: 0, spread: 0.904, volMean: 0.03, seed: 41 });
-  assert.equal(pickSystem(dissonantEscape), 'lorenz');
-  checkGenerator('attractor', dissonantEscape);
+  const cliffordEscape = testFingerprint({ pitchMedian: 1, centroid: 0, spread: 0.904, volMean: 0.03, seed: 41 });
+  assert.equal(pickSystem(cliffordEscape), 'clifford');
+  checkGenerator('attractor', cliffordEscape);
 });
 
 test('attractor: low-pitch thomas routing does not collapse to a limit cycle', () => {
@@ -173,7 +178,7 @@ function complexityJaccard(fp, system, params = {}) {
 // has its own `spread` formula — so it was neutralized separately by pinning
 // `spread` to its cx=0.5 midpoint, which drove it to 0.898-0.978 (also over
 // its ceiling). All four tests failed as expected in both cases.
-for (const [system, ceiling] of [['thomas', 0.85], ['halvorsen', 0.85], ['aizawa', 0.90], ['lorenz', 0.85]]) {
+for (const [system, ceiling] of [['halvorsen', 0.85], ['clifford', 0.85]]) {
   test(`attractor live: complexity changes the form — ${system}, all voices`, () => {
     for (const [voice, cfg] of Object.entries(SPEAKERS)) {
       const fp = speechFingerprint(cfg);
@@ -214,8 +219,11 @@ for (const [system, ceiling] of [['thomas', 0.85], ['halvorsen', 0.85], ['aizawa
 // sys.flow branch), capture output is untouched by complexity either way —
 // that is what this test proves.
 test('attractor: complexity lever does not leak into capture', () => {
-  const fp = testFingerprint({ pitchConfidence: 0.2, velocity: 0 }); // routes to sinemap, zero jitter
-  assert.equal(pickSystem(fp), 'sinemap');
+  // clifford is the discrete map: the capture path applies no excursion
+  // multiplier to it, and velocity 0 zeroes jitter, so capture output is
+  // genuinely complexity-invariant for this fixture.
+  const fp = testFingerprint({ ...HIGH_PITCH, velocity: 0 });
+  assert.equal(pickSystem(fp), 'clifford');
   const a = generate(fp, { ...baseParams, density: 30000, complexity: 0.1 });
   const b = generate(fp, { ...baseParams, density: 30000, complexity: 0.9 });
   assert.deepEqual([...a.positions.slice(0, 300)], [...b.positions.slice(0, 300)]);
@@ -610,36 +618,52 @@ test('attractor live: percussive vs speech windows differ in shape', () => {
     }
     return s;
   };
-  const talk = testFingerprint({ pitchConfidence: 0.3, consonance: 0.3, pitchMedian: 0.3,
-                                 centroid: 0.5, spread: 0.45, velocity: 0.5, seed: 111 });
-  const claps = testFingerprint({ pitchConfidence: 0.2, consonance: 0.4, velocity: 0.85,
-                                  centroid: 0.6, spread: 0.5, seed: 666 });
+  // Both route to clifford now (register, not harmony, picks the system), so
+  // this is a within-clifford character check: talking and clapping differ in
+  // energy, roughness and brightness, which are exactly the raw axes clifford
+  // reads. Widened from the old cross-system bar accordingly.
+  const talk = testFingerprint({ pitchMedian: 0.32, consonance: 0.3, centroid: 0.30,
+                                 spread: 0.25, velocity: 0.25, volMean: 0.3, seed: 111 });
+  const claps = testFingerprint({ pitchMedian: 0.32, consonance: 0.4, velocity: 0.9,
+                                  centroid: 0.75, spread: 0.7, volMean: 0.85, seed: 666 });
+  assert.equal(pickSystemLive(talk), pickSystemLive(claps), 'fixture holds the system fixed');
   const a = cellsOf(talk), b = cellsOf(claps);
   let inter = 0; for (const v of a) if (b.has(v)) inter++;
   const jaccard = inter / (a.size + b.size - inter);
   assert.ok(jaccard < 0.85, `talk and claps webs overlap too much (jaccard ${jaccard.toFixed(3)})`);
 });
 
-test('attractor live: five distinct sound characters produce five distinct shapes', () => {
-  // Five genuinely different characters (speech, high whistle, low minor hum,
-  // percussion, bright complex chord). Similar sounds looking similar is the
-  // POINT of the smooth mapping — so every fixture here differs in character,
-  // and every pair must differ visibly.
-  const fps = [
-    testFingerprint({ pitchConfidence: 0.3, pitchMedian: 0.3, centroid: 0.5, spread: 0.45, consonance: 0.3, velocity: 0.5, seed: 1 }),
-    testFingerprint({ pitchConfidence: 0.9, pitchMedian: 0.85, centroid: 0.7, spread: 0.1, consonance: 0.8, velocity: 0.2, noteSet: [9], noteCount: 1, seed: 2 }),
-    testFingerprint({ pitchConfidence: 0.85, pitchMedian: 0.2, centroid: 0.2, spread: 0.15, consonance: 0.7, majorLeaning: false, velocity: 0.2, seed: 3 }),
-    testFingerprint({ pitchConfidence: 0.2, velocity: 0.85, centroid: 0.65, spread: 0.5, consonance: 0.4, volMean: 0.75, seed: 4 }),
-    testFingerprint({ pitchConfidence: 0.9, pitchMedian: 0.55, centroid: 0.45, spread: 0.3, consonance: 0.85, velocity: 0.45,
-                      noteSet: [0, 2, 4, 7, 9], noteCount: 5, seed: 5 }),
-  ];
-  for (let i = 0; i < fps.length; i++) {
-    for (let j = i + 1; j < fps.length; j++) {
-      assert.ok(shapeDistance('attractor', fps[i], fps[j]) > 0.12,
-        `characters ${i} and ${j} produced near-identical attractors`);
-    }
-  }
+test('attractor live: register picks the system, and each system responds to the sound', () => {
+  // Two systems now, so "five characters, five shapes" is neither achievable
+  // nor wanted. What must hold: register decides the system, and within each
+  // system the sound still moves the form — but via the lever that system
+  // actually has. They are deliberately different:
+  //   clifford  reads the RAW character axes, so timbre/energy move it.
+  //   halvorsen reads the EXPANDED axes over narrow spans (narrowed to fix a
+  //             continuity regression), so its character response is subtle by
+  //             design and PITCH within its register band is the real lever.
+  const low = testFingerprint({ ...LOW_PITCH, centroid: 0.2, spread: 0.15, seed: 3 });
+  const high = testFingerprint({ ...HIGH_PITCH, centroid: 0.7, spread: 0.5, seed: 2 });
+  assert.equal(pickSystemLive(low), 'halvorsen');
+  assert.equal(pickSystemLive(high), 'clifford');
+  assert.ok(shapeDistance('attractor', low, high) > 0.12, 'the two systems must look different');
+
+  // clifford: character at fixed register
+  const calm = testFingerprint({ ...HIGH_PITCH, velocity: 0.15, volMean: 0.25, spread: 0.15, centroid: 0.25, seed: 11 });
+  const busy = testFingerprint({ ...HIGH_PITCH, velocity: 0.7, volMean: 0.8, spread: 0.7, centroid: 0.75, seed: 12 });
+  assert.equal(pickSystemLive(calm), 'clifford');
+  assert.equal(pickSystemLive(busy), 'clifford');
+  assert.ok(shapeDistance('attractor', calm, busy) > 0.05, 'character had no effect within clifford');
+
+  // halvorsen: pitch within its register band
+  const deep = testFingerprint({ pitchMedian: 0.04, seed: 21 });
+  const upper = testFingerprint({ pitchMedian: 0.24, seed: 22 });
+  assert.equal(pickSystemLive(deep), 'halvorsen');
+  assert.equal(pickSystemLive(upper), 'halvorsen');
+  assert.ok(shapeDistance('attractor', deep, upper) > 0.05, 'pitch had no effect within halvorsen');
 });
+
+
 
 // REAL speech, not a hand-written fixture. The fixtures above label
 // `pitchConfidence: 0.3, consonance: 0.3` as "speech", but a genuine 4s window
@@ -686,29 +710,15 @@ export const SPEAKERS = {
   'deep slow drawl': { f0:  85, jitter: .04, voicedFrac: .70, rate: 2.2, loud: .13, bright: .08, seed: 7 },
 };
 
-test('attractor live: speech spreads across the system space', () => {
-  // The defect: every speaker cleared pickSystem's consonance > 0.55 gate and
-  // landed on aizawa or halvorsen — two designs no matter who spoke. Measured
-  // on these seven profiles: 3 systems total, and the aizawa speakers overlapped
-  // 0.88 by cell occupancy.
-  //
-  // The bar is deliberately NOT "every pair of speakers differs". Two calm low
-  // male voices SHOULD look alike — that is the locality guarantee pinned by
-  // 'steady sound keeps a stable design', and the same principle the
-  // five-characters test states. What must hold is that speech reaches a real
-  // spread of systems, that a change of register or delivery moves you to a
-  // different one, and that when two speakers DO land on different systems the
-  // designs are unmistakably different.
+test('attractor live: speech reaches both systems, and they look different', () => {
+  // Was ">= 4 systems" when there were five. With two, the bar is that speech
+  // actually reaches both rather than piling onto one, and that when two
+  // speakers land on different systems the designs are unmistakably different.
   const fps = Object.fromEntries(
     Object.entries(SPEAKERS).map(([n, cfg]) => [n, speechFingerprint(cfg)]));
   const systems = new Set(Object.values(fps).map(pickSystemLive));
-  assert.ok(systems.size >= 4,
-    `speech collapsed onto ${systems.size} system(s): ${[...systems].sort().join(', ')}`);
-
-  assert.notEqual(pickSystemLive(fps['male calm']), pickSystemLive(fps['male animated']),
-    'delivery (calm vs animated) must change the system');
-  assert.notEqual(pickSystemLive(fps['male calm']), pickSystemLive(fps['female calm']),
-    'register (low vs high) must change the system');
+  assert.equal(systems.size, 2,
+    `speech reached only: ${[...systems].join(', ')}`);
 
   const cellsOf = (fp) => {
     const out = generate(fp, { ...baseParams, density: 30000, liveVariance: true });
@@ -725,15 +735,16 @@ test('attractor live: speech spreads across the system space', () => {
   for (let i = 0; i < names.length; i++) {
     for (let j = i + 1; j < names.length; j++) {
       const a = names[i], b = names[j];
-      if (pickSystemLive(fps[a]) === pickSystemLive(fps[b])) continue;  // same cell: similarity is intended
+      if (pickSystemLive(fps[a]) === pickSystemLive(fps[b])) continue;
       let inter = 0; for (const v of sets[a]) if (sets[b].has(v)) inter++;
       const jac = inter / (sets[a].size + sets[b].size - inter);
       if (jac > worst) { worst = jac; pair = `${a} vs ${b}`; }
     }
   }
   assert.ok(worst < 0.5,
-    `speakers on different systems still look alike (worst pair ${pair} overlap ${worst.toFixed(3)})`);
+    `speakers on different systems still look alike (worst ${pair} overlap ${worst.toFixed(3)})`);
 });
+
 
 // Cell-occupancy Jaccard overlap, same construction as the 'speech spreads
 // across the system space' test above: system identity dominates geometry
@@ -759,7 +770,7 @@ test('attractor live: params.lockedSystem produces the locked system\'s geometry
   // A fingerprint that routes somewhere specific on its own...
   const fp = speechFingerprint(SPEAKERS['male calm']);
   const natural = pickSystemLive(fp);
-  const other = natural === 'aizawa' ? 'lorenz' : 'aizawa';
+  const other = natural === 'halvorsen' ? 'clifford' : 'halvorsen';
 
   // Find a speaker profile that lands on `other` UNFORCED, so we have a real
   // reference for what `other`'s geometry actually looks like — not just
@@ -791,7 +802,7 @@ test('attractor live: params.lockedSystem produces the locked system\'s geometry
 test('attractor: lockedSystem does not affect the capture path', () => {
   const fp = testFingerprint();
   const a = generate(fp, { ...baseParams, density: 30000 });
-  const b = generate(fp, { ...baseParams, density: 30000, lockedSystem: 'lorenz' });
+  const b = generate(fp, { ...baseParams, density: 30000, lockedSystem: 'clifford' });
   assert.deepEqual([...a.positions.slice(0, 300)], [...b.positions.slice(0, 300)],
     'capture output must ignore lockedSystem');
   // Capture must ignore lockedSystem entirely, including an invalid value —
@@ -805,7 +816,7 @@ test('attractor live: unknown lockedSystem throws, naming the bad value and the 
   const p = { ...baseParams, density: 30000, liveVariance: true };
   assert.throws(() => generate(fp, { ...p, lockedSystem: 'not-a-system' }), (err) => {
     assert.match(err.message, /not-a-system/);
-    for (const name of ['thomas', 'halvorsen', 'aizawa', 'lorenz', 'sinemap']) {
+    for (const name of ALL_SYSTEMS) {
       assert.match(err.message, new RegExp(name));
     }
     return true;
@@ -824,8 +835,8 @@ test('attractor live: flow systems respond to timbre, not just pitch', () => {
   // nothing else on a flow path — wildness reads consonance/volVar/attackSlope,
   // jitter reads velocity, and thomas's coefficient reads only pitchMedian.
   // Before the fix these two fingerprints generate byte-identical clouds.
-  const smooth = testFingerprint({ spread: 0.10, seed: 4242 });
-  const rough = testFingerprint({ spread: 0.85, seed: 4242 });
+  const smooth = testFingerprint({ ...LOW_PITCH, spread: 0.10, seed: 4242 });
+  const rough = testFingerprint({ ...LOW_PITCH, spread: 0.85, seed: 4242 });
   // Live routing must agree, so this measures the coefficients and not the
   // routing — spread feeds roughness, which live routing does NOT read.
   assert.equal(pickSystemLive(smooth), pickSystemLive(rough), 'fixture must hold the system fixed');
@@ -839,9 +850,11 @@ test('attractor live: flow systems respond to timbre, not just pitch', () => {
     `timbre change left the flow attractor untouched (${((diff / a.length) * 100).toFixed(1)}% of coordinates moved)`);
 });
 
-test('attractor live: loudness drives size', () => {
-  const quiet = testFingerprint({ volMean: 0.1 });
-  const loud = testFingerprint({ volMean: 0.95 });
+test('attractor live: loudness does NOT change the design size', () => {
+  // Removed at the user's request: the form used to grow and shrink as they
+  // got louder (a post-validation s = 0.7 + 0.55 * volMean stretched the
+  // r95 = 1 that finalize pins). Size is manual again. Loudness still reads —
+  // through visible point count and clifford's relief — just not through size.
   const r95 = (fp) => {
     const out = generate(fp, { ...baseParams, density: 30000, liveVariance: true });
     const radii = [];
@@ -851,8 +864,14 @@ test('attractor live: loudness drives size', () => {
     radii.sort((a, b) => a - b);
     return radii[Math.floor(radii.length * 0.95)];
   };
-  assert.ok(r95(loud) > r95(quiet) * 1.25, 'loud designs should be visibly larger');
+  for (const base of [LOW_PITCH, HIGH_PITCH]) {
+    const quiet = r95(testFingerprint({ ...base, volMean: 0.1 }));
+    const loud = r95(testFingerprint({ ...base, volMean: 0.95 }));
+    assert.ok(Math.abs(loud - quiet) < 0.08 * quiet,
+      `loudness resized the design (quiet r95 ${quiet.toFixed(3)}, loud ${loud.toFixed(3)})`);
+  }
 });
+
 
 // Regression: the sound→design map must be LOCAL — consecutive windows of a
 // steady sound (tiny feature drift) may not jump to a different design.

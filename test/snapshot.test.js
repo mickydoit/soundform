@@ -21,8 +21,14 @@ export function modeChecksum(mode) {
 
 // GOLDEN values captured from the pre-form-families code. If a change to a
 // generator breaks one of these, non-live output has drifted — that is a bug.
+//
+// The attractor value was REGENERATED on 2026-08-06, deliberately and with the
+// user's explicit approval, when the system set was cut to two (halvorsen +
+// clifford) and routing moved to vocal register. The old value pinned a design
+// from `thomas`, a system that no longer exists, so it could not be preserved.
+// Every other mode is untouched and still pins its original value.
 const GOLDEN = {
-  attractor: '1621501298:1536358715',
+  attractor: '108606603:638482449',
   radial: '1167620147:542659216',
   cymatics: '-155424434:2017808997',
   oscillo: '1015603296:1361149440',

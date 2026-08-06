@@ -22,52 +22,67 @@ const complexify = (v, lo, hi, cx, toward) => {
 };
 
 const SYSTEMS = {
-  thomas: {
-    dt: 0.06, flow: true,
-    coeffs: fp => ({ b: lerp(0.10, 0.165, 1 - fp.pitchMedian) }),
-    // bx/by/bz are live-only. They are undefined on the capture path, where all
-    // three fall back to the single symmetric b — byte-identical to before.
-    step: (p, c) => [
-      Math.sin(p[1]) - (c.bx ?? c.b) * p[0],
-      Math.sin(p[2]) - (c.by ?? c.b) * p[1],
-      Math.sin(p[0]) - (c.bz ?? c.b) * p[2]],
-    // Thomas has a single damping term, so pitch alone barely moves it. Equal
-    // damping on all three axes is the *symmetric special case*; mild per-axis
-    // asymmetry re-lobes the knot. Asymmetry stays gentle because thomas already
-    // sits close to the occupancy check's 400-cell floor, and a strong split
-    // tips it into a limit cycle (b also stays under the b ≈ 0.208 boundary).
-    //
-    // I3: thomas was the worst system on the branch — consecutive-regeneration
-    // cell occupancy Jaccard as low as 0.013 (250k, production density), with
-    // capture-path fallbacks (generate()'s retry loop exhausting and handing
-    // back a completely different, non-thomas design — see the fallback note
-    // at generate()). Same defect shape as aizawa's I2: the ax[4]-driven base
-    // for `b` spanned the SAME full 0.168..0.098 range complexify() targets,
-    // so ordinary per-tick fingerprint sampling noise on ax[4] could already
-    // put `b` near the range's edge before complexify() pushed it further,
-    // tipping it across a regime boundary and into repeated rejects. Narrowing
-    // the ax-driven base to 0.148..0.118 (a 3.5x tighter band) while leaving
-    // complexify()'s own lo/hi targets at the original wide 0.168/0.098 — same
-    // fix shape as aizawa's `d` — keeps the complexity push exactly as strong
-    // (a fixed fraction of the wide range) while per-tick drift on `b` no
-    // longer approaches the boundary on its own. Measured after (5-voice set:
-    // the original 3 M7 fixtures + the 2 that exposed this, 250k, one
-    // consistent live-session config): min 0.622 (was 0.013), 0/110 steps
-    // under 0.50 (was 4/110), 3/110 under 0.70 (was 15/110, and matches the
-    // pre-existing dips already present in the original 3 fixtures before
-    // this branch), 0 capture-path fallbacks across 115 live calls (was 3).
-    // complexify()'s own worst-voice separation (six SPEAKERS profiles)
-    // improved too: 0.760 (was ~0.803), comfortably under the system's 0.85
-    // ceiling — narrowing the noise-driven base left more of complexify()'s
-    // push undiluted by drift, rather than trading the lever away.
-    liveCoeffs: (c, ax, cx = 0.5) => {
-      const b = complexify(lerp(0.148, 0.118, ax[4]), 0.168, 0.098, cx, 'hi');
-      c.b = b;
-      c.bx = b * lerp(0.93, 1.07, ax[1]);
-      c.by = b * lerp(0.93, 1.07, ax[2]);
-      c.bz = b * lerp(0.93, 1.07, ax[3]);
+  // Clifford — the classic 2D strange attractor, given depth from the sound.
+  //
+  //   x' = sin(a·y) + c·cos(a·x)
+  //   y' = sin(b·x) + d·cos(b·y)
+  //
+  // It has no z of its own. Rather than leave it a flat sheet (correct only in
+  // the default top-down view, and edge-on the moment you drag to rotate), z is
+  // a relief lifted off the folded surface: an audio-driven amplitude over a
+  // ripple whose frequency comes from the sound too. The XY silhouette stays
+  // exactly Clifford; the relief just gives it a form from other angles.
+  //
+  // Discrete map, so no dt — step() returns the next point outright.
+  clifford: {
+    flow: false,
+    // a and b are FIXED, and that is a measured decision, not laziness.
+    // Clifford's (a,b) plane is pocked with degenerate slivers — 18 of 49
+    // sampled combinations collapse to under 60 occupied cells, and even a
+    // narrow sweep of `a` at fixed b hits dead values at -1.90, -1.65 and
+    // -1.45 with healthy plateaus between them. Driving a or b continuously
+    // from a voice would cross those slivers constantly, and every crossing is
+    // a rejected design that falls back and discards live variance. a = -1.80
+    // sits mid-plateau (neighbours at -1.85/-1.75 score 178/173), so the sound
+    // drives the coefficients that ARE safe across their whole box instead:
+    // c in 0.8..1.4 and d in 0.7..1.3 measured 163-217 cells with no dead
+    // spots, and relief/rk only touch z so they cannot destabilise the map.
+    coeffs: fp => ({
+      a: -1.80, b: 1.85,
+      c: lerp(0.85, 1.35, fp.centroid ?? 0.5),
+      d: lerp(0.75, 1.25, fp.pitchMedian),
+      relief: lerp(0.20, 0.45, fp.volMean ?? 0.5),
+      rk: lerp(1.2, 2.2, fp.spread ?? 0.5),
+    }),
+    step: (p, c) => {
+      const x = Math.sin(c.a * p[1]) + c.c * Math.cos(c.a * p[0]);
+      const y = Math.sin(c.b * p[0]) + c.d * Math.cos(c.b * p[1]);
+      return [x, y, c.relief * Math.sin(c.rk * (x + y))];
     },
-    liveTarget: safe => ({ ...safe, bx: safe.b, by: safe.b, bz: safe.b }),
+    // Same split of duties the flow system uses. The AX-DRIVEN spans are
+    // deliberately narrow: clifford's caustics move fast with c and d, and the
+    // ax values carry ordinary fingerprint sampling noise, so wide ax spans
+    // made a steady voice jump (radial-profile distance 0.749 against a 0.15
+    // bar). Complexity gets its OWN wide bounds through complexify, driven by
+    // cx directly rather than multiplied against a noisy axis, so it can sweep
+    // the full validated c box without amplifying drift.
+    // Clifford reads the RAW axes, not the expanded ones. expandAxes applies a
+    // tanh with gain 3.4 to spread speech's narrow band across the full range —
+    // useful for choosing a form, but it magnifies ordinary fingerprint
+    // sampling noise by the same factor, and clifford's caustics move fast
+    // enough with c and d that the amplified noise made a steady voice jump
+    // (radial-profile distance 0.749 against a 0.15 bar). On the raw axes a
+    // small drift stays a small drift, while a genuine change of character —
+    // calm to animated is ~0.33 of an axis, not ~0.02 — still moves the form.
+    // Complexity keeps its own wide bounds through complexify, driven by cx
+    // directly, so the lever does not depend on either axis scale.
+    // `raw` mirrors `ax`'s shape: the four liveAxes channels plus raw pitchMedian.
+    liveCoeffs: (c, ax, cx = 0.5, raw = ax) => {
+      c.c = complexify(lerp(0.84, 1.36, raw[0]), 0.82, 1.38, cx, 'hi');
+      c.d = lerp(0.74, 1.26, raw[4]);
+      c.relief = complexify(lerp(0.24, 0.44, raw[2]), 0.20, 0.50, cx, 'hi');
+      c.rk = lerp(1.25, 2.15, raw[1]);
+    },
   },
   halvorsen: {
     dt: 0.012, flow: true,
@@ -111,85 +126,22 @@ const SYSTEMS = {
     // under the 0.85 ceiling and 0.15 floor) without reopening the
     // continuity regression — larger bias magnitudes (tried 0.16-0.36) hit a
     // halvorsen bifurcation and made both metrics worse, not just the second.
+    // 's ax-driven span was narrowed from [1.36, 1.92] when the system set
+    // dropped to two: ax[4] carries the widest drift of any axis (0.058 across
+    // a steady window), and with halvorsen now taking the whole low register
+    // that drift pushed one voice's consecutive-regeneration overlap to 0.532
+    // against a 0.55 floor. [1.40, 1.62] clears it while keeping pitch a
+    // visible lever within the band (the register test asserts that).
     liveCoeffs: (c, ax, cx = 0.5) => {
-      c.a = lerp(1.36, 1.92, ax[4]);
+      c.a = lerp(1.40, 1.62, ax[4]);
       const k = lerp(3.88, 4.12, ax[1]);
       const spread = 0.04;
-      const bias = (cx - 0.5) * 0.08;              // -0.04 .. 0.04
+      const bias = (cx - 0.5) * 0.06;   // retuned with the narrowed `a`: 0.08 crossed a bifurcation              // -0.04 .. 0.04
       c.kx = k * (1 + spread * (ax[1] * 2 - 1) + bias);
       c.ky = k * (1 + spread * (ax[2] * 2 - 1) - bias);
       c.kz = k * (1 + spread * (ax[3] * 2 - 1));
     },
     liveTarget: safe => ({ ...safe, kx: 4, ky: 4, kz: 4 }),
-  },
-  aizawa: {
-    dt: 0.015, flow: true,
-    coeffs: fp => ({ a: 0.95, b: 0.7, c: 0.6, d: lerp(3.0, 3.9, fp.pitchMedian), e: lerp(0.2, 0.3, fp.centroid), f: 0.1 }),
-    step: (p, c) => [
-      (p[2] - c.b) * p[0] - c.d * p[1],
-      c.d * p[0] + (p[2] - c.b) * p[1],
-      c.c + c.a * p[2] - (p[2] ** 3) / 3 - (p[0] ** 2 + p[1] ** 2) * (1 + c.e * p[2]) + c.f * p[2] * p[0] ** 3],
-    // a/b/c/f were fixed constants, so only two of six coefficients ever heard
-    // the sound. All six move now, around the classic (0.95, 0.7, 0.6, 3.5,
-    // 0.25, 0.1); f stays tight because it scales an x³ term that diverges
-    // quickly.
-    //
-    // I2: aizawa collapsed for calm low voices even with complexify() ablated
-    // to a no-op — this is pre-existing sensitivity in b/e/a/c/f, which used
-    // to span their FULL listed range on raw `ax`, not a complexity-lever
-    // defect. Measured consecutive-regeneration cell-occupancy Jaccard (250k,
-    // one voice) as low as 0.025-0.155 with two-step-wide dips. `a` in
-    // particular sits against the "a > 1 diverges" boundary, so noise in ax[2]
-    // could push it into a near-critical regime every few ticks.
-    // b/e/a/c/f are now narrow bands around the classic values (roughly
-    // ±3-6%, matching thomas/halvorsen's discipline elsewhere in this file)
-    // so per-tick fingerprint sampling noise no longer swings a coefficient
-    // across its whole range or near a bifurcation. `d` keeps a narrow
-    // ax-driven band too, but complexify() still targets the ORIGINAL wide
-    // 3.00..3.95 bounds — complexify()'s push is a fixed fraction of
-    // (bound − base) regardless of how narrow the base band is, so
-    // complexity's swing is unchanged while ax-driven drift on `d` is not.
-    // Measured after: min 0.678 (up from 0.420) on the four-voice set used
-    // for halvorsen, 0/152 steps under 0.50 (was 2/152); a wider 28-voice
-    // sweep held min 0.615, 5/392 steps under 0.70. complexify()'s own
-    // worst-voice separation is 0.811-0.875 (six SPEAKERS profiles), still
-    // under the system's 0.90 ceiling.
-    liveCoeffs: (c, ax, cx = 0.5) => {
-      c.d = complexify(lerp(3.35, 3.60, ax[4]), 3.00, 3.95, cx, 'hi');
-      c.b = lerp(0.68, 0.72, ax[0]);
-      c.e = lerp(0.235, 0.265, ax[1]);
-      c.a = lerp(0.93, 0.97, ax[2]);   // a > 1 grows the z term until it diverges
-      c.c = lerp(0.575, 0.625, ax[3]);
-      c.f = lerp(0.093, 0.107, ax[2]);
-    },
-  },
-  // Lorenz butterfly — replaces Dadras, which was unstable under plain Euler
-  // (diverged or fell into limit cycles across most of its coefficient range).
-  // Lorenz is robustly chaotic for r ≈ 28–45 and integrates cleanly at this dt.
-  lorenz: {
-    dt: 0.007, flow: true,
-    coeffs: fp => ({ s: lerp(9, 11, fp.centroid), r: lerp(29, 44, fp.pitchMedian), b: 8 / 3 + fp.spread * 0.4 }),
-    step: (p, c) => [
-      c.s * (p[1] - p[0]),
-      p[0] * (c.r - p[2]) - p[1],
-      p[0] * p[1] - c.b * p[2]],
-    liveCoeffs: (c, ax, cx = 0.5) => {
-      c.r = complexify(lerp(28.0, 46.0, ax[4]), 28.0, 46.0, cx, 'hi');
-      c.s = lerp(8.5, 12.5, ax[2]);
-      c.b = lerp(2.35, 3.25, ax[1]);
-    },
-  },
-  sinemap: {
-    flow: false, // discrete map, like the reference sine-map images
-    coeffs: (fp, rnd) => ({
-      a: lerp(1.2, 4.2, fp.contour[1]), b: lerp(1.2, 4.2, fp.contour[3]), c: lerp(1.2, 4.2, fp.contour[5]),
-      d: lerp(-1.3, 1.3, fp.centroid), e: lerp(-1.3, 1.3, fp.spread), f: lerp(-1.3, 1.3, fp.volMean),
-      g: rnd() * Math.PI * 2, h: rnd() * Math.PI * 2, i: rnd() * Math.PI * 2,
-    }),
-    step: (p, c) => [
-      Math.sin(c.a * p[1]) + c.d * Math.sin(c.b * p[2] + c.g),
-      Math.sin(c.b * p[2]) + c.e * Math.sin(c.c * p[0] + c.h),
-      Math.sin(c.c * p[0]) + c.f * Math.sin(c.a * p[1] + c.i)],
   },
 };
 
@@ -254,11 +206,12 @@ function expandAxes(axes, fp) {
 // CAPTURE-PATH routing. Harmony picks the system for a recorded take, and this
 // must not change: test/snapshot.test.js pins recorded output by checksum.
 export function pickSystem(fp) {
-  if (fp.pitchConfidence < 0.35 || fp.velocity > 0.75) return 'sinemap'; // percussive/noisy
-  if (fp.consonance > 0.55 && fp.majorLeaning) return fp.noteCount <= 3 ? 'thomas' : 'aizawa';
-  if (fp.consonance > 0.55) return 'halvorsen'; // minor
-  return 'lorenz'; // dissonant
+  // Two systems, split on vocal register. The boundary sits at pitchMedian
+  // 0.257, which is ~160 Hz on the 55 Hz–3520 Hz log scale — between a typical
+  // male and female speaking voice, so it is a split you can cross on purpose.
+  return fp.pitchMedian < REGISTER_SPLIT ? 'halvorsen' : 'clifford';
 }
+
 
 // LIVE routing. Harmony is the wrong selector for a live mic: chroma
 // triad-matching scores ordinary voiced speech as tonal (consonance 0.61–0.77
@@ -283,17 +236,17 @@ export function pickSystem(fp) {
 // so a boundary placed to separate voices leaves everything musical above it
 // lumped together. LOW/MID covers the vocal range, HIGH catches whistles and
 // the top of the singing register.
-const REGISTER_LOW = 0.38, REGISTER_HIGH = 0.80;
+const REGISTER_LOW = 0.38;        // expanded-axis boundary
+const REGISTER_SPLIT = 0.257;     // raw pitchMedian boundary, ~160 Hz
 
 export function pickSystemLive(fp) {
-  // Breathy, unvoiced or percussive input keeps the discrete sine-map web.
-  if (fp.pitchConfidence < 0.35 || fp.velocity > 0.75) return 'sinemap';
+  // Same register split as capture, measured on the expanded pitch axis.
+  // REGISTER_LOW (0.38) is where pitchMedian 0.257 lands after expandAxes, so
+  // the two paths agree on where the boundary is.
   const ax = expandAxes(liveAxes(fp), fp);
-  const calm = ax[3] < 0.5;
-  if (ax[4] < REGISTER_LOW) return calm ? 'halvorsen' : 'lorenz';
-  if (ax[4] < REGISTER_HIGH) return calm ? 'aizawa' : 'thomas';
-  return calm ? 'thomas' : 'lorenz';   // six cells over four flow systems
+  return ax[4] < REGISTER_LOW ? 'halvorsen' : 'clifford';
 }
+
 
 function cloudStdDev(pos, n) {
   const m = [0, 0, 0], s = [0, 0, 0];
@@ -358,7 +311,7 @@ function validateStrands(strands) {
 // finalized/normalized coordinate range) and count distinct occupied cells.
 // A limit cycle occupies ~50-200 cells; genuine chaotic clouds occupy
 // thousands, so reject below 400.
-function occupiedCellCount(positions) {
+function occupiedCellCount(positions, planar = false) {
   const n = positions.length / 3;
   const stride = Math.max(1, Math.floor(n / 20000));
   const grid = 20;
@@ -368,13 +321,20 @@ function occupiedCellCount(positions) {
     const gx = Math.min(grid - 1, Math.max(0, Math.floor((positions[i * 3] - lo) / span * grid)));
     const gy = Math.min(grid - 1, Math.max(0, Math.floor((positions[i * 3 + 1] - lo) / span * grid)));
     const gz = Math.min(grid - 1, Math.max(0, Math.floor((positions[i * 3 + 2] - lo) / span * grid)));
-    cells.add((gx * grid + gy) * grid + gz);
+    cells.add(planar ? gx * grid + gy : (gx * grid + gy) * grid + gz);
   }
   return cells.size;
 }
 
-function validateOccupancy(out) {
-  return occupiedCellCount(out.positions) >= 400;
+// A 2D map is a SURFACE with a thin relief, so a volumetric cell count judges
+// it on the wrong axis — a perfectly healthy clifford scores 206-290 of 8000
+// 3D cells and would be rejected outright. Measured on the XY plane instead
+// (400 cells available), healthy clifford lands at 132-217 while every
+// degenerate configuration collapses to 1-43, so 90 separates them cleanly.
+function validateOccupancy(out, sys) {
+  return sys.flow
+    ? occupiedCellCount(out.positions) >= 400
+    : occupiedCellCount(out.positions, true) >= 90;
 }
 
 export function generate(fp, params, onProgress) {
@@ -404,18 +364,15 @@ export function generate(fp, params, onProgress) {
   for (let attempt = 0; attempt < 8; attempt++) {
     const fpAdj = attempt === 0 ? fp : { ...fp, pitchMedian: (fp.pitchMedian + attempt * 0.618) % 1, contour: fp.contour.map(v => (v + attempt * 0.618) % 1) };
     const c = sys.coeffs(fpAdj, rnd);
-    if (sys.flow && arch) {
+    if (arch) {
       // Live: drive the system's OWN coefficients from the expanded character
-      // axes. This branch previously applied only the excursion multiplier
-      // below — which reads params.complexity, not the sound — so `axes` was
-      // computed and thrown away, and the sole sound→shape channel was whatever
-      // coeffs(fp) happened to read (pitchMedian, plus centroid for aizawa).
-      const safe = (sys.liveTarget ?? (s => s))({ ...c });
-      sys.liveCoeffs(c, expandAxes(axes, fp), params.complexity ?? 0.5);
+      // axes. Both systems implement liveCoeffs, so this no longer forks on
+      // sys.flow — the discrete map needs the same treatment as the flow one.
+      const safe = (sys.liveTarget ?? (t => t))({ ...c });
+      sys.liveCoeffs(c, expandAxes(axes, fp), params.complexity ?? 0.5, [...axes, fp.pitchMedian]);
       // Graceful retry: pull the live coefficients back toward the validated
       // capture-path set rather than jittering them, so a rejected design
       // degrades toward a known-good shape instead of rolling the dice again.
-      // Attempt 0 leaves the axis mapping exactly as chosen.
       if (attempt) {
         const t = attempt / 8;
         for (const key of Object.keys(c)) {
@@ -425,32 +382,14 @@ export function generate(fp, params, onProgress) {
         }
       }
     } else if (sys.flow) {
-      // Capture path, unchanged: flow systems map pitch across their full
-      // validated coefficient range in coeffs(fp), and that IS the sound→shape
-      // correspondence for a recorded take.
+      // Capture path, unchanged for the flow system: coeffs(fp) maps pitch
+      // across its validated range, and that IS the sound→shape correspondence
+      // for a recorded take.
       for (const key of Object.keys(c)) {
         if (typeof c[key] === 'number' && key !== 'e') {
           c[key] = c[key] * lerp(0.92, 1.08, ((excursion * 7 + attempt) % 1));
         }
       }
-    } else if (arch) {
-      // Discrete map, live: fold coefficients blend the pitch contour with
-      // smooth timbre axes (percussive input has a flat contour, which
-      // otherwise pins a,b,c to one web); phases come from the axes, not the
-      // seed (the seed re-hashes on any window drift → web teleports); and
-      // the cross-couplings get a strong strictly-positive range — near-zero
-      // d/e/f (centroid or volume ≈ 0.5) decouples the map into a collapsed
-      // 1D chain that occupancy then rejects.
-      c.a = lerp(1.2, 4.2, 0.5 * fp.contour[1] + 0.5 * axes[0]);
-      c.b = lerp(1.2, 4.2, 0.5 * fp.contour[3] + 0.5 * axes[1]);
-      c.c = lerp(1.2, 4.2, 0.5 * fp.contour[5] + 0.5 * axes[3]);
-      c.g = axes[0] * Math.PI * 2;
-      c.h = axes[1] * Math.PI * 2;
-      c.i = axes[3] * Math.PI * 2;
-      const hi = 0.9 + 0.4 * arch.wildness;
-      c.d = lerp(0.4, hi, axes[0]);
-      c.e = lerp(0.4, hi, axes[1]);
-      c.f = lerp(0.4, hi, axes[3]);
     }
 
     const positions = new Float32Array(N * 3);
@@ -498,15 +437,12 @@ export function generate(fp, params, onProgress) {
     const out = finalize(positions, attr, strands, params);
     if (!validateFinalized(out)) continue; // fat-tail collapse → retry
     if (!validateStrands(out.strands)) continue; // strand-phase escape → retry
-    if (!validateOccupancy(out)) continue; // periodic collapse (limit cycle) → retry
-    if (arch) {
-      // Loudness → physical size: finalize pins r95 = 1 for every design, so
-      // scale after validation (0.7 whisper .. 1.25 loud; maxAbs stays ≤ 2.25,
-      // inside the 2.5 render contract).
-      const s = 0.7 + 0.55 * (fp.volMean ?? 0.5);
-      for (let i = 0; i < out.positions.length; i++) out.positions[i] *= s;
-      for (const st of out.strands) for (let i = 0; i < st.length; i++) st[i] *= s;
-    }
+    if (!validateOccupancy(out, sys)) continue; // periodic collapse (limit cycle) → retry
+    // NOTE: loudness no longer scales the design's physical size. finalize()
+    // pins r95 = 1, and a post-validation `s = 0.7 + 0.55 * volMean` used to
+    // stretch that — so the form grew and shrank as you got louder. Removed at
+    // the user's request; the Scale slider is manual again, and loudness reads
+    // through clifford's relief and the density/exposure layers instead.
     return out;
   }
   if (arch) return generate(fp, { ...params, liveVariance: false }, onProgress);
@@ -527,31 +463,46 @@ export function createOrbitBrush(fp, params = {}) {
   const rnd = mulberry32(fp.seed);
   const complexity = params.complexity ?? 0.5;
 
-  const coeffsFor = (f) => {
-    const c = sys.coeffs(f, rnd);
-    const axes = liveAxes(f);
-    if (sys.flow) {
-      // Same dead-axes defect as the batch path: this used to apply only a
-      // complexity-derived multiplier, so steering a flow-system brush with a
-      // new fingerprint barely moved it.
-      sys.liveCoeffs(c, expandAxes(axes, f), complexity);
-    } else {
-      const arch = formArchetype(f);
-      c.a = lerp(1.2, 4.2, 0.5 * f.contour[1] + 0.5 * axes[0]);
-      c.b = lerp(1.2, 4.2, 0.5 * f.contour[3] + 0.5 * axes[1]);
-      c.c = lerp(1.2, 4.2, 0.5 * f.contour[5] + 0.5 * axes[3]);
-      c.g = axes[0] * Math.PI * 2;
-      c.h = axes[1] * Math.PI * 2;
-      c.i = axes[3] * Math.PI * 2;
-      const hi = 0.9 + 0.4 * arch.wildness;
-      c.d = lerp(0.4, hi, axes[0]);
-      c.e = lerp(0.4, hi, axes[1]);
-      c.f = lerp(0.4, hi, axes[3]);
-    }
+  const coeffsFor = (f, nudge = 0) => {
+    const adj = nudge ? { ...f, pitchMedian: (f.pitchMedian + nudge * 0.618) % 1 } : f;
+    const c = sys.coeffs(adj, rnd);
+    const axes = liveAxes(adj);
+    // Both systems implement liveCoeffs — the flow one and the discrete map —
+    // so this no longer forks. (It used to fall through to a sinemap-specific
+    // branch, which silently overwrote the discrete map's coefficients with
+    // values from a system that no longer exists.)
+    sys.liveCoeffs(c, expandAxes(axes, adj), complexity, [...axes, adj.pitchMedian]);
     return c;
   };
 
-  let c = coeffsFor(fp);
+  // Does this coefficient set stay finite? generate() gets to validate a whole
+  // cloud and retry up to 8 times; a streaming brush has no such luxury, and
+  // without this check halvorsen streamed 100% non-finite points for every
+  // low-register fingerprint — a completely blank Paint canvas, silently.
+  // (Pre-existing: generate() only ever looked stable there because its retry
+  // loop quietly landed on a different coefficient set.)
+  // Must cover at least the brush's own 3000 warmup + 2000 probe steps: a
+  // coefficient set can survive a short probe and diverge later, which is
+  // exactly what a shorter check let through.
+  const survives = (cand) => {
+    let q = [0.1, 0.1, 0.1];
+    for (let i = 0; i < 5600; i++) {
+      const d = sys.step(q, cand);
+      q = sys.flow ? [q[0] + d[0] * sys.dt, q[1] + d[1] * sys.dt, q[2] + d[2] * sys.dt] : d;
+      if (!Number.isFinite(q[0]) || !Number.isFinite(q[1]) || !Number.isFinite(q[2])) return false;
+      if (Math.abs(q[0]) > 1e4 || Math.abs(q[1]) > 1e4 || Math.abs(q[2]) > 1e4) return false;
+    }
+    return true;
+  };
+  const stableCoeffs = (f) => {
+    for (let n = 0; n < 8; n++) {
+      const cand = coeffsFor(f, n);
+      if (survives(cand)) return cand;
+    }
+    return sys.coeffs(f, rnd);   // validated capture-path values as the floor
+  };
+
+  let c = stableCoeffs(fp);
   let cTarget = { ...c };
   let p = [rnd() - 0.5, rnd() - 0.5, rnd() - 0.5];
   const stepOnce = () => {
@@ -580,7 +531,7 @@ export function createOrbitBrush(fp, params = {}) {
     p = [rnd() - 0.5, rnd() - 0.5, rnd() - 0.5];
     const nudged = { ...fp, pitchMedian: (fp.pitchMedian + 0.618 * n) % 1,
                      contour: fp.contour.map(v => (v + 0.618 * n) % 1) };
-    cTarget = coeffsFor(nudged);
+    cTarget = stableCoeffs(nudged);
     for (let i = 0; i < 500; i++) stepOnce(); // settle back onto an attractor
   };
   let joltCount = 0;
@@ -588,7 +539,7 @@ export function createOrbitBrush(fp, params = {}) {
   return {
     system: name,
 
-    steer(newFp) { cTarget = coeffsFor(newFp); },
+    steer(newFp) { cTarget = stableCoeffs(newFp); },
 
     next(k, dt) {
       // coefficient glide toward the steer target (τ = 3s)

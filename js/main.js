@@ -56,8 +56,8 @@ const params = {
 
 // Sliders the voice drives while live. Touching one hands it back to the user
 // for the rest of the session; the rest keep tracking. Clear resets all.
-const AUTO_SLIDERS = { complexity: 'sl-complexity', twist: 'sl-twist', scale: 'sl-scale' };
-const autoOwned = { complexity: true, twist: true, scale: true };
+const AUTO_SLIDERS = { complexity: 'sl-complexity', twist: 'sl-twist' };
+const autoOwned = { complexity: true, twist: true };
 let lastAutoPaint = 0;
 
 let statusEl, vuFill, vuWrap, clearBtn, submitBtn;

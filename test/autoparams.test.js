@@ -48,10 +48,10 @@ test('AutoParams: each parameter follows its own feature', () => {
   };
   const dark = settle({ ...FX, brightness: 0 }), bright = settle({ ...FX, brightness: 1 });
   assert.ok(bright.complexity > dark.complexity, 'brightness must raise complexity');
-  assert.equal(bright.scale.toFixed(4), dark.scale.toFixed(4), 'brightness must not move scale');
+  assert.equal(bright.twist.toFixed(4), dark.twist.toFixed(4), 'brightness must not move twist');
 
-  const calm = settle({ ...FX, energy: 0 }), big = settle({ ...FX, energy: 1 });
-  assert.ok(big.scale > calm.scale, 'energy must raise scale');
+  // `scale` is deliberately absent: voice-driven resizing was removed.
+  assert.ok(!('scale' in bright), 'scale must not be voice-driven');
 
   const quiet = settle({ ...FX, loudness: 0 }), loud = settle({ ...FX, loudness: 1 });
   assert.ok(loud.visibleFraction > quiet.visibleFraction, 'loudness must raise visible fraction');

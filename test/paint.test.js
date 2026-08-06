@@ -54,8 +54,12 @@ test('orbit brush: emits k bounded normalized points, deterministic', () => {
   for (const v of ca.attr) assert.ok(v >= 0 && v <= 1);
 });
 
-test('orbit brush: consecutive chunks are continuous (a single stroke)', () => {
-  const brush = createOrbitBrush(testFingerprint());
+test('orbit brush: consecutive chunks continue the same path (flow system)', () => {
+  // Meaningful only for the continuous-flow system: halvorsen integrates an
+  // ODE, so successive points are neighbours and a chunk boundary must not
+  // teleport. Low register routes there.
+  const brush = createOrbitBrush(testFingerprint({ pitchMedian: 0.12 }));
+  assert.equal(brush.system, 'halvorsen');
   brush.next(2000, 1 / 30);
   const c1 = brush.next(500, 1 / 30);
   const c2 = brush.next(500, 1 / 30);
@@ -65,6 +69,31 @@ test('orbit brush: consecutive chunks are continuous (a single stroke)', () => {
     c2.positions[2] - c1.positions[497 * 3 + 2]);
   assert.ok(gap < 0.5, `chunks continue the same path (gap ${gap})`);
 });
+
+test('orbit brush: a discrete map jumps no more at a chunk boundary than within one', () => {
+  // clifford is a MAP, not a flow — consecutive points land all over the
+  // attractor by construction, so "one continuous stroke" is not a property it
+  // has. What must hold is that the chunk boundary is no worse than a typical
+  // step: the brush must not reset or teleport between calls.
+  const brush = createOrbitBrush(testFingerprint({ pitchMedian: 0.6 }));
+  assert.equal(brush.system, 'clifford');
+  brush.next(2000, 1 / 30);
+  const c1 = brush.next(500, 1 / 30);
+  const c2 = brush.next(500, 1 / 30);
+  const stepAt = (arr, i) => Math.hypot(
+    arr.positions[(i + 1) * 3] - arr.positions[i * 3],
+    arr.positions[(i + 1) * 3 + 1] - arr.positions[i * 3 + 1],
+    arr.positions[(i + 1) * 3 + 2] - arr.positions[i * 3 + 2]);
+  let within = 0;
+  for (let i = 100; i < 400; i++) within += stepAt(c1, i) / 300;
+  const boundary = Math.hypot(
+    c2.positions[0] - c1.positions[499 * 3],
+    c2.positions[1] - c1.positions[499 * 3 + 1],
+    c2.positions[2] - c1.positions[499 * 3 + 2]);
+  assert.ok(boundary < within * 3,
+    `chunk boundary jumped ${boundary.toFixed(3)} vs a typical step of ${within.toFixed(3)}`);
+});
+
 
 test('orbit brush: steer bends the path without teleporting', () => {
   const steered = createOrbitBrush(testFingerprint());
@@ -83,9 +112,9 @@ test('orbit brush: steer bends the path without teleporting', () => {
   assert.ok(dLate > d0, `steering diverges over time (${d0.toFixed(1)} → ${dLate.toFixed(1)})`);
 });
 
-test('orbit brush: works for the discrete map too (speech routing)', () => {
-  const brush = createOrbitBrush(testFingerprint({ pitchConfidence: 0.2 }));
-  assert.equal(brush.system, 'sinemap');
+test('orbit brush: works for the discrete map too (high register -> clifford)', () => {
+  const brush = createOrbitBrush(testFingerprint({ pitchMedian: 0.6 }));
+  assert.equal(brush.system, 'clifford');
   const c = brush.next(2000, 1 / 30);
   let maxAbs = 0;
   for (const v of c.positions) maxAbs = Math.max(maxAbs, Math.abs(v));
