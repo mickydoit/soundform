@@ -422,8 +422,19 @@ export class DensityRenderer {
     this.points = new THREE.Points(geo, mat);
     this.points.frustumCulled = false;
     this.group.add(this.points);
+    // The new cloud must open at the SAME visible fraction as the one it is
+    // replacing — otherwise the draw range defaults to the full buffer (a
+    // volume jump the instant the fade starts) and uPeak is estimated from
+    // the full count while the outgoing cloud's peak was estimated from its
+    // visible count, so the fade lerps between two differently-scaled
+    // estimates (_loop's fade branch overwrites uPeak every frame between
+    // them) and _disposeFading then snaps to the mismatched value — together
+    // a brightness ripple every crossfade whenever visibleFraction < 1.
+    const total = positions.length / 3;
+    const frac = Math.max(0, Math.min(1, this._visibleFraction ?? 1));
+    const n = Math.min(total, Math.max(1, Math.round(total * frac)));
+    geo.setDrawRange(0, n);
     this._peakFrom = this.toneMat.uniforms.uPeak.value;
-    const n = positions.length / 3;
     const [w, h] = this._size();
     this._peakTo = Math.max(8, (n / (w * h)) * 550);
     this._dirty = true;

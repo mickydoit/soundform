@@ -741,7 +741,7 @@ test('attractor live: speech spreads across the system space', () => {
 // different systems only 0.10-0.39), so overlap is a reliable proxy for
 // "landed on the same system" without requiring byte-identical output from
 // two different fingerprints.
-function cellsOf(out) {
+export function cellsOf(out) {
   const s = new Set(); const n = out.positions.length / 3;
   for (let i = 0; i < n; i++) {
     const q = (d) => Math.min(19, Math.max(0, Math.floor((out.positions[i * 3 + d] + 1.3) / 2.6 * 20)));
@@ -749,7 +749,7 @@ function cellsOf(out) {
   }
   return s;
 }
-function jaccard(a, b) {
+export function jaccard(a, b) {
   let inter = 0; for (const v of a) if (b.has(v)) inter++;
   return inter / (a.size + b.size - inter);
 }

@@ -179,6 +179,15 @@ export class LiveConductor {
     this.forceNext = true;
   }
 
+  // Spec: system lock is "cleared on Clear and on mode switch". A generator
+  // mode change (attractor/cymatics/…) is exactly such a switch, but it only
+  // ever calls forceMorph() — the same regeneration path a settings tweak
+  // uses — so without this the locked system survived a mode change and a
+  // user who disliked their locked form had no escape short of Clear.
+  resetLock() {
+    this.lockedSystem = null;
+  }
+
   setGrowthMode(mode) {
     this.growthMode = mode;
     this.growGen++;
@@ -195,8 +204,12 @@ export class LiveConductor {
     const st = this.paint;
 
     // Drain a queued splice a chunk at a time so no single frame uploads
-    // megabytes. Always stays ahead of the reveal: `next` only ever moves
-    // forward, and the reveal cannot pass it because it is capped by revealTotal.
+    // megabytes. Always stays ahead of the reveal by a comfortable margin:
+    // the reveal (`st.count`, advanced below) can grow by at most
+    // BrushPace.pointsThisFrame per tick — capped at dt * 40_000, so ≤4,000
+    // points at the 0.1s dt clamp — while this drain advances `q.next` by up
+    // to PAINT_SPLICE_CHUNK (40_000) per tick, a 10x margin. (revealTotal is
+    // the full new total as of splice time, not a bound on `q.next`.)
     if (st.pending) {
       const q = st.pending;
       const end = Math.min(q.total, q.next + PAINT_SPLICE_CHUNK);
@@ -405,8 +418,22 @@ export class LiveConductor {
     const morphGen = this.growGen;
     const p = this.getParams();
     const a = this.auto.value;
-    this.generate(fp, { mode: p.mode, density: p.liveDensity, complexity: a.complexity,
-                        symmetry: p.symmetry, twist: a.twist, strandCount: 8,
+    // A parameter the user has taken manual ownership of (main.js's
+    // autoOwned[key] === false) must use their value, not the voice-driven
+    // glide: this.auto keeps stepping every tick regardless of ownership (it
+    // still needs to for visibleFraction and the UI slider readout), so
+    // reading a.* unconditionally here silently overrode a dragged Twist or
+    // Complexity slider with the auto value on every single regeneration.
+    // p.complexity/p.twist already hold the right value in both cases —
+    // paintAutoSliders keeps them synced to the auto glide only while owned,
+    // and manual input writes them directly and stops syncing — so honouring
+    // ownership just means picking p.* over a.* for an owned key.
+    const owned = p.autoOwned || {};
+    this.generate(fp, { mode: p.mode, density: p.liveDensity,
+                        complexity: owned.complexity === false ? p.complexity : a.complexity,
+                        symmetry: p.symmetry,
+                        twist: owned.twist === false ? p.twist : a.twist,
+                        strandCount: 8,
                         cymStyle: p.cymStyle, liveVariance: true,
                         lockedSystem: this._lockSystem(fp) })
       .then((out) => {

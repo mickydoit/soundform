@@ -4,6 +4,7 @@ import { Envelope, KickDetector, trimWindow, fingerprintDelta,
          MORPH_THRESHOLD, MORPH_CHECK_INTERVAL, MORPH_CROSSFADE_SEC,
          MODULATE_CROSSFADE_SEC, MODULATE_INTERVAL,
          recencyWeights } from '../js/live.js';
+import { generate as attractorGenerate } from '../js/generators/attractor.js';
 
 test('Envelope rises fast (attack) and falls slow (release)', () => {
   const e = new Envelope(0.05, 0.5);
@@ -578,6 +579,92 @@ test('conductor releases the lock on clear / growth-mode switch', () => {
   assert.equal(conductor.lockedSystem, null, 'switching mode must release the lock');
 });
 
+// I4: spec says the system lock is "cleared on Clear and on mode switch", but
+// a generator-mode change (attractor/cymatics/…) only ever called
+// forceMorph() — same as a settings tweak — so the lock survived a mode
+// switch and a listener who disliked their locked form had no escape short
+// of Clear. main.js's mode-button handler now also calls resetLock(); this
+// covers the conductor-side half of that fix (main.js's DOM wiring can't be
+// unit-tested here — it has no non-browser entry point).
+test('conductor.resetLock releases the system lock without touching growth mode', async () => {
+  const { conductor } = harness();
+  for (let i = 0; i < 40; i++) conductor.tick(i / 60);
+  await settle();
+  assert.ok(conductor.lockedSystem, 'session should have locked a system by now');
+  const modeBefore = conductor.growthMode;
+  conductor.resetLock();
+  assert.equal(conductor.lockedSystem, null, 'resetLock must clear the lock');
+  assert.equal(conductor.growthMode, modeBefore,
+    'resetLock must not itself touch growth mode — a mode-button click sets params.mode separately');
+  // The next generation must pick a fresh system from the CURRENT sound, not
+  // silently re-adopt the old one from stale state. Mirrors main.js's actual
+  // mode-button handler, which pairs resetLock() with forceMorph() — the
+  // sound hasn't changed here, so without forceMorph the debounce would
+  // never fire and this would hang forever waiting for a "real" change.
+  // forceMorph() only affects the `due` check, not MORPH_MIN_INTERVAL's
+  // (1.5s) own gate on `allowed`, so tick well past that gap too.
+  conductor.forceMorph();
+  for (let i = 40; i < 300; i++) conductor.tick(i / 60);
+  await settle();
+  assert.ok(conductor.lockedSystem, 'a system must be re-picked after the lock is released');
+});
+
+// I3: the morph-generate call read complexity/twist straight off the
+// voice-driven AutoParams glide (this.auto.value), bypassing params
+// entirely — so dragging Twist or Complexity in live morph mode changed the
+// slider and visibly did nothing, forever (main.js's autoOwned only stopped
+// the SLIDER being overwritten; the conductor never read the user's value).
+// main.js now exposes autoOwned via getParams(), and the conductor must use
+// p.complexity/p.twist — not a.complexity/a.twist — for any key the user has
+// taken manual ownership of.
+test('conductor honours manual ownership of complexity/twist, ignoring the auto glide', async () => {
+  const gens = [];
+  // A bright, rough voice pulls AutoParams' complexity/twist targets well
+  // away from the manual values below, so this only passes for the right
+  // reason (see the sanity check at the end).
+  const frame = { current: mkFrame({ pitchHz: 900, centroid: 0.8, spread: 0.7, flux: 0.02 }) };
+  const { conductor } = harness({
+    frame,
+    generate: async (fp, p) => { gens.push({ complexity: p.complexity, twist: p.twist }); return { positions: new Float32Array(3), attr: new Float32Array(1), strands: [] }; },
+    getParams: () => ({ mode: 'attractor', complexity: 0.2, symmetry: 1, twist: -0.6,
+                        cymStyle: 'auto', liveDensity: 1000, exposure: 30, scale: 1, grain: 1,
+                        autoOwned: { complexity: false, twist: false } }),
+  });
+  for (let i = 0; i < 60 * 8; i++) { conductor.tick(i / 60); await settle(); }
+  assert.ok(gens.length >= 2, `expected several generations, got ${gens.length}`);
+  for (const g of gens) {
+    assert.equal(g.complexity, 0.2, 'manual complexity must reach generate(), not the auto-glided value');
+    assert.equal(g.twist, -0.6, 'manual twist must reach generate(), not the auto-glided value');
+  }
+  // If auto and manual coincidentally matched, the assertions above would
+  // pass vacuously on the very regression this test targets. Confirm the
+  // internal glide actually moved away from the manual values.
+  assert.notEqual(conductor.auto.value.complexity, 0.2,
+    'fixture must exercise a real glide away from the manual complexity value');
+  assert.notEqual(conductor.auto.value.twist, -0.6,
+    'fixture must exercise a real glide away from the manual twist value');
+});
+
+// Ownership can be per-key: complexity released back to auto while twist
+// stays manual (or vice versa) must not fall back to all-or-nothing.
+test('conductor honours per-key ownership: one released, one still manual', async () => {
+  const gens = [];
+  const frame = { current: mkFrame({ pitchHz: 900, centroid: 0.8, spread: 0.7, flux: 0.02 }) };
+  const { conductor } = harness({
+    frame,
+    generate: async (fp, p) => { gens.push({ complexity: p.complexity, twist: p.twist }); return { positions: new Float32Array(3), attr: new Float32Array(1), strands: [] }; },
+    getParams: () => ({ mode: 'attractor', complexity: 0.2, symmetry: 1, twist: -0.6,
+                        cymStyle: 'auto', liveDensity: 1000, exposure: 30, scale: 1, grain: 1,
+                        autoOwned: { complexity: true, twist: false } }),
+  });
+  for (let i = 0; i < 60 * 8; i++) { conductor.tick(i / 60); await settle(); }
+  assert.ok(gens.length >= 2, `expected several generations, got ${gens.length}`);
+  for (const g of gens) assert.equal(g.twist, -0.6, 'manual twist must reach generate() while complexity stays auto-owned');
+  const cs = gens.map(g => g.complexity);
+  assert.ok(Math.max(...cs) - Math.min(...cs) > 0.01 || cs[0] !== 0.2,
+    'complexity should track the auto glide, not the (unrelated) manual value, once released');
+});
+
 // Paint mode with the default mode: 'attractor' never calls conductor.generate
 // at all — createOrbitBrush picks its own system independently. The lock must
 // still be recorded (Task 6 depends on it existing), and it must agree with
@@ -623,6 +710,150 @@ test('live modulation deforms continuously instead of swapping designs', async (
   const cs = gens.map(g => g.complexity);
   assert.ok(Math.max(...cs) - Math.min(...cs) > 0.05, 'complexity never moved — auto params not reaching generate');
 });
+
+// M7 — the spec's headline regression test: "Per-step continuity: consecutive
+// regenerations stay above ~0.85 cell overlap. This is the direct regression
+// test for 'morphs rather than chops'." The test above shares this test's
+// name-ish territory but only ever checks that p.complexity moves by < 0.2 —
+// it never generates a real cloud, so it stayed green through the C1
+// regression (halvorsen's widened `spread` term multiplying fingerprint
+// drift 3.5-8.5x). This test simulates a live session end-to-end (rolling
+// window → fingerprint every MODULATE_INTERVAL → glided AutoParams →
+// generate() with lockedSystem) through the REAL LiveConductor and the REAL
+// attractor generator, and measures the same cell-occupancy Jaccard metric
+// test/generators.test.js uses elsewhere in this suite, at PRODUCTION
+// density (250k) — 30k is dominated by sampling noise (median 0.73-0.82;
+// minima as low as 0.04) while 250k is the density that actually separates a
+// real regression from noise (median 0.83-0.91).
+//
+// Thresholds are set from what the fixed code measures today (see the
+// halvorsen/aizawa liveCoeffs comments in js/generators/attractor.js for the
+// full numbers), with margin, but tight enough to fail on a regression:
+// verified by temporarily reintroducing C1's halvorsen
+// `spread = 0.14 + 0.20 * cx` (drops that system's min to 0.380, <0.50 count
+// to 2) and separately I2's un-narrowed aizawa coefficient ranges (drops
+// that system's min to 0.420, <0.50 count to 2) — both fail min >= 0.55 and
+// below50 === 0 below, then reverted.
+
+// Mirrors test/generators.test.js's cellsOf/jaccard (same 20³ grid over
+// [-1.3, 1.3]). Not imported directly: `node --test test/*.test.js` runs
+// each matched file as its own test-runner process, and importing another
+// *.test.js file would re-register and re-run its tests inside this one.
+function cellsOf250k(out) {
+  const s = new Set(); const n = out.positions.length / 3;
+  for (let i = 0; i < n; i++) {
+    const q = (d) => Math.min(19, Math.max(0, Math.floor((out.positions[i * 3 + d] + 1.3) / 2.6 * 20)));
+    s.add((q(0) * 20 + q(1)) * 20 + q(2));
+  }
+  return s;
+}
+function jaccard250k(a, b) {
+  let inter = 0; for (const v of a) if (b.has(v)) inter++;
+  return inter / (a.size + b.size - inter);
+}
+
+// Continuous speech stream: same per-frame model as 'one speaker talking does
+// not churn the design' above, parameterized so (f0, rate, bright) combos
+// land on each of the four flow systems via the app's real register×delivery
+// routing (pickSystemLive).
+function makeSpeechStream({ f0, jitter, voicedFrac, rate, loud, bright, seed }) {
+  let s = seed;
+  const rnd = () => (s = (s * 1664525 + 1013904223) >>> 0) / 2 ** 32;
+  return (t) => {
+    const syl = 0.5 + 0.5 * Math.sin(2 * Math.PI * rate * t);
+    const voiced = syl > (1 - voicedFrac) && rnd() > 0.12;
+    const hz = f0 * (1 + 0.25 * Math.sin(2 * Math.PI * 0.35 * t + seed)) * (1 + jitter * (rnd() - 0.5));
+    const chroma = new Float32Array(12);
+    for (let k = 0; k < 12; k++) chroma[k] = 0.25 * rnd();
+    chroma[((Math.round(12 * Math.log2(hz / 55)) % 12) + 12) % 12] = 1;
+    return {
+      pitchHz: voiced ? hz : 0,
+      pitchConf: voiced ? 0.6 + 0.3 * rnd() : 0.1 * rnd(),
+      chroma, rms: loud * (0.25 + 0.75 * syl) * (voiced ? 1 : 0.35),
+      flux: 0.002 * syl * (voiced ? 1 : 2.2) * loud,
+      centroid: bright * (voiced ? 0.75 : 1.6) * (0.85 + 0.3 * rnd()),
+      spread: 0.35 + 0.3 * (voiced ? 0.2 : 0.9) + 0.1 * rnd(),
+    };
+  };
+}
+
+// Three voices per system, picked by sweeping f0/rate/bright and bucketing
+// by which system a full session actually locks onto (verified fallback-free:
+// none of these ever exhausts the retry loop into a capture-path fallback).
+// Voices within one system's routing cell necessarily share register/delivery
+// character — that IS the app's routing (see pickSystemLive's "six cells over
+// four systems" comment) — so diversity here comes from f0/rate/bright, not
+// from spanning cells that would just route to a different system.
+const M7_VOICES = {
+  thomas: [
+    { f0: 250, rate: 3.8, bright: 0.12, jitter: 0.06, voicedFrac: 0.6, loud: 0.14, seed: 2326 },
+    { f0: 300, rate: 5.0, bright: 0.16, jitter: 0.06, voicedFrac: 0.6, loud: 0.14, seed: 2407 },
+    { f0: 220, rate: 2.2, bright: 0.26, jitter: 0.06, voicedFrac: 0.6, loud: 0.14, seed: 2284 },
+  ],
+  halvorsen: [
+    { f0: 70, rate: 3.0, bright: 0.12, jitter: 0.06, voicedFrac: 0.6, loud: 0.14, seed: 2006 },
+    { f0: 70, rate: 3.8, bright: 0.08, jitter: 0.06, voicedFrac: 0.6, loud: 0.14, seed: 2010 },
+    { f0: 85, rate: 4.5, bright: 0.08, jitter: 0.06, voicedFrac: 0.6, loud: 0.14, seed: 2050 },
+  ],
+  aizawa: [
+    { f0: 220, rate: 5.0, bright: 0.16, jitter: 0.06, voicedFrac: 0.6, loud: 0.14, seed: 2302 },
+    { f0: 300, rate: 5.5, bright: 0.16, jitter: 0.06, voicedFrac: 0.6, loud: 0.14, seed: 2412 },
+    { f0: 280, rate: 6.0, bright: 0.08, jitter: 0.06, voicedFrac: 0.6, loud: 0.14, seed: 2380 },
+  ],
+  lorenz: [
+    { f0: 100, rate: 6.0, bright: 0.26, jitter: 0.06, voicedFrac: 0.6, loud: 0.14, seed: 2104 },
+    { f0: 70,  rate: 5.0, bright: 0.20, jitter: 0.06, voicedFrac: 0.6, loud: 0.14, seed: 2023 },
+    { f0: 70,  rate: 4.5, bright: 0.16, jitter: 0.06, voicedFrac: 0.6, loud: 0.14, seed: 2017 },
+  ],
+};
+
+// Simulates one live session (6s at 60fps) for a voice through the real
+// LiveConductor tick loop, generating REAL attractor geometry at production
+// density (250k) on every regeneration, and returns the consecutive
+// cell-occupancy Jaccard for every regeneration once the system has locked.
+async function runContinuitySession(cfg, expectSystem) {
+  const stream = makeSpeechStream(cfg);
+  const frame = { current: stream(0) };
+  const overlaps = [];
+  let prevCells = null;
+  const { conductor } = harness({
+    frame,
+    generate: async (fp, p) => {
+      const out = attractorGenerate(fp, { ...p, density: 250000 });
+      const cells = cellsOf250k(out);
+      if (prevCells) overlaps.push(jaccard250k(prevCells, cells));
+      prevCells = cells;
+      return out;
+    },
+    getParams: () => ({ mode: 'attractor', complexity: 0.5, symmetry: 1, twist: 0,
+                        cymStyle: 'auto', liveDensity: 250000, exposure: 30, scale: 1, grain: 1 }),
+  });
+  const FPS = 60, DUR = 6;
+  for (let i = 0; i < FPS * DUR; i++) {
+    const t = i / FPS;
+    frame.current = stream(t);
+    conductor.tick(t);
+    await settle();
+  }
+  assert.equal(conductor.lockedSystem, expectSystem,
+    `fixture routing drifted: expected ${expectSystem}, session locked ${conductor.lockedSystem}`);
+  return overlaps;
+}
+
+for (const system of ['thomas', 'halvorsen', 'aizawa', 'lorenz']) {
+  test(`live modulation: per-step geometric continuity holds at production density — ${system}`, async () => {
+    let min = 1, below50 = 0, total = 0;
+    for (const cfg of M7_VOICES[system]) {
+      const overlaps = await runContinuitySession(cfg, system);
+      assert.ok(overlaps.length >= 10, `expected sustained modulation, got ${overlaps.length} steps`);
+      for (const v of overlaps) { min = Math.min(min, v); if (v < 0.50) below50++; total++; }
+    }
+    assert.ok(min >= 0.55,
+      `${system}: consecutive-regeneration overlap dropped to ${min.toFixed(3)} — design chopped, not morphed`);
+    assert.equal(below50, 0,
+      `${system}: ${below50}/${total} steps fell below 0.50 overlap — design chopped, not morphed`);
+  });
+}
 
 test('modulation crossfade is short enough to read as deformation', () => {
   assert.ok(MODULATE_CROSSFADE_SEC <= 0.2,

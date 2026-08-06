@@ -60,19 +60,40 @@ const SYSTEMS = {
     // diverges under Euler outside a tight band, so `a` hugs the classic 1.4.
     // `a` alone is nearly useless as a live knob anyway: it mostly changes the
     // attractor's SIZE, and finalize() pins r95 = 1, normalising that away.
-    // The visible knob is breaking the three-fold cyclic symmetry — so this
-    // range has to carry ALL of halvorsen's complexity response. A 0.02..0.06
-    // range measured 0.79-0.945 Jaccard overlap across six speaker profiles
-    // (5/6 >= 0.85, "barely changed the form" by this project's own bar).
-    // Widened to 0.14..0.34: measured worst-case (of six profiles) 0.811,
-    // with no profile below 0.15 either — see complexify()'s comment for how
-    // this range was walked without tripping the fallback-rate gate.
+    // The visible knob is breaking the three-fold cyclic symmetry.
+    //
+    // `spread` and `bias` are DELIBERATELY separate terms carrying two
+    // different jobs. `spread` is the ax-driven asymmetry gain: it is what
+    // makes consecutive live regenerations of the SAME voice look alike, so
+    // it stays at its original, narrow, pre-complexity-lever magnitude
+    // (0.04 — an effective ±4% split, matching thomas's ±7% and lorenz's
+    // analogous terms). A widened version of this exact term (0.14..0.34,
+    // tried first) made the Complexity slider register, but it also
+    // multiplied halvorsen's sensitivity to ordinary fingerprint SAMPLING
+    // NOISE by 3.5-8.5x, because that noise flows through the very same
+    // `ax` this term multiplies — consecutive-regeneration cell-occupancy
+    // Jaccard (250k points, four voices) fell to 0.038-0.375 min / 13-36 of
+    // 78 steps under 0.70, the worst of the four flow systems, exactly when
+    // this branch raised the regeneration rate to 4 Hz. Reverting `spread`
+    // alone restores it to the best of the four: min 0.518-0.852, ~2/152
+    // steps under 0.70 across a wider voice sweep.
+    //
+    // `bias` is complexity's OWN lever: a small additive skew driven by `cx`
+    // directly, not multiplied against `ax`, so it cannot amplify fingerprint
+    // drift the way the old shared term did. It only has to move kx/ky/kz
+    // apart from each other, not track the sound, so ±4% (cx: 0..1 spans
+    // ±0.04) is enough to clear the project's complexity-lever bar (worst
+    // voice overlap 0.35-0.79 across all six SPEAKERS profiles, comfortably
+    // under the 0.85 ceiling and 0.15 floor) without reopening the
+    // continuity regression — larger bias magnitudes (tried 0.16-0.36) hit a
+    // halvorsen bifurcation and made both metrics worse, not just the second.
     liveCoeffs: (c, ax, cx = 0.5) => {
       c.a = lerp(1.36, 1.92, ax[4]);
       const k = lerp(3.88, 4.12, ax[1]);
-      const spread = 0.14 + 0.20 * cx;             // 0.14 .. 0.34
-      c.kx = k * (1 + spread * (ax[1] * 2 - 1));
-      c.ky = k * (1 + spread * (ax[2] * 2 - 1));
+      const spread = 0.04;
+      const bias = (cx - 0.5) * 0.08;              // -0.04 .. 0.04
+      c.kx = k * (1 + spread * (ax[1] * 2 - 1) + bias);
+      c.ky = k * (1 + spread * (ax[2] * 2 - 1) - bias);
       c.kz = k * (1 + spread * (ax[3] * 2 - 1));
     },
     liveTarget: safe => ({ ...safe, kx: 4, ky: 4, kz: 4 }),
@@ -85,16 +106,37 @@ const SYSTEMS = {
       c.d * p[0] + (p[2] - c.b) * p[1],
       c.c + c.a * p[2] - (p[2] ** 3) / 3 - (p[0] ** 2 + p[1] ** 2) * (1 + c.e * p[2]) + c.f * p[2] * p[0] ** 3],
     // a/b/c/f were fixed constants, so only two of six coefficients ever heard
-    // the sound. All six move now, over modest ranges around the classic
-    // (0.95, 0.7, 0.6, 3.5, 0.25, 0.1); f stays tight because it scales an
-    // x³ term that diverges quickly.
+    // the sound. All six move now, around the classic (0.95, 0.7, 0.6, 3.5,
+    // 0.25, 0.1); f stays tight because it scales an x³ term that diverges
+    // quickly.
+    //
+    // I2: aizawa collapsed for calm low voices even with complexify() ablated
+    // to a no-op — this is pre-existing sensitivity in b/e/a/c/f, which used
+    // to span their FULL listed range on raw `ax`, not a complexity-lever
+    // defect. Measured consecutive-regeneration cell-occupancy Jaccard (250k,
+    // one voice) as low as 0.025-0.155 with two-step-wide dips. `a` in
+    // particular sits against the "a > 1 diverges" boundary, so noise in ax[2]
+    // could push it into a near-critical regime every few ticks.
+    // b/e/a/c/f are now narrow bands around the classic values (roughly
+    // ±3-6%, matching thomas/halvorsen's discipline elsewhere in this file)
+    // so per-tick fingerprint sampling noise no longer swings a coefficient
+    // across its whole range or near a bifurcation. `d` keeps a narrow
+    // ax-driven band too, but complexify() still targets the ORIGINAL wide
+    // 3.00..3.95 bounds — complexify()'s push is a fixed fraction of
+    // (bound − base) regardless of how narrow the base band is, so
+    // complexity's swing is unchanged while ax-driven drift on `d` is not.
+    // Measured after: min 0.678 (up from 0.420) on the four-voice set used
+    // for halvorsen, 0/152 steps under 0.50 (was 2/152); a wider 28-voice
+    // sweep held min 0.615, 5/392 steps under 0.70. complexify()'s own
+    // worst-voice separation is 0.811-0.875 (six SPEAKERS profiles), still
+    // under the system's 0.90 ceiling.
     liveCoeffs: (c, ax, cx = 0.5) => {
-      c.d = complexify(lerp(3.00, 3.95, ax[4]), 3.00, 3.95, cx, 'hi');
-      c.b = lerp(0.60, 0.80, ax[0]);
-      c.e = lerp(0.19, 0.31, ax[1]);
-      c.a = lerp(0.88, 1.00, ax[2]);   // a > 1 grows the z term until it diverges
-      c.c = lerp(0.50, 0.70, ax[3]);
-      c.f = lerp(0.07, 0.12, ax[2]);
+      c.d = complexify(lerp(3.35, 3.60, ax[4]), 3.00, 3.95, cx, 'hi');
+      c.b = lerp(0.68, 0.72, ax[0]);
+      c.e = lerp(0.235, 0.265, ax[1]);
+      c.a = lerp(0.93, 0.97, ax[2]);   // a > 1 grows the z term until it diverges
+      c.c = lerp(0.575, 0.625, ax[3]);
+      c.f = lerp(0.093, 0.107, ax[2]);
     },
   },
   // Lorenz butterfly — replaces Dadras, which was unstable under plain Euler

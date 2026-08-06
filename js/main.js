@@ -160,8 +160,20 @@ function workerGenerate(fingerprint, params) {
 async function liveGenerate(fp, p) {
   const out = await workerGenerate(fp, p);
   if (out) return out;
-  const { generate } = await import('./generators/index.js?v=47');
-  return generate(fp, p);
+  // The main-thread fallback runs the SAME generation synchronously — up to
+  // 8 live retries then 8 capture-path retries against ~250k live-density
+  // points, which the attractor path can and does exhaust ("attractor: all
+  // retries degenerate") for some fingerprints. Uncaught, that throw would
+  // reject this promise straight out of the conductor's .then() handler
+  // instead of reaching its .catch(); the conductor already treats a null
+  // result as "generation failed, retry later" (see tick()), so surface a
+  // throw the same way rather than letting it become an unhandled rejection.
+  try {
+    const { generate } = await import('./generators/index.js?v=47');
+    return generate(fp, p);
+  } catch {
+    return null;
+  }
 }
 
 function makeConductor() {
@@ -173,7 +185,12 @@ function makeConductor() {
                         symmetry: params.symmetry, twist: params.twist,
                         cymStyle: params.cymStyle, liveDensity: LIVE_DENSITY,
                         paintMaxPoints: isMobile ? 200000 : 600000,
-                        exposure: params.exposure, scale: params.scale, grain: params.grain }),
+                        exposure: params.exposure, scale: params.scale, grain: params.grain,
+                        // Manual-ownership flags: main.js owns autoOwned (the source of
+                        // truth for which sliders the voice still drives), so the
+                        // conductor needs it exposed here rather than duplicating the
+                        // bookkeeping. See LiveConductor.tick()'s morph-generate call.
+                        autoOwned: { ...autoOwned } }),
     onVu: (rms) => { if (vuFill) vuFill.style.height = Math.min(100, rms * 300) + '%'; },
   });
 }
@@ -486,8 +503,12 @@ function bindControls() {
       if (appState === 'captured') regenerate();
       else if (appState === 'live' && conductor) {
         // Paint: a new generator means a new painting — fresh canvas.
+        // setGrowthMode('paint') already clears lockedSystem for that branch;
+        // the morph branch only forces a regeneration, so it must clear the
+        // lock itself — a mode switch is a fresh canvas by spec, not just a
+        // re-render of whatever system got picked at session start.
         if (params.growth === 'paint') conductor.setGrowthMode('paint');
-        else conductor.forceMorph();
+        else { conductor.resetLock(); conductor.forceMorph(); }
       }
     });
   });
