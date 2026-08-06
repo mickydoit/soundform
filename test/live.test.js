@@ -988,3 +988,65 @@ test('crossfade duration matches the modulation gate, not raw lockedSystem', asy
   assert.ok(clog.xfadeDurations.slice(1).every((d) => d === MORPH_CROSSFADE_SEC),
     `cymatics morphs after lockedSystem is set must use MORPH_CROSSFADE_SEC, got ${clog.xfadeDurations.slice(1)}`);
 });
+
+// ── Paint pause / resume ───────────────────────────────────────────────────
+// Before this, freeze() was terminal for a painting: main.js nulled the
+// conductor, so the brush's live orbit, the BrushPace envelope, the revealed
+// count and the segment boundaries were all destroyed. The only way back to a
+// canvas was Clear, which discards the painting entirely.
+
+test('freeze marks a painted session resumable and keeps its paint state', async () => {
+  const frame = { current: mkFrame({ rms: 0.3 }) };
+  const { conductor } = harness({ frame });
+  conductor.setGrowthMode('paint');
+  for (let i = 0; i < 200; i++) { conductor.tick(i / 60); await settle(); }
+  const before = conductor.paint.count;
+  assert.ok(before > 0, 'fixture must actually paint something');
+
+  const out = conductor.freeze();
+  assert.ok(out, 'freeze must produce a capture');
+  assert.equal(out.resumable, true, 'a painted session must report itself resumable');
+  assert.ok(conductor.canResume(), 'paint state must survive freeze');
+  assert.equal(conductor.paint.count, before, 'freeze must not discard the revealed count');
+  assert.ok(conductor.paint.begun, 'freeze must not reset the canvas');
+});
+
+test('a non-painted live session is not resumable', async () => {
+  const { conductor } = harness();
+  for (let i = 0; i < 80; i++) { conductor.tick(i / 60); await settle(); }
+  const out = conductor.freeze();
+  assert.ok(out, 'freeze must produce a capture');
+  assert.ok(!out.resumable, 'morph sessions have no painting to resume');
+  assert.ok(!conductor.canResume());
+});
+
+test('resume rebuilds the paint buffer and continues from the same count', async () => {
+  const frame = { current: mkFrame({ rms: 0.3 }) };
+  const { conductor, log } = harness({ frame });
+  conductor.setGrowthMode('paint');
+  for (let i = 0; i < 200; i++) { conductor.tick(i / 60); await settle(); }
+  const frozenAt = conductor.paint.count;
+  const out = conductor.freeze();
+  assert.ok(!conductor.running, 'freeze must stop the loop');
+
+  log.paintBegun = 0; log.paintWrites.length = 0;
+  const ok = conductor.resume(out.cloud, 600000);
+  assert.equal(ok, true, 'resume must succeed on a resumable session');
+  assert.equal(log.paintBegun, 600000, 'resume must re-allocate the paint buffer');
+  assert.deepEqual(log.paintWrites[0], [0, frozenAt],
+    'resume must write the frozen cloud back from offset 0');
+  assert.equal(conductor.paint.count, frozenAt, 'resume must not rewind the painting');
+  assert.ok(conductor.running, 'resume must restart the loop');
+
+  // and it keeps painting from there
+  for (let i = 0; i < 60; i++) { conductor.tick(10 + i / 60); await settle(); }
+  assert.ok(conductor.paint.count > frozenAt, 'painting must continue past the frozen count');
+});
+
+test('resume refuses when there is nothing to resume', async () => {
+  const { conductor } = harness();
+  for (let i = 0; i < 80; i++) { conductor.tick(i / 60); await settle(); }
+  conductor.freeze();
+  assert.equal(conductor.resume({ positions: new Float32Array(3), attr: new Float32Array(1) }, 1000), false,
+    'a morph session must not be resumable as a painting');
+});

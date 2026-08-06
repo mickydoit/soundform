@@ -1,11 +1,11 @@
 // Live mode conductor: rolling feature window, instant envelopes, kick
 // detection, and structural morph scheduling. All I/O (audio, renderer,
 // worker, palette) is injected — this module is node-testable.
-import { buildFingerprint, buildTrajectory } from './features.js?v=47';
-import { liveTarget, glideStops, stopsToHex } from './livecolor.js?v=47';
-import { BrushPace, PAINT_MAX_POINTS } from './paint.js?v=47';
-import { createOrbitBrush, pickSystemLive } from './generators/attractor.js?v=47';
-import { AutoParams, featuresFromFingerprint } from './autoparams.js?v=47';
+import { buildFingerprint, buildTrajectory } from './features.js?v=48';
+import { liveTarget, glideStops, stopsToHex } from './livecolor.js?v=48';
+import { BrushPace, PAINT_MAX_POINTS } from './paint.js?v=48';
+import { createOrbitBrush, pickSystemLive } from './generators/attractor.js?v=48';
+import { AutoParams, featuresFromFingerprint } from './autoparams.js?v=48';
 
 export const WINDOW_SEC = 4;
 export const MORPH_CHECK_INTERVAL = 0.15;
@@ -484,7 +484,44 @@ export class LiveConductor {
       out.cloud.strands = st.brush
         ? sliceSegments(out.cloud.positions, st.segments, st.count)
         : clipStrandsToCount(st.strands, st.revealTotal, st.count);
+      out.resumable = true;   // paint state is intact; resume() can pick it up
     }
     return out;
+  }
+
+  // Freeze stops the loop but leaves every piece of paint state in place —
+  // the brush's live orbit and glided coefficients, the BrushPace envelope,
+  // the revealed count, and the segment boundaries. Painting can therefore
+  // CONTINUE rather than restart, which recreating the brush from the frozen
+  // fingerprint could not do: a fresh orbit re-warms from a different point
+  // and the stroke would jump.
+  //
+  // The renderer's paint buffer does not survive, though — capture calls
+  // setCloud(), which drops _paintPos. So the caller hands the frozen cloud
+  // back and we re-establish the buffer from it before restarting.
+  canResume() {
+    return this.growthMode === 'paint' && !!this.paint && this.paint.begun
+        && this.paint.count > 0 && !this.paint.done;
+  }
+
+  resume(cloud, maxPoints) {
+    if (!this.canResume()) return false;
+    const st = this.paint;
+    const n = Math.min(st.count, cloud ? cloud.attr.length : 0);
+    if (!n) return false;
+    this.renderer.beginPaint(maxPoints);
+    this.renderer.writePaintPoints(0, cloud.positions.subarray(0, n * 3), cloud.attr.subarray(0, n));
+    st.count = n;
+    this.renderer.setPaintCount(n);
+    // A splice queued when we froze refers to the pre-freeze buffer; the
+    // reveal will re-request one from the current sound if it needs it.
+    st.pending = null;
+    st.pendingGen = false;
+    // Make the conductor live again, but leave installing the animation loop
+    // to the caller — start() needs requestAnimationFrame, and keeping that
+    // out of here is what lets resume() be driven directly by tick() in tests.
+    this.running = true;
+    this._lastNow = 0;
+    return true;
   }
 }

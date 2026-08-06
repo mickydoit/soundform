@@ -1,13 +1,13 @@
-import { AudioEngine } from './audio.js?v=47';
-import { buildFingerprint, buildTrajectory } from './features.js?v=47';
-import { DensityRenderer } from './density.js?v=47';
-import { PALETTES, buildLUT, customRamp, hexToRgb } from './palettes.js?v=47';
-import { exportCanvas, exportStrandSVG, exportStrandPDF, exportTraceSVG, exportTracePDF, framePlan, exportMP4, loopsForDuration } from './exporter.js?v=47';
-import { paletteFromRamp } from './trace.js?v=47';
-import { motionParams, displacePoint } from './motion.js?v=47';
-import { LiveConductor } from './live.js?v=47';
-import { LiveRecorder, MAX_RECORD_SEC } from './recorder.js?v=47';
-import { selectRingSubset } from './strands.js?v=47';
+import { AudioEngine } from './audio.js?v=48';
+import { buildFingerprint, buildTrajectory } from './features.js?v=48';
+import { DensityRenderer } from './density.js?v=48';
+import { PALETTES, buildLUT, customRamp, hexToRgb } from './palettes.js?v=48';
+import { exportCanvas, exportStrandSVG, exportStrandPDF, exportTraceSVG, exportTracePDF, framePlan, exportMP4, loopsForDuration } from './exporter.js?v=48';
+import { paletteFromRamp } from './trace.js?v=48';
+import { motionParams, displacePoint } from './motion.js?v=48';
+import { LiveConductor } from './live.js?v=48';
+import { LiveRecorder, MAX_RECORD_SEC } from './recorder.js?v=48';
+import { selectRingSubset } from './strands.js?v=48';
 
 const audio = new AudioEngine();
 let renderer = null;
@@ -28,6 +28,13 @@ let liveWorker = null;
 let recorder = null;
 let lastTimerSec = -1;
 const LIVE_DENSITY = isMobile ? 120000 : 250000;
+const paintMaxPoints = () => (isMobile ? 200000 : 600000);
+
+// A frozen painting that can be handed back to the brush (btn-resume-paint),
+// and the painted cloud itself so a regenerating slider can never be the last
+// word on it (btn-restore-paint).
+let pausedPaint = null;
+let paintedCapture = null;
 
 const params = {
   mode: 'attractor',
@@ -123,7 +130,7 @@ function regenerate() {
     setStatus('Design created — drag to rotate · adjust sliders');
   };
   try {
-    if (!worker) worker = new Worker('js/worker.js?v=47', { type: 'module' });
+    if (!worker) worker = new Worker('js/worker.js?v=48', { type: 'module' });
     worker.onmessage = (e) => {
       if (e.data.progress !== undefined) setStatus(`Generating… ${Math.round(e.data.progress * 100)}%`);
       else if (e.data.error) setStatus(`Generation error: ${e.data.error}`);
@@ -137,7 +144,7 @@ function regenerate() {
 }
 
 async function fallbackGenerate(onResult) {
-  const { generate } = await import('./generators/index.js?v=47');
+  const { generate } = await import('./generators/index.js?v=48');
   onResult(generate(fingerprint, { ...params, strandCount: 96 }));
 }
 
@@ -146,7 +153,7 @@ async function fallbackGenerate(onResult) {
 function workerGenerate(fingerprint, params) {
   return new Promise((resolve) => {
     try {
-      if (!liveWorker) liveWorker = new Worker('js/worker.js?v=47', { type: 'module' });
+      if (!liveWorker) liveWorker = new Worker('js/worker.js?v=48', { type: 'module' });
       liveWorker.onmessage = (e) => {
         if (e.data.done) resolve(e.data);
         else if (e.data.error) resolve(null);
@@ -169,7 +176,7 @@ async function liveGenerate(fp, p) {
   // result as "generation failed, retry later" (see tick()), so surface a
   // throw the same way rather than letting it become an unhandled rejection.
   try {
-    const { generate } = await import('./generators/index.js?v=47');
+    const { generate } = await import('./generators/index.js?v=48');
     return generate(fp, p);
   } catch {
     return null;
@@ -184,7 +191,7 @@ function makeConductor() {
     getParams: () => ({ mode: params.mode, complexity: params.complexity,
                         symmetry: params.symmetry, twist: params.twist,
                         cymStyle: params.cymStyle, liveDensity: LIVE_DENSITY,
-                        paintMaxPoints: isMobile ? 200000 : 600000,
+                        paintMaxPoints: paintMaxPoints(),
                         exposure: params.exposure, scale: params.scale, grain: params.grain,
                         // Manual-ownership flags: main.js owns autoOwned (the source of
                         // truth for which sliders the voice still drives), so the
@@ -204,11 +211,17 @@ function setLiveSuspended(on) {
   document.getElementById('sel-growth').classList.toggle('live-suspended', !on);
 }
 
-function stopLive() {
+// keepConductor: freeze a PAINTED session without destroying its paint state,
+// so `btn-resume-paint` can hand the canvas back. The conductor is parked in
+// `pausedPaint` rather than nulled — recreating it would recreate the brush,
+// and a fresh orbit re-warms from a different point, so the stroke would jump
+// rather than continue.
+function stopLive({ keepConductor = false } = {}) {
   if (!conductor) return;
   if (recorder && recorder.recording) { recorder.stop(); finishRecordingUI(); showVideoReady(); }
   document.getElementById('btn-record').classList.add('hidden');
   conductor.stop();
+  if (keepConductor) pausedPaint = { conductor, max: paintMaxPoints() };
   conductor = null;
   audio.stop();
   setLiveSuspended(false);
@@ -278,6 +291,8 @@ function bindAudio() {
     } catch (e) { setStatus(`Microphone error: ${e.message}`); }
   });
 
+  document.getElementById('btn-resume-paint').addEventListener('click', resumePainting);
+  document.getElementById('btn-restore-paint').addEventListener('click', restorePainting);
   const btnLive = document.getElementById('btn-live');
   btnLive.addEventListener('click', async () => {
     try {
@@ -362,7 +377,7 @@ function bindAudio() {
       // freeze() returns null (before stopping itself) when there is too
       // little sound — the conductor is still running, so just report and stay live.
       if (!out) { setStatus('Not enough sound yet — keep going'); return; }
-      stopLive();
+      stopLive({ keepConductor: !!(out.resumable && conductor.canResume()) });
       fingerprint = out.fingerprint;
       params.palette = 'custom';
       params.background     = out.stops[0][1];
@@ -380,14 +395,21 @@ function bindAudio() {
       vuWrap.classList.add('hidden');
       applyColorParams();     // restores user exposure/scale/grain too (applyRenderParams)
       if (out.cloud) {
-        // Grown session: the design IS the history — show it as captured
-        // geometry directly (regen sliders would replace it).
+        // Painted session: the design IS the history. Keep a copy so a
+        // regenerating slider can never be the last word on it, and (when the
+        // brush still has somewhere to go) offer the canvas back.
         design = { positions: out.cloud.positions, attr: out.cloud.attr, strands: out.cloud.strands || [] };
+        paintedCapture = design;
         renderer.setMotion(motionParams(fingerprint.seed));
         if (params.flatView) renderer.setOrientation(-Math.PI / 2, 0);
         renderer.setCloud(out.cloud.positions, out.cloud.attr);
         applyRenderParams();
-        setStatus('Grown design captured — sliders that regenerate will replace it');
+        if (pausedPaint) {
+          document.getElementById('btn-resume-paint').classList.remove('hidden');
+          setStatus('Painting paused — resume to keep painting, or export it');
+        } else {
+          setStatus('Painted design captured');
+        }
       } else {
         regenerate();
       }
@@ -408,6 +430,7 @@ function bindAudio() {
 
   clearBtn.addEventListener('click', () => {
     stopLive();
+    dropPausedPaint();
     for (const k of Object.keys(autoOwned)) autoOwned[k] = true;
     endTrace(); // abort any in-flight trace so it can't download the cleared design
     if (recorder) recorder.discard();
@@ -427,8 +450,76 @@ function bindAudio() {
   });
 }
 
+// Forget any parked painting. Called by Clear and by anything that starts a
+// genuinely new session, so a stale canvas can never be resumed into new work.
+// A regenerating control is about to overwrite a painted capture with
+// procedural geometry. That used to be irreversible — reverting the slider did
+// not bring the painting back, because nothing kept a copy. Now it does.
+function offerPaintRestore() {
+  if (!paintedCapture) return;
+  document.getElementById('btn-restore-paint').classList.remove('hidden');
+  document.getElementById('btn-resume-paint').classList.add('hidden');
+}
+
+function dropPausedPaint() {
+  pausedPaint = null;
+  paintedCapture = null;
+  document.getElementById('btn-resume-paint').classList.add('hidden');
+  document.getElementById('btn-restore-paint').classList.add('hidden');
+}
+
+// Hand the canvas back to the brush that painted it. The conductor still holds
+// the live orbit, the pace envelope, the revealed count and the segment
+// boundaries; only the renderer's paint buffer was lost to setCloud() at
+// capture, so resume() rebuilds it from the frozen cloud.
+async function resumePainting() {
+  // Resume from the STASHED painting, never from `design` — a regenerating
+  // slider may have replaced `design` with procedural geometry, and rebuilding
+  // the paint buffer from that would silently graft the brush onto a cloud it
+  // never painted.
+  if (!pausedPaint || !paintedCapture) return;
+  const { conductor: paused, max } = pausedPaint;
+  try {
+    await audio.startMic();
+  } catch (e) {
+    setStatus(`Mic error: ${e.message}`);
+    return;
+  }
+  if (!paused.resume(paintedCapture, max)) {
+    setStatus('Nothing left to resume — that painting is finished');
+    dropPausedPaint();
+    return;
+  }
+  design = paintedCapture;
+  conductor = paused;
+  pausedPaint = null;
+  appState = 'live';
+  document.getElementById('btn-resume-paint').classList.add('hidden');
+  document.getElementById('btn-restore-paint').classList.add('hidden');
+  submitBtn.classList.remove('hidden');
+  clearBtn.classList.remove('hidden');
+  vuWrap.classList.remove('hidden');
+  if ('VideoEncoder' in window) document.getElementById('btn-record').classList.remove('hidden');
+  setLiveSuspended(true);
+  conductor.start();
+  setStatus('Painting resumed — keep making sound');
+}
+
+// Put the painted design back after a regenerating slider replaced it. The
+// slider values stay where the user dragged them; only the geometry reverts.
+function restorePainting() {
+  if (!paintedCapture) return;
+  design = paintedCapture;
+  renderer.setCloud(design.positions, design.attr);
+  applyRenderParams();
+  document.getElementById('btn-restore-paint').classList.add('hidden');
+  if (pausedPaint) document.getElementById('btn-resume-paint').classList.remove('hidden');
+  setStatus('Painted design restored');
+}
+
 function enterLive() {
   appState = 'live';
+  dropPausedPaint();
   frames = []; fingerprint = null; design = null;
   renderer.clear();
   ['btn-mic', 'lbl-file', 'btn-stop', 'btn-live'].forEach(id =>
@@ -500,7 +591,7 @@ function bindControls() {
       document.querySelectorAll('.btn-mode').forEach(b => b.classList.toggle('active', b === btn));
       document.getElementById('row-cym-style').style.display =
         params.mode === 'cymatics' ? '' : 'none';
-      if (appState === 'captured') regenerate();
+      if (appState === 'captured') { offerPaintRestore(); regenerate(); }
       else if (appState === 'live' && conductor) {
         // Paint: a new generator means a new painting — fresh canvas.
         // setGrowthMode('paint') already clears lockedSystem for that branch;
@@ -568,7 +659,7 @@ function bindControls() {
     });
     // regen sliders rebuild geometry only on release (change), not on drag
     if (regen) el.addEventListener('change', () => {
-      if (appState === 'captured') regenerate();
+      if (appState === 'captured') { offerPaintRestore(); regenerate(); }
       else if (appState === 'live' && conductor) conductor.forceMorph();
     });
   });
@@ -765,7 +856,7 @@ async function runTrace(kind) { // kind: 'svg' | 'pdf'
     };
     background = params.transparentBg ? null : params.background;
 
-    traceWorker = new Worker('js/traceworker.js?v=47'); // classic worker
+    traceWorker = new Worker('js/traceworker.js?v=48'); // classic worker
   } catch (err) {
     endTrace();
     setStatus(`Trace error: ${err.message}`);

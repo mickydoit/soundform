@@ -1,7 +1,7 @@
 // js/trace.js — Tracedata → editable SVG/PDF. DOM/THREE-free (runs under node).
 // Consumes imagetracer's tracedata; knows nothing about imagetracer itself.
 
-import { sampleRamp, rgbToHex } from './palettes.js?v=47';
+import { sampleRamp, rgbToHex } from './palettes.js?v=48';
 
 // N palette swatches sampled evenly across the active ramp. Index 0 is the
 // background tone (ramp t=0). Quantization snaps background pixels to it; the

@@ -1,6 +1,6 @@
-import { buildVectorPaths, toBezierPath, buildPdfOps } from './strands.js?v=47';
-import { hexToRgb } from './palettes.js?v=47';
-import { buildTraceSVG, buildTracePdfOps } from './trace.js?v=47';
+import { buildVectorPaths, toBezierPath, buildPdfOps } from './strands.js?v=48';
+import { hexToRgb } from './palettes.js?v=48';
+import { buildTraceSVG, buildTracePdfOps } from './trace.js?v=48';
 
 export async function exportCanvas(canvas, format) {
   switch (format) {
