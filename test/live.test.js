@@ -4,7 +4,7 @@ import { Envelope, KickDetector, trimWindow, fingerprintDelta,
          MORPH_THRESHOLD, MORPH_CHECK_INTERVAL, MORPH_CROSSFADE_SEC,
          MODULATE_CROSSFADE_SEC, MODULATE_INTERVAL,
          recencyWeights } from '../js/live.js';
-import { generate as attractorGenerate } from '../js/generators/attractor.js';
+import { generate as attractorGenerate, modulatesContinuously } from '../js/generators/attractor.js';
 
 test('Envelope rises fast (attack) and falls slow (release)', () => {
   const e = new Envelope(0.05, 0.5);
@@ -572,6 +572,67 @@ test('conductor locks the attractor system for the whole session', async () => {
   assert.equal(new Set(seen).size, 1, `system changed mid-session: ${[...new Set(seen)].join(', ')}`);
 });
 
+test('conductor adopts the picked attractor system as its lock', async () => {
+  // The picker is meant to end the guessing, so the lock must report the pick
+  // rather than whatever pickSystemLive would have chosen — everything that
+  // reads lockedSystem (the modulation gate, the paint brush, freeze) then
+  // agrees with what the user selected.
+  const seen = [];
+  const frame = { current: mkFrame({ pitchHz: 110, centroid: 0.1, rms: 0.1 }) };  // routes low
+  const { conductor } = harness({
+    frame,
+    generate: async (fp, p) => { seen.push([p.attractorSystem, p.lockedSystem]); return { positions: new Float32Array(3), attr: new Float32Array(1), strands: [] }; },
+    getParams: () => ({ mode: 'attractor', complexity: 0.5, symmetry: 1, twist: 0,
+                        cymStyle: 'auto', liveDensity: 1000, exposure: 30, scale: 1, grain: 1,
+                        attractorSystem: 'thomas' }),
+  });
+  for (let i = 0; i < 120; i++) { conductor.tick(i / 60); await settle(); }
+  assert.ok(seen.length >= 1, 'expected at least one generation');
+  assert.equal(conductor.lockedSystem, 'thomas', 'the pick must become the lock');
+  for (const [picked, locked] of seen) {
+    assert.equal(picked, 'thomas', 'attractorSystem must reach generate()');
+    assert.equal(locked, 'thomas', 'lockedSystem must agree with the pick, not re-route by sound');
+  }
+});
+
+test('conductor re-locks to a NEW pick after resetLock, not the old one', async () => {
+  // main.js calls resetLock() + forceMorph() when the picker changes. This is
+  // the conductor-side half: the next generation must adopt the new value.
+  const picked = { current: 'clifford' };
+  const seen = [];
+  const { conductor } = harness({
+    generate: async (fp, p) => { seen.push(p.lockedSystem); return { positions: new Float32Array(3), attr: new Float32Array(1), strands: [] }; },
+    getParams: () => ({ mode: 'attractor', complexity: 0.5, symmetry: 1, twist: 0,
+                        cymStyle: 'auto', liveDensity: 1000, exposure: 30, scale: 1, grain: 1,
+                        attractorSystem: picked.current }),
+  });
+  for (let i = 0; i < 120; i++) { conductor.tick(i / 60); await settle(); }
+  assert.equal(conductor.lockedSystem, 'clifford');
+
+  picked.current = 'thomas';
+  conductor.resetLock();
+  conductor.forceMorph();
+  for (let i = 120; i < 300; i++) { conductor.tick(i / 60); await settle(); }
+  assert.equal(conductor.lockedSystem, 'thomas', 'a changed pick must take effect');
+  assert.equal(seen.at(-1), 'thomas', 'the latest generation must build the new pick');
+});
+
+test("conductor still routes by sound when the pick is 'auto'", async () => {
+  const seen = [];
+  const { conductor } = harness({
+    generate: async (fp, p) => { seen.push(p.lockedSystem); return { positions: new Float32Array(3), attr: new Float32Array(1), strands: [] }; },
+    getParams: () => ({ mode: 'attractor', complexity: 0.5, symmetry: 1, twist: 0,
+                        cymStyle: 'auto', liveDensity: 1000, exposure: 30, scale: 1, grain: 1,
+                        attractorSystem: 'auto' }),
+  });
+  for (let i = 0; i < 120; i++) { conductor.tick(i / 60); await settle(); }
+  assert.ok(conductor.lockedSystem, 'auto must still lock a routed system');
+  // thomas is pick-only; sound routing must never reach it.
+  assert.ok(['halvorsen', 'clifford'].includes(conductor.lockedSystem),
+    `auto locked an unrouted system: ${conductor.lockedSystem}`);
+  assert.equal(new Set(seen).size, 1, 'auto must still hold one system for the session');
+});
+
 test('conductor releases the lock on clear / growth-mode switch', () => {
   const { conductor } = harness();
   for (let i = 0; i < 40; i++) conductor.tick(i / 60);
@@ -807,7 +868,9 @@ const M7_VOICES = {
 // LiveConductor tick loop, generating REAL attractor geometry at production
 // density (250k) on every regeneration, and returns the consecutive
 // cell-occupancy Jaccard for every regeneration once the system has locked.
-async function runContinuitySession(cfg, expectSystem) {
+// `pick` forces params.attractorSystem, which is the only way to reach a
+// pick-only system like thomas — no voice routes to it.
+async function runContinuitySession(cfg, expectSystem, pick = null) {
   const stream = makeSpeechStream(cfg);
   const frame = { current: stream(0) };
   const overlaps = [];
@@ -822,7 +885,8 @@ async function runContinuitySession(cfg, expectSystem) {
       return out;
     },
     getParams: () => ({ mode: 'attractor', complexity: 0.5, symmetry: 1, twist: 0,
-                        cymStyle: 'auto', liveDensity: 250000, exposure: 30, scale: 1, grain: 1 }),
+                        cymStyle: 'auto', liveDensity: 250000, exposure: 30, scale: 1, grain: 1,
+                        ...(pick ? { attractorSystem: pick } : {}) }),
   });
   const FPS = 60, DUR = 6;
   for (let i = 0; i < FPS * DUR; i++) {
@@ -850,6 +914,63 @@ for (const system of ['halvorsen', 'clifford']) {
       `${system}: ${below50}/${total} steps fell below 0.50 overlap — design chopped, not morphed`);
   });
 }
+
+// Same bar as the two routed systems, applied to thomas. It matters MORE here:
+// thomas is the default pick, so it is what a live session modulates unless the
+// user changes it, and thomas was historically the worst system on this metric
+// (consecutive overlap as low as 0.013 before its live band was narrowed).
+// Its band moved again in this change — onto the chaotic plateau — so the
+// continuity has to be re-measured rather than assumed to have carried over.
+// Thomas takes whatever voice it is pointed at now, so both voice sets run.
+// The continuity bar above is what QUALIFIES a system for continuous
+// modulation, so the two facts have to be pinned together: a system that
+// passes it modulates, a system that fails it must not.
+//
+// thomas fails it, and not by a little — forced onto the same six voices it
+// scores min 0.000 with 55/176 steps below 0.50, against halvorsen's 0.631
+// and clifford's 0.739 on that identical run. Narrowing its coefficient band
+// does not help (a 3%-wide band still produced consecutive designs sharing
+// zero cells); it is multistable across a spatial lattice, so nearby
+// coefficients settle into genuinely different basins.
+//
+// So thomas is excluded from the fast cadence rather than tuned into it, and
+// falls back to the ordinary morph path — which is exactly what this test
+// asserts, because "excluded" has to mean "still works", not "does nothing".
+test('a system that cannot be deformed coherently is excluded from fast modulation', () => {
+  assert.equal(modulatesContinuously('halvorsen'), true);
+  assert.equal(modulatesContinuously('clifford'), true);
+  assert.equal(modulatesContinuously('thomas'), false,
+    'thomas measured min 0.000 consecutive overlap — it must not modulate at 4 Hz');
+});
+
+test('thomas still morphs live, on the slow cadence with a full crossfade', async () => {
+  // Excluded from modulation must not mean frozen. A live thomas session has
+  // to still respond to a real change in the voice — just via the morph path,
+  // with MORPH_CROSSFADE_SEC to dissolve the discontinuity rather than 4 Hz
+  // regeneration that would flicker between unrelated designs.
+  const low = mkFrame({ pitchHz: 110, rms: 0.10, centroid: 0.12, spread: 0.30, flux: 0.0015 });
+  const high = mkFrame({ pitchHz: 900, rms: 0.30, centroid: 0.85, spread: 0.70, flux: 0.03 });
+  const frame = { current: low };
+  const { conductor, log } = harness({
+    frame,
+    getParams: () => ({ mode: 'attractor', complexity: 0.5, symmetry: 1, twist: 0,
+                        cymStyle: 'auto', liveDensity: 1000, exposure: 30, scale: 1, grain: 1,
+                        attractorSystem: 'thomas' }),
+  });
+  for (let i = 0; i < 300; i++) { conductor.tick(i / 60); await settle(); }
+  const afterSteady = log.xfades;
+  frame.current = high;
+  for (let i = 300; i < 900; i++) { conductor.tick(i / 60); await settle(); }
+
+  assert.equal(conductor.lockedSystem, 'thomas');
+  assert.ok(log.xfades > afterSteady, 'thomas must still regenerate when the voice genuinely changes');
+  // Every crossfade must be the slow, dissolving one — never the 0.15s
+  // deformation fade, which is what would make the discontinuity visible.
+  for (const d of log.xfadeDurations) {
+    assert.equal(d, MORPH_CROSSFADE_SEC,
+      `thomas crossfade ${d}s must be MORPH_CROSSFADE_SEC (${MORPH_CROSSFADE_SEC}s), not the modulation fade`);
+  }
+});
 
 test('modulation crossfade is short enough to read as deformation', () => {
   assert.ok(MODULATE_CROSSFADE_SEC <= 0.2,

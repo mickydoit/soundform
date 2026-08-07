@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { generate, registeredModes } from '../js/generators/index.js';
-import { pickSystem, pickSystemLive } from '../js/generators/attractor.js';
+import { pickSystem, pickSystemLive, createOrbitBrush, SYSTEM_NAMES } from '../js/generators/attractor.js';
 import { sphericalY, makeValueNoise3, recipe } from '../js/generators/harmonic.js';
 import { mulberry32 } from '../js/generators/common.js';
 import { padStrands } from '../js/generators/radial.js';
@@ -21,9 +21,12 @@ export function testFingerprint(overrides = {}) {
 
 export const baseParams = { mode: 'attractor', density: 30000, complexity: 0.5, symmetry: 1, twist: 0, strandCount: 96 };
 
-// halvorsen is the continuous flow system; clifford is the 2D discrete map.
-const SYSTEM_IS_FLOW = new Set(['halvorsen']);
-const ALL_SYSTEMS = ['halvorsen', 'clifford'];
+// halvorsen and thomas are continuous flows; clifford is the 2D discrete map.
+// Only halvorsen and clifford are reachable by sound routing — thomas is
+// user-pick-only, so pickSystem/pickSystemLive never return it.
+const SYSTEM_IS_FLOW = new Set(['halvorsen', 'thomas']);
+const ALL_SYSTEMS = ['halvorsen', 'clifford', 'thomas'];
+const ROUTED_SYSTEMS = ['halvorsen', 'clifford'];
 // Fingerprints that route to each system. Routing is on vocal register:
 // pitchMedian below REGISTER_SPLIT (0.257, ~160 Hz) gives halvorsen.
 const LOW_PITCH = { pitchMedian: 0.15 };
@@ -823,6 +826,163 @@ test('attractor live: unknown lockedSystem throws, naming the bad value and the 
   });
   // '' is falsy but non-nullish, so `??` alone would not catch it.
   assert.throws(() => generate(fp, { ...p, lockedSystem: '' }), /unknown params\.lockedSystem/);
+});
+
+// ── User-picked attractor system ──────────────────────────────────────────
+// The Mode panel's picker sets params.attractorSystem. Unlike lockedSystem it
+// binds BOTH paths, because a recorded take has to honour the pick too.
+
+test('attractorSystem: the registry, the picker list and the routed subset agree', () => {
+  assert.deepEqual([...SYSTEM_NAMES].sort(), [...ALL_SYSTEMS].sort(),
+    'SYSTEM_NAMES must list exactly the systems SYSTEMS defines');
+  // thomas is pick-only by design: adding it to the sound routing would change
+  // what recorded audio produces and invalidate the attractor golden checksum.
+  for (const fpv of [0.02, 0.15, 0.257, 0.30, 0.6, 0.95]) {
+    const fp = testFingerprint({ pitchMedian: fpv });
+    assert.ok(ROUTED_SYSTEMS.includes(pickSystem(fp)), `pickSystem returned an unrouted system at ${fpv}`);
+    assert.ok(ROUTED_SYSTEMS.includes(pickSystemLive(fp)), `pickSystemLive returned an unrouted system at ${fpv}`);
+  }
+});
+
+test('attractorSystem overrides sound routing on the CAPTURE path', () => {
+  // Pick a fingerprint and force it onto each system in turn. Each forced
+  // result must match a design that lands on that system by routing, and the
+  // two systems must not produce the same geometry (which would mean the
+  // parameter was silently ignored).
+  const fp = testFingerprint({ pitchMedian: 0.15 });   // routes to halvorsen
+  assert.equal(pickSystem(fp), 'halvorsen', 'fixture must route to halvorsen unforced');
+  const p = { ...baseParams, density: 30000 };
+
+  const asHalvorsen = generate(fp, { ...p, attractorSystem: 'halvorsen' });
+  const asClifford = generate(fp, { ...p, attractorSystem: 'clifford' });
+  const unforced = generate(fp, p);
+
+  assert.deepEqual([...asHalvorsen.positions.slice(0, 300)], [...unforced.positions.slice(0, 300)],
+    'forcing the system the fingerprint already routes to must change nothing');
+
+  // Same fingerprint, different system → genuinely different geometry.
+  const overlap = jaccard(cellsOf(asHalvorsen), cellsOf(asClifford));
+  assert.ok(overlap < 0.40,
+    `forcing clifford must produce a different form, not halvorsen again (overlap ${overlap.toFixed(3)})`);
+});
+
+test("attractorSystem 'auto' and an absent value are byte-identical to sound routing", () => {
+  // This is the guard on the attractor GOLDEN checksum: 'auto' is the default
+  // path for every caller written before the picker existed, and it must not
+  // have moved a single point.
+  const p = { ...baseParams, density: 30000 };
+  for (const pitch of [0.10, 0.45, 0.80]) {
+    const fp = testFingerprint({ pitchMedian: pitch });
+    const bare = generate(fp, p);
+    const auto = generate(fp, { ...p, attractorSystem: 'auto' });
+    assert.deepEqual([...auto.positions.slice(0, 600)], [...bare.positions.slice(0, 600)],
+      `'auto' must equal unset routing at pitch ${pitch}`);
+  }
+});
+
+test('attractorSystem wins over lockedSystem on the live path', () => {
+  // The conductor seeds its lock from the pick, so the two normally agree.
+  // This pins the precedence for the case where they do not — a lock that
+  // outlived a change of pick must not override the user.
+  const fp = testFingerprint({ pitchMedian: 0.15 });
+  const p = { ...baseParams, density: 30000, liveVariance: true };
+  const picked = generate(fp, { ...p, attractorSystem: 'clifford', lockedSystem: 'halvorsen' });
+  const reference = generate(fp, { ...p, lockedSystem: 'clifford' });
+  assert.deepEqual([...picked.positions.slice(0, 300)], [...reference.positions.slice(0, 300)],
+    'the pick must decide, not the stale lock');
+});
+
+test('attractorSystem: unknown name throws on BOTH paths, naming valid options', () => {
+  const fp = testFingerprint();
+  const capture = { ...baseParams, density: 30000 };
+  const live = { ...capture, liveVariance: true };
+  for (const [label, p] of [['capture', capture], ['live', live]]) {
+    assert.throws(() => generate(fp, { ...p, attractorSystem: 'not-a-system' }), (err) => {
+      assert.match(err.message, /attractorSystem/, `${label}: names the parameter`);
+      assert.match(err.message, /not-a-system/, `${label}: names the bad value`);
+      assert.match(err.message, /auto/, `${label}: mentions 'auto'`);
+      for (const name of ALL_SYSTEMS) assert.match(err.message, new RegExp(name), `${label}: lists ${name}`);
+      return true;
+    });
+    // '' is falsy but non-nullish, so `??`/`||` alone would not catch it.
+    assert.throws(() => generate(fp, { ...p, attractorSystem: '' }), /unknown params\.attractorSystem/,
+      `${label}: empty string must not silently fall through to routing`);
+  }
+  // Inherited Object.prototype keys must not pass the guard. `name in SYSTEMS`
+  // walks the prototype chain and would let these through to a crash below.
+  for (const evil of ['constructor', 'toString', '__proto__', 'hasOwnProperty']) {
+    assert.throws(() => generate(fp, { ...capture, attractorSystem: evil }),
+      /unknown params\.attractorSystem/, `prototype key "${evil}" must be rejected`);
+  }
+});
+
+// REGRESSION: "attractor: all retries degenerate".
+//
+// thomas shipped with b = lerp(0.10, 0.165, …), which the capture path's
+// +/-8% excursion multiplier widens to 0.092-0.178 — almost entirely past the
+// chaotic cliff at b ~ 0.100. On this exact grid that threw 23 times, every
+// one exhausting all 8 retries on validateOccupancy. Now that thomas is a
+// system a user can SELECT (and the default), a throw here is a design that
+// never appears on screen.
+//
+// Revert `coeffs` to the old range and this test fails; that is the point.
+test('thomas: never degenerates across the Complexity slider (capture path)', () => {
+  const p = { ...baseParams, density: 30000, attractorSystem: 'thomas' };
+  const failures = [];
+  let total = 0;
+  // The real slider is min=0 max=1 step=0.05, so every one of these is a
+  // position a user can actually drag to.
+  for (let cx = 0; cx <= 1.0001; cx += 0.05) {
+    const complexity = +cx.toFixed(2);
+    for (const pitchMedian of [0.05, 0.25, 0.45, 0.70, 0.90]) {
+      total++;
+      try { generate(testFingerprint({ pitchMedian }), { ...p, complexity }); }
+      catch (e) { failures.push(`pitch ${pitchMedian} @ complexity ${complexity}: ${e.message}`); }
+    }
+  }
+  assert.equal(failures.length, 0,
+    `${failures.length}/${total} thomas captures degenerated:\n  ${failures.slice(0, 10).join('\n  ')}`);
+});
+
+test('thomas: never degenerates on the LIVE path either', () => {
+  // The live band was ALSO past the cliff before the retune (0.098-0.168); it
+  // never showed up as a crash only because live silently falls back to the
+  // capture path when its retries exhaust. So a throw is not the symptom to
+  // assert on here — a fallback is. A fallback discards live variance, which
+  // is what makes a live session stop responding to the voice.
+  const p = { ...baseParams, density: 30000, liveVariance: true, attractorSystem: 'thomas' };
+  for (let cx = 0; cx <= 1.0001; cx += 0.1) {
+    const complexity = +cx.toFixed(2);
+    for (const name of Object.keys(SPEAKERS)) {
+      const fp = speechFingerprint(SPEAKERS[name]);
+      const live = generate(fp, { ...p, complexity });
+      // If the live retries had exhausted, generate() re-enters with
+      // liveVariance:false and returns the capture design for this fingerprint.
+      const captureFallback = generate(fp, { ...p, complexity, liveVariance: false });
+      assert.notDeepEqual([...live.positions.slice(0, 300)], [...captureFallback.positions.slice(0, 300)],
+        `thomas fell back to the capture path for "${name}" at complexity ${complexity}`);
+    }
+  }
+});
+
+test('orbit brush honours the picked system', () => {
+  // Paint resolves through the same path; before this, the brush called
+  // pickSystemLive() itself while the conductor recorded its lock separately.
+  const fp = testFingerprint({ pitchMedian: 0.15 });
+  assert.equal(pickSystemLive(fp), 'halvorsen', 'fixture must route to halvorsen unforced');
+  for (const name of ALL_SYSTEMS) {
+    const brush = createOrbitBrush(fp, { attractorSystem: name });
+    assert.equal(brush.system, name, `brush must build ${name} when it is picked`);
+    const chunk = brush.next(3000, 1 / 30);
+    let maxAbs = 0, sum = 0;
+    for (const v of chunk.positions) { maxAbs = Math.max(maxAbs, Math.abs(v)); sum += Math.abs(v); }
+    // The brush clamps at +/-2.2; stored as float32 that reads back as
+    // 2.200000047683716, so the bound needs epsilon or a clamped run fails.
+    assert.ok(Number.isFinite(maxAbs) && maxAbs <= 2.2001, `${name}: brush points bounded (${maxAbs})`);
+    assert.ok(sum / chunk.positions.length > 0.05, `${name}: brush not collapsed at the origin`);
+  }
+  assert.equal(createOrbitBrush(fp, { attractorSystem: 'auto' }).system, 'halvorsen',
+    "'auto' must leave the brush on sound routing");
 });
 
 test('attractor live: flow systems respond to timbre, not just pitch', () => {

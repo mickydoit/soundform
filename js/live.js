@@ -1,11 +1,11 @@
 // Live mode conductor: rolling feature window, instant envelopes, kick
 // detection, and structural morph scheduling. All I/O (audio, renderer,
 // worker, palette) is injected — this module is node-testable.
-import { buildFingerprint, buildTrajectory } from './features.js?v=50';
-import { liveTarget, glideStops, stopsToHex } from './livecolor.js?v=50';
-import { BrushPace, PAINT_MAX_POINTS } from './paint.js?v=50';
-import { createOrbitBrush, pickSystemLive } from './generators/attractor.js?v=50';
-import { AutoParams, featuresFromFingerprint } from './autoparams.js?v=50';
+import { buildFingerprint, buildTrajectory } from './features.js?v=51';
+import { liveTarget, glideStops, stopsToHex } from './livecolor.js?v=51';
+import { BrushPace, PAINT_MAX_POINTS } from './paint.js?v=51';
+import { createOrbitBrush, pickSystemLive, modulatesContinuously } from './generators/attractor.js?v=51';
+import { AutoParams, featuresFromFingerprint } from './autoparams.js?v=51';
 
 export const WINDOW_SEC = 4;
 export const MORPH_CHECK_INTERVAL = 0.15;
@@ -248,8 +248,10 @@ export class LiveConductor {
       this.renderer.beginPaint(max);
       this.shownFp = fp;
       if (p.mode === 'attractor') {
-        this._lockSystem(fp);           // record the choice createOrbitBrush makes independently
-        st.brush = createOrbitBrush(fp, { complexity: p.complexity });
+        // Resolve once and hand the answer to the brush, rather than letting it
+        // re-derive one independently and hope the two agree.
+        st.brush = createOrbitBrush(fp, { complexity: p.complexity,
+                                          attractorSystem: this._lockSystem(fp, p) });
       } else {
         this._requestReveal(fp, p, max, 0);
       }
@@ -317,7 +319,8 @@ export class LiveConductor {
     this.generate(fp, { mode: p.mode, density: max, complexity: p.complexity,
                         symmetry: p.symmetry, twist: p.twist, strandCount: 8,
                         cymStyle: p.cymStyle, liveVariance: true,
-                        lockedSystem: this._lockSystem(fp) })
+                        attractorSystem: p.attractorSystem,
+                        lockedSystem: this._lockSystem(fp, p) })
       .then((out) => {
         st.pendingGen = false;
         if (!this.running || gen !== this.growGen) return;
@@ -407,7 +410,13 @@ export class LiveConductor {
     // Once a system is locked, the design is modulated on a fast fixed cadence
     // rather than morphed on a delta threshold — there is no longer anything to
     // switch TO, so waiting for a big change would just make it unresponsive.
-    const modulating = !!this.lockedSystem && base.mode === 'attractor';
+    // …and only for a system that stays coherent when deformed. thomas does
+    // not (see modulatesContinuously), so it takes the ordinary morph path:
+    // regenerate on a real change in the sound, dissolved over the full
+    // crossfade, rather than 4 Hz regeneration that would read as flickering
+    // between unrelated designs.
+    const modulating = !!this.lockedSystem && base.mode === 'attractor'
+                    && modulatesContinuously(this.lockedSystem);
     const interval = modulating ? MODULATE_INTERVAL : MORPH_CHECK_INTERVAL;
     const minGap = modulating ? MODULATE_INTERVAL : MORPH_MIN_INTERVAL;
     const due = nowSec - this.lastCheck >= interval || this.forceNext;
@@ -452,7 +461,8 @@ export class LiveConductor {
                         twist: owned.twist === false ? p.twist : a.twist,
                         strandCount: 8,
                         cymStyle: p.cymStyle, liveVariance: true,
-                        lockedSystem: this._lockSystem(fp) })
+                        attractorSystem: p.attractorSystem,
+                        lockedSystem: this._lockSystem(fp, p) })
       .then((out) => {
         this.inFlight = false;
         if (!this.running || morphGen !== this.growGen) return;
@@ -475,8 +485,18 @@ export class LiveConductor {
   // appearance (same-system designs overlap 0.60-0.88 by cell occupancy,
   // cross-system only 0.10-0.39), so re-picking mid-session reads as swapping
   // designs, not as responding to a voice.
-  _lockSystem(fp) {
-    if (!this.lockedSystem) this.lockedSystem = pickSystemLive(fp);
+  // An explicit pick from the Mode panel skips the lock's whole reason for
+  // existing — there is nothing to hold steady, the user has already said which
+  // form they want — so it is recorded as the lock outright. Everything the
+  // conductor and the UI read off `lockedSystem` (the modulation gate, the
+  // paint brush, the tests) then reports the system actually being built.
+  _lockSystem(fp, params = {}) {
+    const choice = params.attractorSystem;
+    if (choice != null && choice !== 'auto') {
+      this.lockedSystem = choice;
+    } else if (!this.lockedSystem) {
+      this.lockedSystem = pickSystemLive(fp);
+    }
     return this.lockedSystem;
   }
 

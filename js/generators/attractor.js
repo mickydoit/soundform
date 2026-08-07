@@ -84,6 +84,83 @@ const SYSTEMS = {
       c.rk = lerp(1.25, 2.15, raw[1]);
     },
   },
+  // Thomas — the cyclically symmetric knot. Restored 2026-08-07 after the cut to
+  // two systems, this time as a system you pick rather than one the sound picks.
+  //
+  //   x' = sin(y) - b·x,  y' = sin(z) - b·y,  z' = sin(x) - b·z
+  //
+  // The coefficients below are thomas's ORIGINAL, pre-cut values, restored
+  // unchanged. The "attractor: all retries degenerate" crash they used to cause
+  // (23 of 252 fingerprint x Complexity combinations threw, every one of them
+  // exhausting all 8 retries on validateOccupancy) was never a fault in these
+  // numbers — it was the occupancy floor judging thomas by the wrong bar. See
+  // the OCCUPANCY note on this system's descriptor.
+  //
+  // The evidence, because it is easy to reach the opposite conclusion: `b`
+  // above ~0.100 does score few cells (85-260 against the flow floor of 400),
+  // which reads exactly like the limit-cycle collapse that floor exists to
+  // catch. It is not. The largest Lyapunov exponent over b = 0.075..0.200 is
+  // 0.24-0.43, strongly positive throughout, with no periodic window anywhere;
+  // it only goes negative past b ~ 0.32 (measured -0.13 at 0.40, -0.56 at
+  // 0.60), far outside any range used here. What actually changes across
+  // 0.10..0.20 is how SPACE-FILLING the attractor is, not whether it is
+  // chaotic: as b falls toward 0 thomas approaches a lattice-filling random
+  // walk (many cells), and as b rises it tightens into the compact knot the
+  // system is known for (few cells, still chaotic).
+  //
+  // Retuning `b` down onto the low-b "plateau" was tried first and rejected. It
+  // did fix the crash (0 of 252), but it bought that by moving thomas into the
+  // diffuse regime — the wrong look, and unstable under live modulation: a
+  // space-filling walk reorganises completely under small coefficient changes,
+  // and consecutive-regeneration overlap fell to 0.23 against the project's
+  // 0.55 bar (halvorsen and clifford both pass). Fixing the validator instead
+  // keeps thomas's classic form AND its live continuity.
+  thomas: {
+    dt: 0.06, flow: true,
+    coeffs: fp => ({ b: lerp(0.10, 0.165, 1 - fp.pitchMedian) }),
+    // bx/by/bz are live-only. They are undefined on the capture path, where all
+    // three fall back to the single symmetric b.
+    step: (p, c) => [
+      Math.sin(p[1]) - (c.bx ?? c.b) * p[0],
+      Math.sin(p[2]) - (c.by ?? c.b) * p[1],
+      Math.sin(p[0]) - (c.bz ?? c.b) * p[2]],
+    // Thomas has a single damping term, so pitch alone barely moves it. Equal
+    // damping on all three axes is the *symmetric special case*; mild per-axis
+    // asymmetry re-lobes the knot. Asymmetry stays gentle because a strong
+    // split pushes the system toward the genuinely periodic regime (b ~ 0.32
+    // and up), and b also stays under the classic b ~ 0.208 boundary.
+    //
+    // Also original, pre-cut values. The ax-driven base is narrow while
+    // complexify() keeps its own wider lo/hi targets — the fix shape this
+    // project arrived at for every system (see halvorsen's `spread`/`bias`
+    // note): ordinary fingerprint sampling noise rides on `ax`, so a wide
+    // ax-driven base puts b near a regime boundary before complexify() has
+    // pushed it anywhere. Narrowing the base to 0.148..0.118 while leaving the
+    // targets at 0.168/0.098 is what took consecutive-regeneration overlap
+    // from 0.013 to 0.622.
+    liveCoeffs: (c, ax, cx = 0.5) => {
+      const b = complexify(lerp(0.148, 0.118, ax[4]), 0.168, 0.098, cx, 'hi');
+      c.b = b;
+      c.bx = b * lerp(0.93, 1.07, ax[1]);
+      c.by = b * lerp(0.93, 1.07, ax[2]);
+      c.bz = b * lerp(0.93, 1.07, ax[3]);
+    },
+    liveTarget: safe => ({ ...safe, bx: safe.b, by: safe.b, bz: safe.b }),
+    // OCCUPANCY: thomas is chaotic but COMPACT, so the 400-cell flow default
+    // is the wrong bar for it — the same category of mistake clifford's planar
+    // mode fixed, just on a different axis (clifford is measured on the wrong
+    // number of dimensions; thomas on the wrong assumption that a chaotic
+    // attractor must be space-filling).
+    //
+    // Calibrated the way clifford's 90 was, against genuine degeneracy rather
+    // than against a guess. Classifying by largest Lyapunov exponent over
+    // b = 0.10..1.0: every genuinely chaotic value scores 71-528 cells, and
+    // every genuinely periodic one collapses to 1-9. A floor of 40 sits ~1.8x
+    // below the worst chaotic case and ~4.4x above the worst periodic one, so
+    // it still rejects the limit cycles this check exists to catch while
+    // passing the knot thomas is supposed to look like.
+    occupancy: { planar: false, floor: 40 },
+  },
   halvorsen: {
     dt: 0.012, flow: true,
     coeffs: fp => ({ a: lerp(1.4, 2.2, fp.pitchMedian) }),
@@ -247,6 +324,79 @@ export function pickSystemLive(fp) {
   return ax[4] < REGISTER_LOW ? 'halvorsen' : 'clifford';
 }
 
+// The systems a user can choose by name, in UI order. Exported so index.html's
+// picker and the tests share one list with SYSTEMS rather than restating it.
+export const SYSTEM_NAMES = Object.keys(SYSTEMS);
+
+// Can this system be regenerated on the fast MODULATE cadence (~4 Hz, 0.15s
+// crossfade) and still read as ONE design being deformed?
+//
+// Only where consecutive regenerations from a drifting voice stay
+// geometrically continuous. Measured as cell-occupancy Jaccard between
+// consecutive live regenerations at production density (250k), all six M7
+// voices forced onto each system:
+//
+//   halvorsen  min 0.631,   0/176 steps below 0.50
+//   clifford   min 0.739,   0/176 steps below 0.50
+//   thomas     min 0.000,  55/176 steps below 0.50
+//
+// thomas is excluded, and no amount of narrowing its coefficient band fixes
+// it — a band 3% wide still produced consecutive designs sharing ZERO cells.
+// The cause is structural rather than a tuning error: thomas's sine coupling
+// makes it multistable across a spatial lattice, so nearby coefficients
+// (and, separately, the per-window change in fp.seed that moves the starting
+// point) settle into genuinely different basins. It is a fine design and a
+// poor deformable one.
+//
+// Excluded systems are not degraded, they just take the ordinary morph path
+// they had before continuous modulation existed: regenerate on a real change
+// in the sound, and dissolve across it with the full MORPH_CROSSFADE_SEC.
+// That is still how every non-attractor mode behaves.
+const MODULATES = new Set(['halvorsen', 'clifford']);
+export const modulatesContinuously = (name) => MODULATES.has(name);
+
+// `Object.hasOwn`, not `name in SYSTEMS`: `in` walks the prototype chain, so
+// 'constructor', 'toString' and '__proto__' would pass the guard and then blow
+// up further down as "sys.coeffs is not a function".
+const isSystem = (name) => Object.hasOwn(SYSTEMS, name);
+
+const assertSystem = (name, key, extra = '') => {
+  if (!isSystem(name)) {
+    throw new Error(`generate(): unknown params.${key} "${name}" — must be ${extra}one of ${SYSTEM_NAMES.join(', ')}`);
+  }
+};
+
+// Which system to build, for BOTH paths.
+//
+// `params.attractorSystem` is the user's pick from the Mode panel and it wins
+// outright wherever it is set to a real system — that is the whole point of the
+// control, and routing that a user has overridden is not routing any more.
+// 'auto' (and an absent value, for callers written before the picker existed)
+// falls through to the historic sound-based routing, unchanged.
+//
+// `params.lockedSystem` stays what it always was: the LIVE session's hold, so a
+// session modulates one design instead of swapping between them. It is only
+// consulted under 'auto', because an explicit pick has already answered the
+// question the lock exists to answer. The conductor seeds its lock from the
+// pick anyway, so in practice the two agree; this ordering just means they
+// cannot disagree if a stale lock outlives a change of pick.
+//
+// Capture ignores `lockedSystem` entirely, including an invalid one — recorded
+// output is pinned by snapshot checksums and must not depend on live state.
+function resolveSystem(fp, params, live) {
+  const choice = params.attractorSystem;
+  if (choice != null && choice !== 'auto') {
+    assertSystem(choice, 'attractorSystem', "'auto' or ");
+    return choice;
+  }
+  if (!live) return pickSystem(fp);
+  if (params.lockedSystem != null) {
+    assertSystem(params.lockedSystem, 'lockedSystem');
+    return params.lockedSystem;
+  }
+  return pickSystemLive(fp);
+}
+
 
 function cloudStdDev(pos, n) {
   const m = [0, 0, 0], s = [0, 0, 0];
@@ -326,15 +476,30 @@ function occupiedCellCount(positions, planar = false) {
   return cells.size;
 }
 
+// How much space a healthy design occupies is a PER-SYSTEM fact, so each system
+// may carry its own `occupancy: { planar, floor }`. The shared default below is
+// the volumetric 400 that flow systems are held to.
+//
 // A 2D map is a SURFACE with a thin relief, so a volumetric cell count judges
 // it on the wrong axis — a perfectly healthy clifford scores 206-290 of 8000
 // 3D cells and would be rejected outright. Measured on the XY plane instead
 // (400 cells available), healthy clifford lands at 132-217 while every
 // degenerate configuration collapses to 1-43, so 90 separates them cleanly.
+//
+// thomas overrides the floor rather than the axis — see its descriptor.
+//
+// Every floor here is calibrated the same way: measure what a genuinely
+// degenerate configuration scores, measure what a healthy one scores, and put
+// the bar in the gap. A floor picked any other way either passes limit cycles
+// or rejects perfectly good designs, and the second failure mode is the one
+// that is hard to notice, because it surfaces as an unexplained
+// "all retries degenerate" rather than as an ugly design.
+const DEFAULT_OCCUPANCY = { planar: false, floor: 400 };
+
 function validateOccupancy(out, sys) {
-  return sys.flow
-    ? occupiedCellCount(out.positions) >= 400
-    : occupiedCellCount(out.positions, true) >= 90;
+  const { planar, floor } = sys.occupancy
+    ?? (sys.flow ? DEFAULT_OCCUPANCY : { planar: true, floor: 90 });
+  return occupiedCellCount(out.positions, planar) >= floor;
 }
 
 export function generate(fp, params, onProgress) {
@@ -343,16 +508,10 @@ export function generate(fp, params, onProgress) {
   // Capture keeps the harmony rules; live routes on register × delivery. Both
   // mappings are fixed and continuous, so they stay stable and learnable — the
   // variety comes from the axes, never from system roulette.
-  // Live locks the system for a whole session (params.lockedSystem) so the
-  // design is modulated rather than swapped. Capture ignores it entirely —
-  // recorded output is pinned by snapshot checksums. Validated only on the
-  // live path: an unknown name (including '', which ?? does not catch since
-  // it is non-nullish) must fail loudly here, not as a cryptic
-  // "Cannot read properties of undefined" a few lines down in the retry loop.
-  if (arch && params.lockedSystem != null && !(params.lockedSystem in SYSTEMS)) {
-    throw new Error(`generate(): unknown params.lockedSystem "${params.lockedSystem}" — must be one of ${Object.keys(SYSTEMS).join(', ')}`);
-  }
-  const name = arch ? (params.lockedSystem ?? pickSystemLive(fp)) : pickSystem(fp);
+  // …unless the user has picked a system by name, which overrides both. See
+  // resolveSystem for the precedence and for why an unknown name throws here
+  // rather than becoming a cryptic "sys.coeffs is not a function" below.
+  const name = resolveSystem(fp, params, !!arch);
   const sys = SYSTEMS[name];
   const rnd = mulberry32(fp.seed);
   const jitter = fp.velocity * 0.012 * (0.5 + params.complexity) * (arch ? 1 + arch.wildness : 1);
@@ -455,10 +614,18 @@ export function generate(fp, params, onProgress) {
 // glide toward each steer() target so the ribbons bend rather than jump,
 // and a stagnation guard jolts the orbit out of collapsed loops.
 export function createOrbitBrush(fp, params = {}) {
-  // Paint is a live mode, so it takes the live routing. The system is fixed for
-  // the whole painting — steer() bends the coefficients within it, and swapping
+  // Paint is a live mode, so it takes the live resolution — the user's pick
+  // first, then the session lock, then the routing. The system is fixed for the
+  // whole painting: steer() bends the coefficients within it, and swapping
   // systems mid-stroke would break the canvas rather than bend it.
-  const name = pickSystemLive(fp);
+  //
+  // This used to call pickSystemLive() directly while the conductor recorded
+  // its lock from a SEPARATE call, "the choice createOrbitBrush makes
+  // independently". Two independent calls agreed only because they ran the same
+  // function on the same fingerprint; once a pick or a lock can override that,
+  // they would silently diverge and the painting would be a different system
+  // from the one the session reported. One resolution, passed in.
+  const name = resolveSystem(fp, params, true);
   const sys = SYSTEMS[name];
   const rnd = mulberry32(fp.seed);
   const complexity = params.complexity ?? 0.5;

@@ -7,7 +7,7 @@
   <meta http-equiv="Pragma" content="no-cache">
   <meta http-equiv="Expires" content="0">
   <title>Soundform — Audio Design Tool</title>
-  <link rel="stylesheet" href="style.css?v=50">
+  <link rel="stylesheet" href="style.css?v=51">
 </head>
 <body>
 <div id="app">
@@ -91,6 +91,16 @@
         <button class="btn-mode" data-mode="cymatics">Cymatics</button>
         <button class="btn-mode" data-mode="oscillo">Oscillo</button>
         <button class="btn-mode" data-mode="harmonic">Harmonic</button>
+      </div>
+      <!-- Attractor is the default mode, so this row starts visible; the
+           cymatics row below starts hidden. bindControls() toggles both. -->
+      <div class="sl-row" id="row-attractor-system">
+        <select id="sel-attractor-system">
+          <option value="thomas" selected>Attractor: Thomas</option>
+          <option value="halvorsen">Attractor: Halvorsen</option>
+          <option value="clifford">Attractor: Clifford</option>
+          <option value="auto">Attractor: Auto (by sound)</option>
+        </select>
       </div>
       <div class="sl-row" id="row-cym-style" style="display:none">
         <select id="sel-cym-style">
@@ -232,6 +242,6 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r134/three.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <script src="js/vendor/mp4-muxer.min.js"></script>
-<script type="module" src="js/main.js?v=50"></script>
+<script type="module" src="js/main.js?v=51"></script>
 </body>
 </html>

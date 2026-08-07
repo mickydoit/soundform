@@ -1,13 +1,13 @@
-import { AudioEngine } from './audio.js?v=50';
-import { buildFingerprint, buildTrajectory } from './features.js?v=50';
-import { DensityRenderer } from './density.js?v=50';
-import { PALETTES, buildLUT, customRamp, hexToRgb } from './palettes.js?v=50';
-import { exportCanvas, exportStrandSVG, exportStrandPDF, exportTraceSVG, exportTracePDF, framePlan, exportMP4, loopsForDuration } from './exporter.js?v=50';
-import { paletteFromRamp } from './trace.js?v=50';
-import { motionParams, displacePoint } from './motion.js?v=50';
-import { LiveConductor } from './live.js?v=50';
-import { LiveRecorder, MAX_RECORD_SEC } from './recorder.js?v=50';
-import { selectRingSubset } from './strands.js?v=50';
+import { AudioEngine } from './audio.js?v=51';
+import { buildFingerprint, buildTrajectory } from './features.js?v=51';
+import { DensityRenderer } from './density.js?v=51';
+import { PALETTES, buildLUT, customRamp, hexToRgb } from './palettes.js?v=51';
+import { exportCanvas, exportStrandSVG, exportStrandPDF, exportTraceSVG, exportTracePDF, framePlan, exportMP4, loopsForDuration } from './exporter.js?v=51';
+import { paletteFromRamp } from './trace.js?v=51';
+import { motionParams, displacePoint } from './motion.js?v=51';
+import { LiveConductor } from './live.js?v=51';
+import { LiveRecorder, MAX_RECORD_SEC } from './recorder.js?v=51';
+import { selectRingSubset } from './strands.js?v=51';
 
 const audio = new AudioEngine();
 let renderer = null;
@@ -48,6 +48,11 @@ const params = {
   motionOn: false, motionPeriod: 8,
   exportRes: 'std', videoDur: 0, transparentBg: false,
   flatView: true, cymStyle: 'auto', growth: 'morph',
+  // Which attractor system to build. 'auto' restores the historic sound-based
+  // routing (halvorsen/clifford by vocal register); anything else is the user's
+  // pick and overrides it on both the recorded and the live path. Must match
+  // the selected <option> in #sel-attractor-system.
+  attractorSystem: 'thomas',
   traceLevels: 8,
   traceDetail: 'balanced',
   traceRes: 2000,
@@ -118,7 +123,8 @@ function regenerate() {
   const payload = { fingerprint: { ...fingerprint, chroma: fingerprint.chroma, contour: fingerprint.contour },
                     params: { mode: params.mode, density: params.density, complexity: params.complexity,
                               symmetry: params.symmetry, twist: params.twist, strandCount: 96,
-                              cymStyle: params.cymStyle } };
+                              cymStyle: params.cymStyle,
+                              attractorSystem: params.attractorSystem } };
   const onResult = (out) => {
     design = out;
     renderer.setMotion(motionParams(fingerprint.seed));
@@ -130,7 +136,7 @@ function regenerate() {
     setStatus('Design created — drag to rotate · adjust sliders');
   };
   try {
-    if (!worker) worker = new Worker('js/worker.js?v=50', { type: 'module' });
+    if (!worker) worker = new Worker('js/worker.js?v=51', { type: 'module' });
     worker.onmessage = (e) => {
       if (e.data.progress !== undefined) setStatus(`Generating… ${Math.round(e.data.progress * 100)}%`);
       else if (e.data.error) setStatus(`Generation error: ${e.data.error}`);
@@ -144,7 +150,7 @@ function regenerate() {
 }
 
 async function fallbackGenerate(onResult) {
-  const { generate } = await import('./generators/index.js?v=50');
+  const { generate } = await import('./generators/index.js?v=51');
   onResult(generate(fingerprint, { ...params, strandCount: 96 }));
 }
 
@@ -153,7 +159,7 @@ async function fallbackGenerate(onResult) {
 function workerGenerate(fingerprint, params) {
   return new Promise((resolve) => {
     try {
-      if (!liveWorker) liveWorker = new Worker('js/worker.js?v=50', { type: 'module' });
+      if (!liveWorker) liveWorker = new Worker('js/worker.js?v=51', { type: 'module' });
       liveWorker.onmessage = (e) => {
         if (e.data.done) resolve(e.data);
         else if (e.data.error) resolve(null);
@@ -176,7 +182,7 @@ async function liveGenerate(fp, p) {
   // result as "generation failed, retry later" (see tick()), so surface a
   // throw the same way rather than letting it become an unhandled rejection.
   try {
-    const { generate } = await import('./generators/index.js?v=50');
+    const { generate } = await import('./generators/index.js?v=51');
     return generate(fp, p);
   } catch {
     return null;
@@ -190,7 +196,8 @@ function makeConductor() {
     applyStops: (stops) => renderer.setPalette(buildLUT(stops)),
     getParams: () => ({ mode: params.mode, complexity: params.complexity,
                         symmetry: params.symmetry, twist: params.twist,
-                        cymStyle: params.cymStyle, liveDensity: LIVE_DENSITY,
+                        cymStyle: params.cymStyle, attractorSystem: params.attractorSystem,
+                        liveDensity: LIVE_DENSITY,
                         paintMaxPoints: paintMaxPoints(),
                         exposure: params.exposure, scale: params.scale, grain: params.grain,
                         // Manual-ownership flags: main.js owns autoOwned (the source of
@@ -600,6 +607,8 @@ function bindControls() {
       document.querySelectorAll('.btn-mode').forEach(b => b.classList.toggle('active', b === btn));
       document.getElementById('row-cym-style').style.display =
         params.mode === 'cymatics' ? '' : 'none';
+      document.getElementById('row-attractor-system').style.display =
+        params.mode === 'attractor' ? '' : 'none';
       if (appState === 'captured') { offerPaintRestore(); regenerate(); }
       else if (appState === 'live' && conductor) {
         // Paint: a new generator means a new painting — fresh canvas.
@@ -656,6 +665,22 @@ function bindControls() {
   document.getElementById('sel-cym-style').addEventListener('change', (e) => {
     params.cymStyle = e.target.value;
     if (appState === 'captured' && params.mode === 'cymatics') regenerate();
+  });
+
+  // Picking a different attractor is as fundamental a change as picking a
+  // different generator mode — the form is replaced, not adjusted — so this
+  // mirrors the .btn-mode handler above rather than the cymatics-style one.
+  document.getElementById('sel-attractor-system').addEventListener('change', (e) => {
+    params.attractorSystem = e.target.value;
+    if (params.mode !== 'attractor') return;   // takes effect when you return to Attractor
+    if (appState === 'captured') { offerPaintRestore(); regenerate(); }
+    else if (appState === 'live' && conductor) {
+      // A painting is bound to one system for its whole stroke (the brush's
+      // normalization is calibrated to it up front), so a new system means a
+      // new canvas — the same rule a mode switch follows.
+      if (params.growth === 'paint') conductor.setGrowthMode('paint');
+      else { conductor.resetLock(); conductor.forceMorph(); }
+    }
   });
   sliders.forEach(([id, key, parse, regen]) => {
     const el = document.getElementById(id);
@@ -865,7 +890,7 @@ async function runTrace(kind) { // kind: 'svg' | 'pdf'
     };
     background = params.transparentBg ? null : params.background;
 
-    traceWorker = new Worker('js/traceworker.js?v=50'); // classic worker
+    traceWorker = new Worker('js/traceworker.js?v=51'); // classic worker
   } catch (err) {
     endTrace();
     setStatus(`Trace error: ${err.message}`);
