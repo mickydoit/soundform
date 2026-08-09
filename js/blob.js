@@ -224,3 +224,23 @@ export function blobOutline(circles, { smooth = 0.18, width = 1600, height = 120
     rings: loops.map((loop) => simplifyRing(loop.map(([x, y]) => project(x, y)), simplify)),
   };
 }
+
+// Outline of ANY scalar field (negative inside), in pixel space. The
+// contouring above never cared what produced the field — that is what let
+// Liquid swap its circle SDF for a cymatic thickness field without touching
+// the export pipeline. Resolution is higher here than for blobs because a
+// nodal figure has far finer structure than a handful of fused circles.
+export function fieldOutline(field, { bounds = { x0: -1.35, y0: -1.35, x1: 1.35, y1: 1.35 },
+                                      width = 1600, height = 1200,
+                                      res = 520, simplify = 0.8 } = {}) {
+  const { project, scale } = makeProjector(bounds, width, height, 0.02);
+  const loops = marchingSquares(field, bounds, res);
+  return {
+    bounds, scale, project,
+    rings: loops
+      .map((loop) => simplifyRing(loop.map(([x, y]) => project(x, y)), simplify))
+      // A cymatic field throws off tiny specks at the resolution limit; they
+      // add hundreds of paths to the SVG and are invisible at any print size.
+      .filter((r) => r.length >= 6),
+  };
+}

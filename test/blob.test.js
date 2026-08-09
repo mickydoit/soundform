@@ -2,9 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { smin, fieldAt, makeBlobField, blobBounds, marchingSquares,
          simplifyRing, closedCatmullRom, ringToPath, blobOutline } from '../js/blob.js';
-import { buildCircles, smoothOf, chaosOf, generate,
-         LIQUID_MIN_LOBES, LIQUID_MAX_LOBES } from '../js/generators/liquid.js';
-import { testFingerprint } from './generators.test.js';
+// blob.js is now pure contouring machinery: Liquid's field changed from a
+// circle SDF to a cymatic thickness field, but marching squares, ring
+// simplification and periodic-bezier fitting are field-agnostic and are still
+// what produces the vector export. These tests cover that machinery.
 
 test('smin: reduces to min at k=0, and is never above it', () => {
   assert.equal(smin(3, 5, 0), 3);
@@ -88,78 +89,13 @@ test('ringToPath: emits a closed SVG path with no NaN', () => {
 });
 
 test('blobOutline: projects into pixel space inside the frame', () => {
-  const circles = buildCircles(testFingerprint());
+  const circles = [{ x: -0.35, y: 0.1, r: 0.28 }, { x: 0.3, y: -0.2, r: 0.22 }, { x: 0.1, y: 0.35, r: 0.18 }];
   const { rings } = blobOutline(circles, { smooth: 0.18, width: 1600, height: 1200 });
   assert.ok(rings.length >= 1, 'no outline produced');
   for (const ring of rings) {
     for (const [x, y] of ring) {
       assert.ok(Number.isFinite(x) && Number.isFinite(y));
       assert.ok(x >= 0 && x <= 1600 && y >= 0 && y <= 1200, `vertex outside frame: ${x},${y}`);
-    }
-  }
-});
-
-// ── generator ──────────────────────────────────────────────────────
-test('liquid: lobe count stays inside its readable range for any sound', () => {
-  for (let seed = 0; seed < 40; seed++) {
-    for (const noteCount of [1, 3, 6, 12]) {
-      for (const complexity of [0, 0.5, 1]) {
-        const c = buildCircles(testFingerprint({ seed, noteCount }), { complexity });
-        // +1 for the centre lobe that ties the arms together.
-        assert.ok(c.length >= LIQUID_MIN_LOBES + 1 && c.length <= LIQUID_MAX_LOBES + 1,
-          `seed ${seed} notes ${noteCount}: ${c.length} circles`);
-        for (const k of c) {
-          assert.ok(Number.isFinite(k.x) && Number.isFinite(k.y) && k.r > 0);
-        }
-      }
-    }
-  }
-});
-
-test('liquid: deterministic for the same fingerprint', () => {
-  const fp = testFingerprint();
-  assert.deepEqual(buildCircles(fp, { complexity: 0.5 }), buildCircles(fp, { complexity: 0.5 }));
-});
-
-test('liquid: chaos axis runs ice (ordered) -> water (scattered)', () => {
-  // The reference identity describes its own states as running "from flat (as
-  // ice) to random (as water)"; a clean tone must land nearer the ice end
-  // than a rough, noisy one, or the sound is not actually driving the form.
-  const ice = chaosOf(testFingerprint({ consonance: 1, volVar: 0, spread: 0 }));
-  const water = chaosOf(testFingerprint({ consonance: 0, volVar: 1, spread: 1 }));
-  assert.ok(ice < water, `ice ${ice} should be below water ${water}`);
-  assert.ok(ice >= 0 && water <= 1);
-});
-
-test('liquid: an ordered sound places lobes more evenly than a chaotic one', () => {
-  const radii = (fp) => buildCircles(fp, { complexity: 0.5 })
-    .slice(0, -1)                       // drop the centre lobe
-    .map((c) => Math.hypot(c.x, c.y));
-  const spreadOf = (a) => {
-    const m = a.reduce((s, v) => s + v, 0) / a.length;
-    return Math.sqrt(a.reduce((s, v) => s + (v - m) ** 2, 0) / a.length);
-  };
-  const ice = spreadOf(radii(testFingerprint({ consonance: 1, volVar: 0, spread: 0 })));
-  const water = spreadOf(radii(testFingerprint({ consonance: 0, volVar: 1, spread: 1 })));
-  assert.ok(water > ice, `chaotic placement (${water}) should scatter more than ordered (${ice})`);
-});
-
-test('liquid: generate returns the blob contract, not a point cloud', () => {
-  const out = generate(testFingerprint(), { complexity: 0.5 });
-  assert.equal(out.kind, 'blob');
-  assert.ok(Array.isArray(out.circles) && out.circles.length >= 4);
-  assert.ok(out.smooth > 0);
-  // Stubs exist so the worker's transfer list stays valid.
-  assert.equal(out.positions.length, 0);
-  assert.equal(out.attr.length, 0);
-  assert.deepEqual(out.strands, []);
-});
-
-test('liquid: smoothOf stays positive and bounded', () => {
-  for (const velocity of [0, 0.5, 1]) {
-    for (const scale of [0.5, 1, 2]) {
-      const s = smoothOf(testFingerprint({ velocity }), { scale });
-      assert.ok(s > 0.02 && s < 0.5, `smooth ${s} out of range`);
     }
   }
 });

@@ -1,11 +1,12 @@
 // Live mode conductor: rolling feature window, instant envelopes, kick
 // detection, and structural morph scheduling. All I/O (audio, renderer,
 // worker, palette) is injected — this module is node-testable.
-import { buildFingerprint, buildTrajectory } from './features.js?v=55';
-import { liveTarget, glideStops, stopsToHex } from './livecolor.js?v=55';
-import { BrushPace, PAINT_MAX_POINTS } from './paint.js?v=55';
-import { createOrbitBrush, pickSystemLive, modulatesContinuously } from './generators/attractor.js?v=55';
-import { AutoParams, featuresFromFingerprint } from './autoparams.js?v=55';
+import { buildFingerprint, buildTrajectory } from './features.js?v=56';
+import { liveTarget, glideStops, stopsToHex } from './livecolor.js?v=56';
+import { BrushPace, PAINT_MAX_POINTS } from './paint.js?v=56';
+import { createOrbitBrush, pickSystemLive, modulatesContinuously } from './generators/attractor.js?v=56';
+import { AutoParams, featuresFromFingerprint } from './autoparams.js?v=56';
+import { idleState, targetFromFeatures, glide, advance, kick as fieldKick } from './cymafield.js?v=56';
 
 export const WINDOW_SEC = 4;
 export const MORPH_CHECK_INTERVAL = 0.15;
@@ -380,6 +381,30 @@ export class LiveConductor {
 
     const kick = this.kick.step(f.flux, dt);
     const base = this.getParams();
+
+    // ── Liquid: drive the cymatic field straight from this frame ──
+    //
+    // No worker, no regeneration, no crossfade. The field is a dozen floats
+    // the shader re-evaluates per pixel, so gliding them here is the whole
+    // update — which is what gives live input low latency and makes the water
+    // FLOW between patterns instead of cutting to an unrelated one. The morph
+    // path below is skipped entirely for this mode.
+    if (base.mode === 'liquid') {
+      if (!this.field) this.field = idleState();
+      const target = targetFromFeatures({
+        pitchNorm: f.pitchHz > 20 ? Math.min(1, Math.max(0, Math.log2(f.pitchHz / 55) / 6)) : 0.35,
+        rms: f.rms, centroid: f.centroid, spread: f.spread, pitchConf: f.pitchConf,
+      });
+      // Amplitude tracks faster than topology: loudness should feel immediate,
+      // while the modal figure takes a moment to reorganise, the way a real
+      // plate does.
+      glide(this.field, target, dt, 0.55);
+      this.field.amp += (target.amp - this.field.amp) * (1 - Math.exp(-dt / 0.12));
+      if (kick > 0.5) fieldKick(this.field, kick);
+      advance(this.field, dt);
+      this.renderer.setField(this.field);
+      return;
+    }
     this.renderer.setParams({
       exposure: base.exposure * (1 + 1.4 * kick),
       scale: base.scale * (1 + 0.035 * kick),
@@ -476,7 +501,6 @@ export class LiveConductor {
         // Liquid is analytic: it carries circles, not points, so crossfadeTo
         // would dissolve into an EMPTY cloud and nothing would appear live
         // until freeze ran the capture path. Hand the blob straight over.
-        if (out.kind === "blob") { this.renderer.setBlob(out.circles, p.melt ?? out.smooth); return; }
         this.renderer.crossfadeTo(out.positions, out.attr,
           modulating ? MODULATE_CROSSFADE_SEC : MORPH_CROSSFADE_SEC);
       })

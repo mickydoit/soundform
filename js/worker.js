@@ -1,4 +1,4 @@
-import { generate } from './generators/index.js?v=55';
+import { generate } from './generators/index.js?v=56';
 
 self.onmessage = (e) => {
   const { fingerprint, params } = e.data;
@@ -13,7 +13,7 @@ self.onmessage = (e) => {
       // are plain objects, so they ride the structured clone and need no
       // transfer entry.
       { done: true, positions: out.positions, attr: out.attr, strands: out.strands,
-        kind: out.kind, circles: out.circles, smooth: out.smooth },
+        kind: out.kind, state: out.state },
       [out.positions.buffer, out.attr.buffer, ...strandBuffers]
     );
   } catch (err) {

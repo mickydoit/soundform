@@ -1,13 +1,15 @@
-import { AudioEngine } from './audio.js?v=55';
-import { buildFingerprint, buildTrajectory } from './features.js?v=55';
-import { DensityRenderer } from './density.js?v=55';
-import { PALETTES, buildLUT, customRamp, hexToRgb } from './palettes.js?v=55';
-import { exportCanvas, exportStrandSVG, exportStrandPDF, exportTraceSVG, exportTracePDF, framePlan, exportMP4, loopsForDuration, buildBlobSVG, exportBlobPDF } from './exporter.js?v=55';
-import { paletteFromRamp } from './trace.js?v=55';
-import { motionParams, displacePoint } from './motion.js?v=55';
-import { LiveConductor } from './live.js?v=55';
-import { LiveRecorder, MAX_RECORD_SEC } from './recorder.js?v=55';
-import { selectRingSubset } from './strands.js?v=55';
+import { AudioEngine } from './audio.js?v=56';
+import { buildFingerprint, buildTrajectory } from './features.js?v=56';
+import { DensityRenderer } from './density.js?v=56';
+import { PALETTES, buildLUT, customRamp, hexToRgb } from './palettes.js?v=56';
+import { exportCanvas, exportStrandSVG, exportStrandPDF, exportTraceSVG, exportTracePDF, framePlan, exportMP4, loopsForDuration, buildBlobSVG, exportBlobPDF } from './exporter.js?v=56';
+import { paletteFromRamp } from './trace.js?v=56';
+import { motionParams, displacePoint } from './motion.js?v=56';
+import { LiveConductor } from './live.js?v=56';
+import { LiveRecorder, MAX_RECORD_SEC } from './recorder.js?v=56';
+import { selectRingSubset } from './strands.js?v=56';
+import { idleState, targetFromFeatures, glide, advance, kick } from './cymafield.js?v=56';
+import { featuresOf } from './generators/liquid.js?v=56';
 
 const audio = new AudioEngine();
 let renderer = null;
@@ -54,7 +56,7 @@ const params = {
   // Liquid (metaball blob) mode. `melt` is the smooth-union blend radius —
   // how far neighbouring lobes fuse — and overrides the generator's own
   // sound-derived value once the user touches it.
-  gloss: 1.0, dispersion: 1.0, melt: 0.12, blobFlat: false,
+  gloss: 1.0, dispersion: 1.0, melt: 0.3, blobFlat: false,
   // Which attractor system to build. 'auto' restores the historic sound-based
   // routing (halvorsen/clifford by vocal register); anything else is the user's
   // pick and overrides it on both the recorded and the live path. Must match
@@ -109,7 +111,12 @@ window.addEventListener('DOMContentLoaded', () => {
   bindExport();
   if (renderer.fallback) setStatus('Note: reduced quality mode (float buffers unsupported)');
   captureLoop();
-  window.__soundform = { params, getState: () => ({ appState, fingerprint, design }) };
+  window.__soundform = { params, getState: () => ({ appState, fingerprint, design }),
+    // Debug hook: drive Liquid's field to an exact state. Used to capture the
+    // acceptance frames (silence / low tone / high tone / transient) without
+    // needing a working microphone in a headless browser.
+    setField: (st) => { stopFieldPlayback(); applyBlobStyle(); renderer.setField(st); },
+    idleState, targetFromFeatures, kick };
 });
 
 function captureLoop() {
@@ -137,10 +144,13 @@ function regenerate() {
     renderer.setMotion(motionParams(fingerprint.seed));
     // Liquid is analytic — no point cloud to hand over, and no orientation to
     // reset since the blob is drawn in 2D.
-    if (out.kind === 'blob') {
-      renderer.setBlob(out.circles, params.melt || out.smooth);
+    if (out.kind === 'field') {
+      // A recording is a timeline, not one figure: play the captured frames
+      // back through the field so the same audio animates the same way every
+      // time, instead of collapsing to a single static pattern.
+      startFieldPlayback(out.state);
       applyBlobStyle();
-      setStatus('Liquid design created — adjust sliders · export Flat/Build vectors');
+      setStatus('Liquid — playing back · export Flat/Build vectors');
       return;
     }
     // Every Create presents a perfect plate: re-assert top-down so prior
@@ -151,7 +161,7 @@ function regenerate() {
     setStatus('Design created — drag to rotate · adjust sliders');
   };
   try {
-    if (!worker) worker = new Worker('js/worker.js?v=55', { type: 'module' });
+    if (!worker) worker = new Worker('js/worker.js?v=56', { type: 'module' });
     worker.onmessage = (e) => {
       if (e.data.progress !== undefined) setStatus(`Generating… ${Math.round(e.data.progress * 100)}%`);
       else if (e.data.error) setStatus(`Generation error: ${e.data.error}`);
@@ -165,7 +175,7 @@ function regenerate() {
 }
 
 async function fallbackGenerate(onResult) {
-  const { generate } = await import('./generators/index.js?v=55');
+  const { generate } = await import('./generators/index.js?v=56');
   onResult(generate(fingerprint, { ...params, strandCount: 96 }));
 }
 
@@ -174,7 +184,7 @@ async function fallbackGenerate(onResult) {
 function workerGenerate(fingerprint, params) {
   return new Promise((resolve) => {
     try {
-      if (!liveWorker) liveWorker = new Worker('js/worker.js?v=55', { type: 'module' });
+      if (!liveWorker) liveWorker = new Worker('js/worker.js?v=56', { type: 'module' });
       liveWorker.onmessage = (e) => {
         if (e.data.done) resolve(e.data);
         else if (e.data.error) resolve(null);
@@ -197,7 +207,7 @@ async function liveGenerate(fp, p) {
   // result as "generation failed, retry later" (see tick()), so surface a
   // throw the same way rather than letting it become an unhandled rejection.
   try {
-    const { generate } = await import('./generators/index.js?v=55');
+    const { generate } = await import('./generators/index.js?v=56');
     return generate(fp, p);
   } catch {
     return null;
@@ -278,6 +288,55 @@ function applyRenderParams() {
   });
 }
 
+// ── Liquid: recorded playback ──────────────────────────────────────────
+//
+// The captured `frames` are a timeline of musical features. Playing them back
+// through the field is what turns a recording into an animated sequence
+// rather than one static figure — and because the field is deterministic in
+// its inputs, the same recording produces the same sequence every time.
+let fieldPlayback = null;
+
+function startFieldPlayback(initial) {
+  stopFieldPlayback();
+  const state = { ...initial };
+  const pb = { state, t0: performance.now() / 1000, last: performance.now() / 1000,
+               ampBias: params.melt, raf: 0, lastKickRms: 0 };
+  const span = frames.length > 1 ? frames[frames.length - 1].t - frames[0].t : 0;
+
+  const step = () => {
+    pb.raf = requestAnimationFrame(step);
+    const now = performance.now() / 1000;
+    const dt = Math.min(0.1, now - pb.last);
+    pb.last = now;
+    const elapsed = span > 0 ? ((now - pb.t0) % span) : 0;
+
+    if (frames.length) {
+      let i = 0;
+      const t0 = frames[0].t;
+      while (i < frames.length - 1 && frames[i].t - t0 < elapsed) i++;
+      const f = frames[i];
+      const target = targetFromFeatures(featuresOf(f));
+      // The Flow slider biases amplitude rather than replacing it, so the
+      // recording's own dynamics still read through it.
+      target.amp = Math.min(1, target.amp * (0.4 + pb.ampBias * 3));
+      glide(state, target, dt, 0.35);
+      // Onsets punch a ripple through the surface.
+      const rise = (f.rms ?? 0) - pb.lastKickRms;
+      pb.lastKickRms = f.rms ?? 0;
+      if (rise > 0.035) kick(state, Math.min(1, rise * 8));
+    }
+    advance(state, dt);
+    renderer.setField(state);
+  };
+  pb.raf = requestAnimationFrame(step);
+  fieldPlayback = pb;
+}
+
+function stopFieldPlayback() {
+  if (fieldPlayback) cancelAnimationFrame(fieldPlayback.raf);
+  fieldPlayback = null;
+}
+
 // Water shading applies only to a cymatics design actually built as water —
 // the signed height field the shader reads exists in no other generator.
 function waterActive() {
@@ -315,6 +374,7 @@ function applyBlobStyle() {
     dispersion: params.dispersion,
     ink: hexToRgb(params.colorPrimary),
     ground: hexToRgb(params.background),
+    deep: hexToRgb(params.colorSecondary),
   });
 }
 
@@ -507,7 +567,8 @@ function bindAudio() {
     fingerprint = null; design = null; frames = [];
     appState = 'blank';
     audio.stop();
-    renderer.clear();
+    stopFieldPlayback();
+  renderer.clear();
     document.getElementById('btn-mic').classList.remove('hidden');
     document.getElementById('lbl-file').classList.remove('hidden');
     document.getElementById('btn-stop').classList.add('hidden');
@@ -598,6 +659,7 @@ function enterLive() {
   appState = 'live';
   dropPausedPaint();
   frames = []; fingerprint = null; design = null;
+  stopFieldPlayback();
   renderer.clear();
   ['btn-mic', 'lbl-file', 'btn-stop', 'btn-live'].forEach(id =>
     document.getElementById(id).classList.add('hidden'));
@@ -751,8 +813,11 @@ function bindControls() {
     });
   }
   document.getElementById('sl-melt').addEventListener('input', (e) => {
+    // Flow: how much water is gathered into the figure. Overrides the
+    // audio-derived amplitude for a captured design so a still frame can be
+    // pushed from scattered droplets through to a fully formed pattern.
     params.melt = parseFloat(e.target.value);
-    if (design && design.kind === 'blob') renderer.setBlob(design.circles, params.melt);
+    if (fieldPlayback) { fieldPlayback.ampBias = params.melt; }
   });
   document.getElementById('chk-flat-blob').addEventListener('change', (e) => {
     params.blobFlat = e.target.checked;
@@ -840,11 +905,11 @@ function bindExport() {
           return;
         }
         if (fmt.startsWith('blob-') || fmt.startsWith('build-')) {
-          if (!design || design.kind !== 'blob') { setStatus('Switch to Liquid and create a design first'); return; }
+          if (!design || design.kind !== 'field') { setStatus('Switch to Liquid and create a design first'); return; }
           const variant = fmt.startsWith('build-') ? 'construction' : 'flat';
           const [W, H] = exportDims();
           const opts = {
-            circles: design.circles, smooth: params.melt,
+            state: renderer.blob || design.state,
             width: W, height: H,
             ink: params.colorPrimary,
             background: params.transparentBg ? null : params.background,
@@ -1026,7 +1091,7 @@ async function runTrace(kind) { // kind: 'svg' | 'pdf'
     };
     background = params.transparentBg ? null : params.background;
 
-    traceWorker = new Worker('js/traceworker.js?v=55'); // classic worker
+    traceWorker = new Worker('js/traceworker.js?v=56'); // classic worker
   } catch (err) {
     endTrace();
     setStatus(`Trace error: ${err.message}`);

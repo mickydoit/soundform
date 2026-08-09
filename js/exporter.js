@@ -1,7 +1,8 @@
-import { buildVectorPaths, toBezierPath, buildPdfOps, toRelativeBezierLegs } from './strands.js?v=55';
-import { hexToRgb } from './palettes.js?v=55';
-import { buildTraceSVG, buildTracePdfOps } from './trace.js?v=55';
-import { blobOutline, ringToPath, closedCatmullRom } from './blob.js?v=55';
+import { buildVectorPaths, toBezierPath, buildPdfOps, toRelativeBezierLegs } from './strands.js?v=56';
+import { hexToRgb } from './palettes.js?v=56';
+import { buildTraceSVG, buildTracePdfOps } from './trace.js?v=56';
+import { fieldOutline, ringToPath, closedCatmullRom } from './blob.js?v=56';
+import { makeWaterField } from './cymafield.js?v=56';
 
 export async function exportCanvas(canvas, format) {
   switch (format) {
@@ -130,28 +131,19 @@ export function exportStrandPDF({ strands, positions, mvp, width, height, stops,
 //   'flat'         — the filled silhouette (one path per ring)
 //   'construction' — the outline plus the constituent circles, so the
 //                    underlying geometry stays adjustable in Illustrator
-export function buildBlobSVG({ circles, smooth, width, height, ink, background, variant = 'flat' }) {
-  const { rings, project, scale } = blobOutline(circles, { smooth, width, height });
+export function buildBlobSVG({ state, width, height, ink, background, variant = 'flat' }) {
+  const { rings, project } = fieldOutline(makeWaterField(state), { width, height });
   const paths = rings.map((r, i) =>
-    `    <path id="lobe-${String(i + 1).padStart(2, '0')}" d="${ringToPath(r)}"/>`);
+    `    <path id="pool-${String(i + 1).padStart(3, '0')}" d="${ringToPath(r)}"/>`);
 
   const body = variant === 'construction'
-    ? [
-        `  <g id="outline" fill="none" stroke="${ink}" stroke-width="2">`,
-        ...paths,
-        '  </g>',
-        `  <g id="construction" fill="none" stroke="${ink}" stroke-width="1" opacity="0.45">`,
-        ...circles.map((c, i) => {
-          const [cx, cy] = project(c.x, c.y);
-          return `    <circle id="c-${String(i + 1).padStart(2, '0')}" cx="${cx.toFixed(1)}"` +
-                 ` cy="${cy.toFixed(1)}" r="${(c.r * scale).toFixed(1)}"/>`;
-        }),
-        '  </g>',
-      ]
-    // ONE path with every ring as a subpath. Separate <path> elements each
-    // fill independently — fill-rule is per-path — so the interior holes
-    // would come out solid instead of punched through.
-    : [`  <path id="blob" fill="${ink}" fill-rule="evenodd" d="${rings.map((r) => ringToPath(r)).join(' ')}"/>`];
+    // Outline-only: the cymatic skeleton as editable strokes. (The old
+    // construction view drew the generating circles; a modal field has no
+    // circles to draw, so what is useful now is the unfilled figure.)
+    ? [`  <g id="outline" fill="none" stroke="${ink}" stroke-width="2">`, ...paths, '  </g>']
+    // ONE path with every ring as a subpath: fill-rule is per-path, so
+    // separate <path> elements would fill the enclosed voids solid.
+    : [`  <path id="water" fill="${ink}" fill-rule="evenodd" d="${rings.map((r) => ringToPath(r)).join(' ')}"/>`];
 
   return [
     '<?xml version="1.0" encoding="UTF-8"?>',
@@ -162,9 +154,9 @@ export function buildBlobSVG({ circles, smooth, width, height, ink, background, 
   ].join('\n');
 }
 
-export function exportBlobPDF({ circles, smooth, width, height, ink, background, variant = 'flat' }) {
+export function exportBlobPDF({ state, width, height, ink, background, variant = 'flat' }) {
   const { jsPDF } = window.jspdf;
-  const { rings, project, scale } = blobOutline(circles, { smooth, width, height });
+  const { rings } = fieldOutline(makeWaterField(state), { width, height });
   const mmW = width > height ? 297 : 210;
   const mmH = mmW * (height / width);
   const doc = new jsPDF({
@@ -183,10 +175,9 @@ export function exportBlobPDF({ circles, smooth, width, height, ink, background,
   doc.setDrawColor(ir, ig, ib);
 
   if (variant !== 'construction') {
-    // Emitted as raw operators rather than via lines(): each lines() call
-    // paints its own path, which fills the interior holes solid. Building one
-    // path from every ring and closing with an EVEN-ODD fill (f*) is what
-    // punches them through.
+    // Raw operators rather than lines(): each lines() call paints its own
+    // path, which fills the enclosed voids solid. One path across every ring
+    // closed with an EVEN-ODD fill (f*) is what punches them through.
     const ci = (x) => doc.internal.getCoordinateString(x);
     const cv = (y) => doc.internal.getVerticalCoordinateString(y);
     for (const ring of rings) {
@@ -204,18 +195,10 @@ export function exportBlobPDF({ circles, smooth, width, height, ink, background,
     doc.setLineWidth(2 * px2mm);
     for (const ring of rings) {
       if (ring.length < 3) continue;
-      // Periodic beziers, encoded the way jsPDF's lines() actually reads
-      // them: all three pairs are offsets from the point BEFORE the curve,
-      // not chained. Chaining silently shatters every curve after the first.
+      // jsPDF's lines() reads all three pairs of a curve entry as offsets
+      // from the point BEFORE the curve, not chained from one to the next.
       const legs = toRelativeBezierLegs(ring[0], closedCatmullRom(ring));
       doc.lines(legs, ring[0][0] * px2mm, ring[0][1] * px2mm, [px2mm, px2mm], 'S', true);
-    }
-  }
-  if (variant === 'construction') {
-    doc.setLineWidth(1 * px2mm);
-    for (const c of circles) {
-      const [cx, cy] = project(c.x, c.y);
-      doc.circle(cx * px2mm, cy * px2mm, c.r * scale * px2mm, 'S');
     }
   }
   doc.save(`soundform-${variant}.pdf`);

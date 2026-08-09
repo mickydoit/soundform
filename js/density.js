@@ -152,110 +152,162 @@ void main() {
 
 const TONE_VERT = `varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }`;
 
-// ── Liquid: analytic metaball blob, shaded as glossy water ──────────────
+// ── Liquid: cymatic water ───────────────────────────────────────────────
 //
-// Completely bypasses the splat/density pipeline. There is no point cloud —
-// the shape is an isocontour of the smooth-union SDF below, evaluated per
-// pixel. `smin`/`blobField` MUST stay in lockstep with js/blob.js, which
-// evaluates the identical field on the CPU to produce the vector export; if
-// they drift, the exported outline no longer matches what is on screen.
-const BLOB_MAX = 16;
-const BLOB_FRAG = `
+// One analytic fullscreen pass. There is no point cloud and no circle SDF —
+// the geometry is a modal standing-wave field, and the water is a thickness
+// field that pools along its nodal lines.
+//
+// ⚠ psi() and waterAt() MIRROR js/cymafield.js exactly. The CPU copy drives
+// the vector export; if the two drift, the exported outline stops matching
+// the screen. Change them together.
+const CYMA_FRAG = `
 precision highp float;
 varying vec2 vUv;
-uniform vec3 uCircles[${BLOB_MAX}];   // xy = centre, z = radius
-uniform int uCount;
-uniform float uSmooth, uAspect, uZoom;
+uniform float uM, uN, uKr, uMa, uMix, uAmp, uFine, uChaos, uPhase;
+uniform float uTimeC, uRipAmt, uRipT;
+uniform float uAspect, uZoom, uGloss, uDispersion, uFlat, uTransparentB;
 uniform vec2 uPan;
-uniform vec3 uInk, uGround;
-uniform float uGloss, uDispersion, uFlat, uTransparentB;
+uniform vec3 uGround, uInk, uDeep;
 
-float smin(float a, float b, float k) {
-  float h = clamp(0.5 + 0.5 * (b - a) / k, 0.0, 1.0);
-  return mix(b, a, h) - k * h * (1.0 - h);
+const float PI = 3.14159265359;
+
+float psi(vec2 p) {
+  vec2 uv = p * 0.5 + 0.5;
+  float sq = cos(uM * PI * uv.x) * cos(uN * PI * uv.y)
+           - cos(uN * PI * uv.x) * cos(uM * PI * uv.y);
+
+  float r = length(p);
+  float th = atan(p.y, p.x);
+  // Periodic in theta: cos(uMa*th) is only periodic for integer uMa, and a
+  // non-integer order draws a hard seam along the atan branch cut. Blending
+  // the two neighbouring integer orders keeps it both smooth and seamless.
+  float m0 = floor(uMa), fm = uMa - m0;
+  float ang = cos(m0 * th + uPhase) * (1.0 - fm) + cos((m0 + 1.0) * th + uPhase) * fm;
+  float rad = cos(uKr * r - uMa * PI * 0.5 - PI * 0.25)
+            / sqrt(1.0 + uKr * r * 0.6) * ang;
+
+  float f = sq * (1.0 - uMix) + rad * uMix * 1.7;
+
+  f += uFine * 0.30 * cos(uM * 2.7 * PI * uv.x + uTimeC * 0.21)
+                    * cos(uN * 2.7 * PI * uv.y - uTimeC * 0.17);
+
+  f += uChaos * 0.45 * (cos((uM + 1.7) * PI * uv.x) * cos((uN + 0.6) * PI * uv.y)
+                      - cos((uN + 0.6) * PI * uv.x) * cos((uM + 1.7) * PI * uv.y));
+
+  f += uRipAmt * sin(14.0 * r - uRipT * 9.0) * exp(-uRipT * 1.6) * exp(-r * 0.7);
+
+  return f * (0.88 + 0.12 * sin(uTimeC * 0.9));
 }
 
-float blobField(vec2 p) {
-  float d = length(p - uCircles[0].xy) - uCircles[0].z;
-  for (int i = 1; i < ${BLOB_MAX}; i++) {
-    if (i >= uCount) break;
-    d = smin(d, length(p - uCircles[i].xy) - uCircles[i].z, uSmooth);
+float nodalAt(vec2 p) {
+  float f = abs(psi(p));
+  float band = 0.05 + 0.34 * uAmp;
+  float T = 1.0 - smoothstep(band * 0.30, band, f);
+  return T * (1.0 - smoothstep(1.02, 1.30, length(p)));
+}
+
+float hash2(vec2 c) { return fract(sin(c.x * 127.1 + c.y * 311.7) * 43758.5453); }
+
+// Idle pools: jittered centres with per-cell radii, so they never read as a
+// repeated grid of circles — the exact failure of the old model.
+float dropsAt(vec2 p) {
+  float scale = 2.6;
+  vec2 g = p * scale;
+  vec2 i0 = floor(g);
+  float best = 0.0;
+  for (int dj = -1; dj <= 1; dj++) {
+    for (int di = -1; di <= 1; di++) {
+      vec2 c = i0 + vec2(float(di), float(dj));
+      float h = hash2(c), h2 = hash2(c + vec2(37.1, -11.7));
+      if (h > 0.62) {
+        vec2 ctr = c + vec2(0.15 + 0.7 * h, 0.15 + 0.7 * h2);
+        float rad = 0.16 + 0.30 * h2;
+        // Rounded, slightly elongated puddles — per-drop rotation and aspect,
+        // not angular harmonics, which turned every droplet into a starfish.
+        float rot = h * 6.2831853;
+        vec2 dv = g - ctr;
+        vec2 q = vec2((dv.x * cos(rot) + dv.y * sin(rot)) / (0.66 + 0.7 * h2),
+                      -dv.x * sin(rot) + dv.y * cos(rot));
+        float a = atan(q.y, q.x);
+        float rr = rad * (1.0 + 0.10 * sin(a * 2.0 + h * 21.0) + 0.05 * sin(a * 3.0 - h2 * 17.0));
+        best = max(best, 1.0 - smoothstep(rr * 0.45, rr, length(q)));
+      }
+    }
   }
-  return d;
+  return best * 0.7 * (1.0 - smoothstep(1.02, 1.30, length(p)));
+}
+
+float waterAt(vec2 p) {
+  float gth = smoothstep(0.04, 0.34, uAmp);
+  return clamp(nodalAt(p) * gth + dropsAt(p) * (1.0 - gth), 0.0, 1.0);
 }
 
 void main() {
-  vec2 p = (vUv - 0.5 - uPan) * vec2(uAspect, 1.0) * 2.6 / uZoom;
-  float d = blobField(p);
+  vec2 p = (vUv - 0.5 - uPan) * vec2(uAspect, 1.0) * 3.15 / uZoom;
 
-  // Screen-space derivative gives a resolution-independent edge width, so the
-  // rim stays one pixel wide at any export size instead of scaling with it.
-  float px = fwidth(d);
-  float inside = 1.0 - smoothstep(-px, px, d);
+  float T = waterAt(p);
+  float px = 1.6 / (uZoom * 420.0);
 
   if (uFlat > 0.5) {
-    // Flat state: exactly the silhouette the vector export emits, so what is
-    // on screen and what lands in the SVG are the same shape.
-    gl_FragColor = mix(vec4(mix(uGround, uInk, inside), 1.0),
-                       vec4(uInk, inside), uTransparentB);
+    float m = smoothstep(0.45, 0.55, T);
+    gl_FragColor = mix(vec4(mix(uGround, uInk, m), 1.0), vec4(uInk, m), uTransparentB);
     return;
   }
 
-  // TRANSPARENT LIQUID.
-  //
-  // Water is CLEAR. Its body is whatever is behind it, essentially unchanged,
-  // and everything that says "liquid" happens in a narrow meniscus at the
-  // boundary: a dark line right at the contact edge where light refracts away
-  // too steeply to reach the eye, a bright line just inside it off the raised
-  // curve, and colour splitting on that bright line.
-  //
-  // Shading the INTERIOR — a dome gradient plus a body tint pulled toward the
-  // ink colour — is what made this read as an opaque bubble. A dome says
-  // "sphere", and a tinted interior says "solid". Both had to go. It also
-  // removes the last of the medial-axis chevrons for free: with every
-  // normal-driven term confined to a thin edge band, the distance field's
-  // gradient singularity at each circle's centre is never sampled for shading.
-  vec2 e = vec2(px * 1.5, 0.0);
-  vec2 grad = vec2(blobField(p + e.xy) - blobField(p - e.xy),
-                   blobField(p + e.yx) - blobField(p - e.yx));
-  vec2 nxy = normalize(grad + 1e-6);
+  // Surface normal from the THICKNESS gradient. Thickness — not a signed
+  // distance — is what a liquid surface actually is, so this is where the
+  // refraction, specular and caustics all come from.
+  vec2 e = vec2(px, 0.0);
+  vec2 grad = vec2(waterAt(p + e.xy) - waterAt(p - e.xy),
+                   waterAt(p + e.yx) - waterAt(p - e.yx));
+  vec3 N = normalize(vec3(-grad.x * 26.0, 1.0, -grad.y * 26.0));
 
-  float into = -d;                              // 0 at the outline, grows inward
-  float mw = max(1e-4, uSmooth * 0.55);         // meniscus width
-  float m = clamp(into / mw, 0.0, 1.0);
+  // A faint structured backdrop. Refraction is invisible against a flat
+  // colour — there has to be something behind the water for it to bend.
+  vec2 ruv = vUv + N.xz * T * 0.055 * (1.0 + uDispersion * 0.4);
+  float bandY = 0.5 + 0.5 * sin(ruv.y * 11.0 + ruv.x * 3.0);
+  float vign = 1.0 - 0.35 * length(vUv - 0.5);
+  vec3 back = uGround * (vign - 0.035 + 0.05 * bandY);
+  vec3 backPlain = uGround * (1.0 - 0.35 * length(vUv - 0.5));
 
-  float contact = exp(-pow(m / 0.22, 2.0));            // dark, hugs the outline
-  float meniscus = exp(-pow((m - 0.40) / 0.20, 2.0));  // bright, just inside
+  // Caustics: converging surface focuses light. Second difference of
+  // thickness, which the gradient taps have already paid for.
+  float lap = waterAt(p + e.xy) + waterAt(p - e.xy)
+            + waterAt(p + e.yx) + waterAt(p - e.yx) - 4.0 * T;
+  float caustic = clamp(-lap * 9.0, 0.0, 1.0);
 
-  // Hue sweep from the edge normal's direction — thin-film dispersion reads
-  // as colour SPLITTING along the rim, not as a tint over the whole body.
-  float a = atan(nxy.y, nxy.x) * 2.0;
+  // Depth tint — thicker water is bluer and darker, which is most of what
+  // makes it read as a real liquid layer rather than a decal.
+  vec3 body = mix(back, uDeep, clamp(T * 0.55, 0.0, 1.0));
+  body += caustic * 0.28 * uGloss;
+
+  // Contact darkening: a soft shadow offset beneath thicker water.
+  float shade = waterAt(p + vec2(px * 5.0, -px * 5.0));
+  body *= 1.0 - 0.22 * clamp(shade - T, 0.0, 1.0) * 4.0;
+
+  vec3 L = normalize(vec3(-0.45, 0.80, 0.40));
+  vec3 V = vec3(0.0, 1.0, 0.0);
+  vec3 H = normalize(L + V);
+  float spec = pow(max(0.0, dot(N, H)), 34.0);
+  float fres = pow(1.0 - max(0.0, dot(N, V)), 4.0);
+
+  // Dispersion only where the surface actually bends hard.
+  // Gated by thickness as well as curvature: a small droplet has a huge
+  // gradient, so curvature alone ringed every one of them in rainbow —
+  // the 'rainbow outline around every edge' the brief rules out.
+  float curv = clamp(length(grad) * 9.0, 0.0, 1.0) * smoothstep(0.15, 0.6, T);
+  float a = atan(grad.y, grad.x) * 2.0;
   vec3 iri = vec3(sin(a), sin(a + 2.094), sin(a + 4.188)) * 0.5 + 0.5;
-  float spec = pow(clamp(dot(nxy, normalize(vec2(-0.5, 0.86))), 0.0, 1.0), 3.0);
 
-  // Concentrate dispersion where the edge actually bends. A true distance
-  // field has |grad| = 1 everywhere; the smooth union is the one place it
-  // dips, which is exactly the necks and tight junctions. Free curvature
-  // signal from the gradient already in hand. Without it the rainbow runs
-  // evenly round the whole outline, which reads as a decal rather than as
-  // light splitting through a curved edge.
-  float curv = clamp(1.0 - length(grad) / (2.0 * e.x), 0.0, 1.0);
-  float irisAmt = 0.25 + 0.75 * smoothstep(0.0, 0.45, curv);
+  vec3 col = body
+           + vec3(1.0) * spec * 0.85 * uGloss
+           + vec3(1.0) * fres * 0.16 * uGloss
+           + (iri - 0.5) * curv * fres * uDispersion * 0.34;
 
-  // A broad sheen across the whole shape, from POSITION rather than from the
-  // normal — a window reflection lying on the surface. Position has no
-  // singularity, so this reads as glass without reintroducing the chevrons.
-  float sheen = 0.5 + 0.5 * dot(normalize(p + 1e-6), normalize(vec2(-0.6, 0.8)));
-
-  vec3 col = uGround;
-  col = mix(col, col * 0.45, contact * 0.9);                       // contact edge
-  col += vec3(1.0) * meniscus * (0.30 + 0.70 * spec) * uGloss;     // lit meniscus
-  col += (iri - 0.5) * meniscus * uDispersion * irisAmt * 0.8;     // dispersion
-  col += vec3(1.0) * sheen * sheen * 0.05 * uGloss;                // faint sheen
-  col += (uInk - uGround) * 0.06;                                  // barest body tint
-
-  gl_FragColor = mix(vec4(mix(uGround, col, inside), 1.0),
-                     vec4(col, inside), uTransparentB);
+  float cov = smoothstep(0.02, 0.14, T);
+  col = mix(backPlain, col, cov);
+  gl_FragColor = mix(vec4(col, 1.0), vec4(col, cov), uTransparentB);
 }`;
 
 export class DensityRenderer {
@@ -369,26 +421,26 @@ export class DensityRenderer {
     this.toneScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), this.toneMat));
 
     // Liquid mode's own fullscreen pass. Built once and left idle until a
-    // blob is set; `this.blob` null means every other mode behaves exactly as
-    // before, down to the render path taken.
+    // field state is set; `this.blob` null means every other mode behaves
+    // exactly as before, down to the render path taken.
     this.blob = null;
     this.blobMat = new THREE.ShaderMaterial({
-      vertexShader: TONE_VERT, fragmentShader: BLOB_FRAG,
-      extensions: { derivatives: true },   // fwidth() is an extension in WebGL1
-      // Flat typed arrays rather than THREE.Vector2/3: three.js binds a
-      // length-3N array to a vec3[N] uniform identically, and it keeps this
-      // constructor runnable under the minimal THREE stub the node tests use.
+      vertexShader: TONE_VERT, fragmentShader: CYMA_FRAG,
+      // Flat typed arrays rather than THREE.Vector3: three.js binds them
+      // identically, and it keeps this constructor runnable under the minimal
+      // THREE stub the node tests use.
       uniforms: {
-        uCircles: { value: new Float32Array(BLOB_MAX * 3) },
-        uCount: { value: 0 },
-        uSmooth: { value: 0.18 },
-        uAspect: { value: 1 },
-        uZoom: { value: 1 },
+        uM: { value: 3 }, uN: { value: 2 }, uKr: { value: 7 }, uMa: { value: 3 },
+        uMix: { value: 0.5 }, uAmp: { value: 0 }, uFine: { value: 0 },
+        uChaos: { value: 0 }, uPhase: { value: 0 },
+        uTimeC: { value: 0 }, uRipAmt: { value: 0 }, uRipT: { value: 9 },
+        uAspect: { value: 1 }, uZoom: { value: 1 },
         uPan: { value: new Float32Array([0, 0]) },
-        uInk: { value: new Float32Array([0.06, 0.07, 0.09]) },
-        uGround: { value: new Float32Array([0.72, 0.76, 0.79]) },
         uGloss: { value: 1 }, uDispersion: { value: 1 },
         uFlat: { value: 0 }, uTransparentB: { value: 0 },
+        uGround: { value: new Float32Array([0.72, 0.76, 0.80]) },
+        uInk: { value: new Float32Array([0.10, 0.13, 0.17]) },
+        uDeep: { value: new Float32Array([0.52, 0.62, 0.72]) },
       },
     });
     this.blobScene = new THREE.Scene();
@@ -474,28 +526,33 @@ export class DensityRenderer {
   }
 
   // Liquid mode. Passing null returns the renderer to the point-cloud path.
-  setBlob(circles, smooth) {
-    if (!circles || !circles.length) { this.blob = null; this._dirty = true; return; }
+  //
+  // The whole field state lives in uniforms and is re-evaluated per pixel per
+  // frame, so morphing costs nothing: updating these is a handful of floats,
+  // not a regeneration. That is what lets live input flow continuously
+  // instead of crossfading between unrelated designs.
+  setField(state) {
+    if (!state) { this.blob = null; this._dirty = true; return; }
     const u = this.blobMat.uniforms;
-    const n = Math.min(circles.length, BLOB_MAX);
-    const arr = u.uCircles.value;
-    arr.fill(0);
-    for (let i = 0; i < n; i++) {
-      arr[i * 3] = circles[i].x; arr[i * 3 + 1] = circles[i].y; arr[i * 3 + 2] = circles[i].r;
-    }
-    u.uCount.value = n;
-    u.uSmooth.value = Math.max(0.01, smooth || 0.18);
-    this.blob = { circles: circles.slice(0, n), smooth: u.uSmooth.value };
-    this._dirty = true;
+    u.uM.value = state.m; u.uN.value = state.n;
+    u.uKr.value = state.kr; u.uMa.value = state.ma;
+    u.uMix.value = state.mix; u.uAmp.value = state.amp;
+    u.uFine.value = state.fine; u.uChaos.value = state.chaos;
+    u.uPhase.value = state.phase;
+    u.uTimeC.value = state.t;
+    u.uRipAmt.value = state.ripAmt; u.uRipT.value = state.ripT;
+    this.blob = state;              // the render branch keys off this
+    this._dirty = true;             // analytic + animated: redraw every update
   }
 
-  setBlobStyle({ flat, gloss, dispersion, ink, ground } = {}) {
+  setBlobStyle({ flat, gloss, dispersion, ink, ground, deep } = {}) {
     const u = this.blobMat.uniforms;
     if (flat !== undefined) u.uFlat.value = flat ? 1 : 0;
     if (gloss !== undefined) u.uGloss.value = gloss;
     if (dispersion !== undefined) u.uDispersion.value = dispersion;
     if (ink) u.uInk.value.set(ink);
     if (ground) u.uGround.value.set(ground);
+    if (deep) u.uDeep.value.set(deep);
     this._dirty = true;
   }
 
@@ -786,6 +843,13 @@ export class DensityRenderer {
       const u = this.blobMat.uniforms;
       u.uAspect.value = w / h;
       u.uZoom.value = this._zoom / (this._insetZoomOut || 1);
+      // Centre the figure in the region NOT covered by the floating chrome,
+      // the same job _applyViewOffset does for the point-cloud camera. This
+      // pass bypasses that camera entirely, so it has to shift its own UVs or
+      // the design sits centred behind the control panel.
+      const pan = u.uPan.value;
+      pan[0] = -((this._insetR || 0) / 2) / w;
+      pan[1] = ((this._insetB || 0) / 2) / h;
       this.renderer.setRenderTarget(target);
       this.renderer.render(this.blobScene, this.toneCam);
       this.renderer.setRenderTarget(null);
@@ -824,6 +888,28 @@ export class DensityRenderer {
 
   _loop() {
     requestAnimationFrame(() => this._loop());
+    // Liquid animates continuously — a standing wave that stopped moving
+    // would read as a still image. The renderer owns this clock so the water
+    // keeps breathing (and a transient keeps decaying) even when no audio is
+    // arriving, which is what makes the idle state look like resting liquid
+    // rather than a frozen frame.
+    if (this.blob) {
+      const nowB = performance.now() / 1000;
+      const dtB = Math.min(0.1, this._blobTick ? nowB - this._blobTick : 0.016);
+      this._blobTick = nowB;
+      this.blob.t += dtB;
+      this.blob.ripT += dtB;
+      this.blob.phase += dtB * 0.15;
+      this.blob.ripAmt *= Math.exp(-dtB * 1.2);
+      const u = this.blobMat.uniforms;
+      u.uTimeC.value = this.blob.t;
+      u.uRipT.value = this.blob.ripT;
+      u.uPhase.value = this.blob.phase;
+      u.uRipAmt.value = this.blob.ripAmt;
+      this._dirty = true;
+    } else {
+      this._blobTick = 0;
+    }
     if (this._params.autoRotate > 0 && this.points) {
       this._rotY += this._params.autoRotate * 0.004;
       this._dirty = true;
