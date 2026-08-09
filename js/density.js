@@ -166,6 +166,11 @@ precision highp float;
 varying vec2 vUv;
 uniform float uM, uN, uKr, uMa, uMix, uAmp, uFine, uChaos, uPhase;
 uniform float uTimeC, uRipAmt, uRipT;
+// Material time is DELIBERATELY separate from uTimeC. Geometry time moves
+// the cymatic figure itself; material time moves only light on the water.
+// Live Hold freezes the first and keeps the second, which is what lets a
+// held design shimmer without its topology drifting.
+uniform float uMatTime;
 uniform float uAspect, uZoom, uGloss, uDispersion, uFlat, uTransparentB;
 uniform vec2 uPan;
 uniform vec3 uGround, uInk, uDeep;
@@ -261,7 +266,15 @@ void main() {
   vec2 e = vec2(px, 0.0);
   vec2 grad = vec2(waterAt(p + e.xy) - waterAt(p - e.xy),
                    waterAt(p + e.yx) - waterAt(p - e.yx));
-  vec3 N = normalize(vec3(-grad.x * 26.0, 1.0, -grad.y * 26.0));
+
+  // Shimmer perturbs the LIGHTING normal only — never the thickness T. The
+  // silhouette, the coverage mask and therefore the vector export stay
+  // bit-identical while the surface is moving, so a held design cannot drift
+  // its topology no matter how long it shimmers.
+  vec2 shim = vec2(sin(p.x * 3.1 + uMatTime * 0.70) * cos(p.y * 2.6 - uMatTime * 0.50),
+                   cos(p.x * 2.4 - uMatTime * 0.62) * sin(p.y * 3.3 + uMatTime * 0.81))
+            * 0.055 * smoothstep(0.05, 0.5, T);
+  vec3 N = normalize(vec3(-(grad.x * 26.0 + shim.x), 1.0, -(grad.y * 26.0 + shim.y)));
 
   // A faint structured backdrop. Refraction is invisible against a flat
   // colour — there has to be something behind the water for it to bend.
@@ -275,7 +288,8 @@ void main() {
   // thickness, which the gradient taps have already paid for.
   float lap = waterAt(p + e.xy) + waterAt(p - e.xy)
             + waterAt(p + e.yx) + waterAt(p - e.yx) - 4.0 * T;
-  float caustic = clamp(-lap * 9.0, 0.0, 1.0);
+  float caustic = clamp(-lap * 9.0, 0.0, 1.0)
+                * (0.82 + 0.18 * sin(uMatTime * 1.25 + p.x * 4.0 + p.y * 3.1));
 
   // Depth tint — thicker water is bluer and darker, which is most of what
   // makes it read as a real liquid layer rather than a decal.
@@ -434,6 +448,7 @@ export class DensityRenderer {
         uMix: { value: 0.5 }, uAmp: { value: 0 }, uFine: { value: 0 },
         uChaos: { value: 0 }, uPhase: { value: 0 },
         uTimeC: { value: 0 }, uRipAmt: { value: 0 }, uRipT: { value: 9 },
+        uMatTime: { value: 0 },
         uAspect: { value: 1 }, uZoom: { value: 1 },
         uPan: { value: new Float32Array([0, 0]) },
         uGloss: { value: 1 }, uDispersion: { value: 1 },
@@ -531,7 +546,11 @@ export class DensityRenderer {
   // frame, so morphing costs nothing: updating these is a handful of floats,
   // not a regeneration. That is what lets live input flow continuously
   // instead of crossfading between unrelated designs.
-  setField(state) {
+  // `anim` is the render state, not a style:
+  //   'full'     — live and responding: geometry and material both advance
+  //   'material' — live HOLD: geometry frozen, only light on the water moves
+  //   'none'     — submitted recording: nothing advances, zero draw calls
+  setField(state, anim = 'full') {
     if (!state) { this.blob = null; this._dirty = true; return; }
     const u = this.blobMat.uniforms;
     u.uM.value = state.m; u.uN.value = state.n;
@@ -541,8 +560,9 @@ export class DensityRenderer {
     u.uPhase.value = state.phase;
     u.uTimeC.value = state.t;
     u.uRipAmt.value = state.ripAmt; u.uRipT.value = state.ripT;
-    this.blob = state;              // the render branch keys off this
-    this._dirty = true;             // analytic + animated: redraw every update
+    this.blob = state;
+    this.blobAnim = anim;
+    this._dirty = true;
   }
 
   setBlobStyle({ flat, gloss, dispersion, ink, ground, deep } = {}) {
@@ -893,21 +913,35 @@ export class DensityRenderer {
     // keeps breathing (and a transient keeps decaying) even when no audio is
     // arriving, which is what makes the idle state look like resting liquid
     // rather than a frozen frame.
-    if (this.blob) {
+    if (this.blob && this.blobAnim !== 'none') {
       const nowB = performance.now() / 1000;
       const dtB = Math.min(0.1, this._blobTick ? nowB - this._blobTick : 0.016);
       this._blobTick = nowB;
-      this.blob.t += dtB;
-      this.blob.ripT += dtB;
-      this.blob.phase += dtB * 0.15;
-      this.blob.ripAmt *= Math.exp(-dtB * 1.2);
       const u = this.blobMat.uniforms;
-      u.uTimeC.value = this.blob.t;
+
+      // Material time always runs while animating: this is the shimmer, and
+      // it is the only thing that moves during Hold.
+      this._matTime = (this._matTime || 0) + dtB;
+      u.uMatTime.value = this._matTime;
+
+      if (this.blobAnim === 'full') {
+        // Geometry time: breathing and the fine-detail drift. Frozen in Hold
+        // so a held figure cannot change shape on its own.
+        this.blob.t += dtB;
+        this.blob.phase += dtB * 0.15;
+        u.uTimeC.value = this.blob.t;
+        u.uPhase.value = this.blob.phase;
+      }
+      // A transient keeps settling even in Hold — "the pattern relaxes
+      // gradually rather than vanishing instantly" — but it only ever decays.
+      this.blob.ripT += dtB;
+      this.blob.ripAmt *= Math.exp(-dtB * 1.2);
       u.uRipT.value = this.blob.ripT;
-      u.uPhase.value = this.blob.phase;
       u.uRipAmt.value = this.blob.ripAmt;
       this._dirty = true;
     } else {
+      // 'none' deliberately falls through here: no advance, no dirty flag, so
+      // a submitted recording costs zero draw calls and is genuinely static.
       this._blobTick = 0;
     }
     if (this._params.autoRotate > 0 && this.points) {

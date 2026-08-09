@@ -1,15 +1,16 @@
-import { AudioEngine } from './audio.js?v=56';
-import { buildFingerprint, buildTrajectory } from './features.js?v=56';
-import { DensityRenderer } from './density.js?v=56';
-import { PALETTES, buildLUT, customRamp, hexToRgb } from './palettes.js?v=56';
-import { exportCanvas, exportStrandSVG, exportStrandPDF, exportTraceSVG, exportTracePDF, framePlan, exportMP4, loopsForDuration, buildBlobSVG, exportBlobPDF } from './exporter.js?v=56';
-import { paletteFromRamp } from './trace.js?v=56';
-import { motionParams, displacePoint } from './motion.js?v=56';
-import { LiveConductor } from './live.js?v=56';
-import { LiveRecorder, MAX_RECORD_SEC } from './recorder.js?v=56';
-import { selectRingSubset } from './strands.js?v=56';
-import { idleState, targetFromFeatures, glide, advance, kick } from './cymafield.js?v=56';
-import { featuresOf } from './generators/liquid.js?v=56';
+import { AudioEngine } from './audio.js?v=57';
+import { buildFingerprint, buildTrajectory } from './features.js?v=57';
+import { DensityRenderer } from './density.js?v=57';
+import { PALETTES, buildLUT, customRamp, hexToRgb } from './palettes.js?v=57';
+import { exportCanvas, exportStrandSVG, exportStrandPDF, exportTraceSVG, exportTracePDF, framePlan, exportMP4, loopsForDuration, buildBlobSVG, exportBlobPDF } from './exporter.js?v=57';
+import { paletteFromRamp } from './trace.js?v=57';
+import { motionParams, displacePoint } from './motion.js?v=57';
+import { LiveConductor } from './live.js?v=57';
+import { LiveRecorder, MAX_RECORD_SEC } from './recorder.js?v=57';
+import { selectRingSubset } from './strands.js?v=57';
+// Used only by the __soundform debug hook, which drives Liquid to an exact
+// state for capturing the acceptance frames headlessly.
+import { idleState, targetFromFeatures, kick } from './cymafield.js?v=57';
 
 const audio = new AudioEngine();
 let renderer = null;
@@ -115,7 +116,7 @@ window.addEventListener('DOMContentLoaded', () => {
     // Debug hook: drive Liquid's field to an exact state. Used to capture the
     // acceptance frames (silence / low tone / high tone / transient) without
     // needing a working microphone in a headless browser.
-    setField: (st) => { stopFieldPlayback(); applyBlobStyle(); renderer.setField(st); },
+    setField: (st, anim = 'full') => { stopFieldPlayback(); applyBlobStyle(); renderer.setField(st, anim); },
     idleState, targetFromFeatures, kick };
 });
 
@@ -145,12 +146,16 @@ function regenerate() {
     // Liquid is analytic — no point cloud to hand over, and no orientation to
     // reset since the blob is drawn in 2D.
     if (out.kind === 'field') {
-      // A recording is a timeline, not one figure: play the captured frames
-      // back through the field so the same audio animates the same way every
-      // time, instead of collapsing to a single static pattern.
-      startFieldPlayback(out.state);
+      // A SUBMITTED recording is one finished image, not a performance: the
+      // frame timeline is what builds the aggregate fingerprint, and that is
+      // all it does. Rendered with anim 'none' — geometry AND material frozen,
+      // zero draw calls — so it stays byte-identical until something is
+      // deliberately changed. Live Hold is the opposite case and keeps its
+      // shimmer; the two are separate render states on purpose.
+      stopFieldPlayback();
       applyBlobStyle();
-      setStatus('Liquid — playing back · export Flat/Build vectors');
+      renderer.setField(out.state, 'none');
+      setStatus('Design created — adjust sliders · export Flat/Build vectors');
       return;
     }
     // Every Create presents a perfect plate: re-assert top-down so prior
@@ -161,7 +166,7 @@ function regenerate() {
     setStatus('Design created — drag to rotate · adjust sliders');
   };
   try {
-    if (!worker) worker = new Worker('js/worker.js?v=56', { type: 'module' });
+    if (!worker) worker = new Worker('js/worker.js?v=57', { type: 'module' });
     worker.onmessage = (e) => {
       if (e.data.progress !== undefined) setStatus(`Generating… ${Math.round(e.data.progress * 100)}%`);
       else if (e.data.error) setStatus(`Generation error: ${e.data.error}`);
@@ -175,7 +180,7 @@ function regenerate() {
 }
 
 async function fallbackGenerate(onResult) {
-  const { generate } = await import('./generators/index.js?v=56');
+  const { generate } = await import('./generators/index.js?v=57');
   onResult(generate(fingerprint, { ...params, strandCount: 96 }));
 }
 
@@ -184,7 +189,7 @@ async function fallbackGenerate(onResult) {
 function workerGenerate(fingerprint, params) {
   return new Promise((resolve) => {
     try {
-      if (!liveWorker) liveWorker = new Worker('js/worker.js?v=56', { type: 'module' });
+      if (!liveWorker) liveWorker = new Worker('js/worker.js?v=57', { type: 'module' });
       liveWorker.onmessage = (e) => {
         if (e.data.done) resolve(e.data);
         else if (e.data.error) resolve(null);
@@ -207,7 +212,7 @@ async function liveGenerate(fp, p) {
   // result as "generation failed, retry later" (see tick()), so surface a
   // throw the same way rather than letting it become an unhandled rejection.
   try {
-    const { generate } = await import('./generators/index.js?v=56');
+    const { generate } = await import('./generators/index.js?v=57');
     return generate(fp, p);
   } catch {
     return null;
@@ -294,43 +299,10 @@ function applyRenderParams() {
 // through the field is what turns a recording into an animated sequence
 // rather than one static figure — and because the field is deterministic in
 // its inputs, the same recording produces the same sequence every time.
+// Submitted recordings are STATIC (see regenerate's field branch), so there is
+// no playback engine any more. This remains only so Clear and entering Live
+// can cancel a loop left by an older session state.
 let fieldPlayback = null;
-
-function startFieldPlayback(initial) {
-  stopFieldPlayback();
-  const state = { ...initial };
-  const pb = { state, t0: performance.now() / 1000, last: performance.now() / 1000,
-               ampBias: params.melt, raf: 0, lastKickRms: 0 };
-  const span = frames.length > 1 ? frames[frames.length - 1].t - frames[0].t : 0;
-
-  const step = () => {
-    pb.raf = requestAnimationFrame(step);
-    const now = performance.now() / 1000;
-    const dt = Math.min(0.1, now - pb.last);
-    pb.last = now;
-    const elapsed = span > 0 ? ((now - pb.t0) % span) : 0;
-
-    if (frames.length) {
-      let i = 0;
-      const t0 = frames[0].t;
-      while (i < frames.length - 1 && frames[i].t - t0 < elapsed) i++;
-      const f = frames[i];
-      const target = targetFromFeatures(featuresOf(f));
-      // The Flow slider biases amplitude rather than replacing it, so the
-      // recording's own dynamics still read through it.
-      target.amp = Math.min(1, target.amp * (0.4 + pb.ampBias * 3));
-      glide(state, target, dt, 0.35);
-      // Onsets punch a ripple through the surface.
-      const rise = (f.rms ?? 0) - pb.lastKickRms;
-      pb.lastKickRms = f.rms ?? 0;
-      if (rise > 0.035) kick(state, Math.min(1, rise * 8));
-    }
-    advance(state, dt);
-    renderer.setField(state);
-  };
-  pb.raf = requestAnimationFrame(step);
-  fieldPlayback = pb;
-}
 
 function stopFieldPlayback() {
   if (fieldPlayback) cancelAnimationFrame(fieldPlayback.raf);
@@ -813,11 +785,13 @@ function bindControls() {
     });
   }
   document.getElementById('sl-melt').addEventListener('input', (e) => {
-    // Flow: how much water is gathered into the figure. Overrides the
-    // audio-derived amplitude for a captured design so a still frame can be
-    // pushed from scattered droplets through to a fully formed pattern.
+    // Flow: how much water is gathered into the figure. A deliberate control
+    // change, so a submitted design may update — and is then re-frozen.
     params.melt = parseFloat(e.target.value);
-    if (fieldPlayback) { fieldPlayback.ampBias = params.melt; }
+    if (design && design.kind === 'field' && appState === 'captured') {
+      design.state.amp = Math.min(1, params.melt * 1.6);
+      renderer.setField(design.state, 'none');
+    }
   });
   document.getElementById('chk-flat-blob').addEventListener('change', (e) => {
     params.blobFlat = e.target.checked;
@@ -1091,7 +1065,7 @@ async function runTrace(kind) { // kind: 'svg' | 'pdf'
     };
     background = params.transparentBg ? null : params.background;
 
-    traceWorker = new Worker('js/traceworker.js?v=56'); // classic worker
+    traceWorker = new Worker('js/traceworker.js?v=57'); // classic worker
   } catch (err) {
     endTrace();
     setStatus(`Trace error: ${err.message}`);

@@ -56,7 +56,8 @@ test('fingerprintDelta crosses the morph threshold on a real change', () => {
   assert.ok(fingerprintDelta(a, near) < MORPH_THRESHOLD);
 });
 
-import { LiveConductor, LIVE_MIN_FRAMES, clipStrandsToCount, sliceSegments, PAINT_SPLICE_CHUNK } from '../js/live.js';
+import { LiveConductor, LIVE_MIN_FRAMES, clipStrandsToCount, sliceSegments, PAINT_SPLICE_CHUNK,
+         LIQ_ON_RMS, LIQ_OFF_RMS, LIQ_STABLE_SEC, LIQ_RELEASE_SEC } from '../js/live.js';
 
 const mkFrame = (o = {}) => ({
   pitchHz: 220, pitchConf: 0.9, rms: 0.15, flux: 0.002,
@@ -78,7 +79,7 @@ function harness({ frame = mkFrame(), genDelay = 0, generate = null, getParams =
       writePaintPoints: (o, p) => { log.paintWrites.push([o, p.length / 3]); },
       setPaintCount: (n) => { log.paintCounts.push(n); },
       getPaintSlice: (n) => ({ positions: new Float32Array(n * 3), attr: new Float32Array(n) }),
-      setField: (st) => { log.fields.push({ ...st }); },
+      setField: (st, anim) => { log.fields.push({ ...st, __anim: anim }); },
     },
     generate: generate ?? (async () => ({ positions: new Float32Array(3), attr: new Float32Array(1), strands: [] })),
     applyStops: (s) => log.stops.push(s),
@@ -1313,4 +1314,106 @@ test('live: a transient injects a decaying ripple', async () => {
   frame.current = mkFrame({ pitchHz: 220, rms: 0.12, flux: 0.0005 });
   for (let i = 0; i < 120; i++) { t += 0.05; conductor.tick(t); await settle(); }
   assert.ok(log.fields[log.fields.length - 1].ripAmt < peak * 0.2, 'ripple must decay away');
+});
+
+// ── Liquid: live HOLD ──────────────────────────────────────────────────
+const liquidParams = () => ({ mode: 'liquid', complexity: 0.5, symmetry: 1, twist: 0,
+                              cymStyle: 'auto', liveDensity: 1000, exposure: 30, scale: 1, grain: 1 });
+
+function drive(conductor, frame, value, seconds, t0) {
+  let t = t0;
+  frame.current = value;
+  const n = Math.round(seconds / 0.05);
+  const p = [];
+  for (let i = 0; i < n; i++) { t += 0.05; p.push(conductor.tick(t)); }
+  return t;
+}
+
+test('live hold: the design SURVIVES silence instead of dissolving to droplets', async () => {
+  // The behaviour being fixed: when sound stopped, amp fell, `gather` dropped
+  // and the scattered idle droplets came back. A formed design must persist.
+  const frame = { current: mkFrame({ rms: 0.0005, pitchHz: 0, pitchConf: 0.05, flux: 0 }) };
+  const { conductor, log } = harness({ frame, getParams: liquidParams });
+  let t = 0;
+  t = drive(conductor, frame, mkFrame({ rms: 0.0005, pitchHz: 0, pitchConf: 0.05, flux: 0 }), 1, t);
+  await settle();
+  assert.equal(conductor.liqState, 'idle', 'silence at startup must stay idle');
+  assert.ok(log.fields[log.fields.length - 1].amp < 0.05, 'idle must not gather water');
+
+  t = drive(conductor, frame, mkFrame({ rms: 0.18, pitchHz: 220, pitchConf: 0.9, flux: 0.001 }), 3, t);
+  await settle();
+  assert.equal(conductor.liqState, 'active');
+  const formed = { ...log.fields[log.fields.length - 1] };
+  assert.ok(formed.amp > 0.4, `a real sound must gather water (amp ${formed.amp})`);
+
+  // Silence.
+  t = drive(conductor, frame, mkFrame({ rms: 0.0005, pitchHz: 0, pitchConf: 0.05, flux: 0 }), 6, t);
+  await settle();
+  assert.equal(conductor.liqState, 'hold', 'silence after a design must HOLD it');
+  const held = log.fields[log.fields.length - 1];
+  assert.ok(held.amp > 0.4, `held design lost its water (amp ${held.amp})`);
+  for (const k of ['m', 'n', 'kr', 'ma']) {
+    assert.ok(Math.abs(held[k] - formed[k]) < 1e-9, `${k} drifted while held`);
+  }
+});
+
+test('live hold: geometry is frozen but material animation continues', () => {
+  // The renderer is told WHICH animation to run. Hold must ask for material
+  // only — geometry time driving the figure would let it change shape on its
+  // own, and no animation at all would make held water look like a photo.
+  const frame = { current: mkFrame({ rms: 0.0005, pitchHz: 0, pitchConf: 0.05, flux: 0 }) };
+  const { conductor, log } = harness({ frame, getParams: liquidParams });
+  let t = drive(conductor, frame, mkFrame({ rms: 0.0005, pitchConf: 0.05, flux: 0 }), 0.5, 0);
+  t = drive(conductor, frame, mkFrame({ rms: 0.18, pitchHz: 220, pitchConf: 0.9, flux: 0.001 }), 3, t);
+  assert.equal(log.fields[log.fields.length - 1].__anim, 'full', 'active must animate fully');
+  t = drive(conductor, frame, mkFrame({ rms: 0.0005, pitchConf: 0.05, flux: 0 }), 6, t);
+  assert.equal(log.fields[log.fields.length - 1].__anim, 'material', 'hold must animate material only');
+});
+
+test('live hold: a NEW sound transitions smoothly out of the held design', async () => {
+  const frame = { current: mkFrame({ rms: 0.0005, pitchConf: 0.05, flux: 0 }) };
+  const { conductor, log } = harness({ frame, getParams: liquidParams });
+  let t = drive(conductor, frame, mkFrame({ rms: 0.0005, pitchConf: 0.05, flux: 0 }), 0.5, 0);
+  t = drive(conductor, frame, mkFrame({ rms: 0.18, pitchHz: 160, pitchConf: 0.95, flux: 0.001 }), 3, t);
+  t = drive(conductor, frame, mkFrame({ rms: 0.0005, pitchConf: 0.05, flux: 0 }), 5, t);
+  const beforeIdx = log.fields.length - 1;
+  const held = log.fields[beforeIdx].m;
+
+  t = drive(conductor, frame, mkFrame({ rms: 0.22, pitchHz: 1500, pitchConf: 0.95, centroid: 0.8, flux: 0.001 }), 6, t);
+  await settle();
+  const after = log.fields[log.fields.length - 1].m;
+  assert.ok(Math.abs(after - held) > 1.5, `a new sound must change the figure (${held} -> ${after})`);
+
+  let biggest = 0;
+  for (let i = beforeIdx + 1; i < log.fields.length; i++) {
+    biggest = Math.max(biggest, Math.abs(log.fields[i].m - log.fields[i - 1].m));
+  }
+  assert.ok(biggest < 0.9, `transition snapped by ${biggest.toFixed(2)} instead of flowing`);
+});
+
+test('live hold: background noise below the ON threshold never forms a design', () => {
+  // Room tone hovering under the threshold must not repeatedly re-form the
+  // figure — that is what the hysteresis pair and stability window are for.
+  const frame = { current: mkFrame({ rms: LIQ_ON_RMS * 0.7, pitchHz: 300, pitchConf: 0.6, flux: 0.0004 }) };
+  const { conductor, log } = harness({ frame, getParams: liquidParams });
+  let t = 0;
+  for (let i = 0; i < 200; i++) {
+    t += 0.05;
+    // jitter around, but always under the ON threshold
+    frame.current = mkFrame({ rms: LIQ_ON_RMS * (0.5 + 0.45 * Math.sin(i)), pitchHz: 300,
+                              pitchConf: 0.6, flux: 0.0004 });
+    conductor.tick(t);
+  }
+  assert.equal(conductor.liqState, 'idle', 'background noise formed a design');
+  assert.ok(log.fields[log.fields.length - 1].amp < 0.05, 'background noise gathered water');
+});
+
+test('live hold: a brief blip shorter than the stability window is ignored', () => {
+  const frame = { current: mkFrame({ rms: 0.0005, pitchConf: 0.05, flux: 0 }) };
+  const { conductor } = harness({ frame, getParams: liquidParams });
+  let t = drive(conductor, frame, mkFrame({ rms: 0.0005, pitchConf: 0.05, flux: 0 }), 0.5, 0);
+  // A spike lasting well under LIQ_STABLE_SEC.
+  t = drive(conductor, frame, mkFrame({ rms: 0.3, pitchHz: 400, pitchConf: 0.9, flux: 0.02 }),
+            LIQ_STABLE_SEC * 0.5, t);
+  assert.equal(conductor.liqState, 'idle', 'a blip must not form a design');
 });

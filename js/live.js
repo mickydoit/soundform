@@ -1,12 +1,12 @@
 // Live mode conductor: rolling feature window, instant envelopes, kick
 // detection, and structural morph scheduling. All I/O (audio, renderer,
 // worker, palette) is injected — this module is node-testable.
-import { buildFingerprint, buildTrajectory } from './features.js?v=56';
-import { liveTarget, glideStops, stopsToHex } from './livecolor.js?v=56';
-import { BrushPace, PAINT_MAX_POINTS } from './paint.js?v=56';
-import { createOrbitBrush, pickSystemLive, modulatesContinuously } from './generators/attractor.js?v=56';
-import { AutoParams, featuresFromFingerprint } from './autoparams.js?v=56';
-import { idleState, targetFromFeatures, glide, advance, kick as fieldKick } from './cymafield.js?v=56';
+import { buildFingerprint, buildTrajectory } from './features.js?v=57';
+import { liveTarget, glideStops, stopsToHex } from './livecolor.js?v=57';
+import { BrushPace, PAINT_MAX_POINTS } from './paint.js?v=57';
+import { createOrbitBrush, pickSystemLive, modulatesContinuously } from './generators/attractor.js?v=57';
+import { AutoParams, featuresFromFingerprint } from './autoparams.js?v=57';
+import { idleState, targetFromFeatures, glide, advance, kick as fieldKick } from './cymafield.js?v=57';
 
 export const WINDOW_SEC = 4;
 export const MORPH_CHECK_INTERVAL = 0.15;
@@ -23,6 +23,16 @@ export const MORPH_THRESHOLD = 0.18;
 // persistence discriminates on the axis that actually matters — a real change
 // stays, a blip does not.
 export const MORPH_CONFIRM_CHECKS = 2;
+
+// ── Liquid live states ─────────────────────────────────────────────────
+// A cymatic design, once formed, is HELD when the sound stops — it must not
+// dissolve back to droplets. Two thresholds rather than one (hysteresis) plus
+// a stability window are what stop room tone and momentary pitch-detector
+// errors from repeatedly re-forming the figure.
+export const LIQ_ON_RMS = 0.020;    // must exceed this to count as real sound
+export const LIQ_OFF_RMS = 0.009;   // and fall below THIS to count as stopped
+export const LIQ_STABLE_SEC = 0.22; // sustained above ON before it takes effect
+export const LIQ_RELEASE_SEC = 0.6; // sustained below OFF before it holds
 export const MORPH_CROSSFADE_SEC = 0.45;
 
 // Continuous modulation of a LOCKED design, as distinct from morphing between
@@ -390,19 +400,48 @@ export class LiveConductor {
     // FLOW between patterns instead of cutting to an unrelated one. The morph
     // path below is skipped entirely for this mode.
     if (base.mode === 'liquid') {
-      if (!this.field) this.field = idleState();
-      const target = targetFromFeatures({
-        pitchNorm: f.pitchHz > 20 ? Math.min(1, Math.max(0, Math.log2(f.pitchHz / 55) / 6)) : 0.35,
-        rms: f.rms, centroid: f.centroid, spread: f.spread, pitchConf: f.pitchConf,
-      });
-      // Amplitude tracks faster than topology: loudness should feel immediate,
-      // while the modal figure takes a moment to reorganise, the way a real
-      // plate does.
-      glide(this.field, target, dt, 0.55);
-      this.field.amp += (target.amp - this.field.amp) * (1 - Math.exp(-dt / 0.12));
-      if (kick > 0.5) fieldKick(this.field, kick);
-      advance(this.field, dt);
-      this.renderer.setField(this.field);
+      if (!this.field) { this.field = idleState(); this.liqState = 'idle'; }
+
+      // Hysteresis + stability window. A single threshold would let room tone
+      // hovering at the boundary flip the state every few frames, and the
+      // figure would re-form continuously.
+      const loudEnough = f.rms > LIQ_ON_RMS;
+      const quiet = f.rms < LIQ_OFF_RMS;
+      this._liqLoudFor = loudEnough ? (this._liqLoudFor || 0) + dt : 0;
+      this._liqQuietFor = quiet ? (this._liqQuietFor || 0) + dt : 0;
+
+      if (this._liqLoudFor >= LIQ_STABLE_SEC) this.liqState = 'active';
+      else if (this.liqState === 'active' && this._liqQuietFor >= LIQ_RELEASE_SEC) {
+        // HOLD: keep the design exactly as it is. Deliberately does not glide
+        // amp down — letting it fall would drop `gather` and bring the
+        // scattered droplets back, which is the behaviour being removed.
+        this.liqState = 'hold';
+      }
+
+      // Responsive only while the sound is actually present. Without this the
+      // figure keeps gliding toward a silent target throughout the whole
+      // release window, so by the time HOLD is entered the water has already
+      // drained away and the droplets are back — the exact bug being fixed.
+      const responsive = this.liqState === 'active' && f.rms >= LIQ_OFF_RMS;
+      if (responsive) {
+        const target = targetFromFeatures({
+          pitchNorm: f.pitchHz > 20 ? Math.min(1, Math.max(0, Math.log2(f.pitchHz / 55) / 6)) : 0.35,
+          rms: f.rms, centroid: f.centroid, spread: f.spread, pitchConf: f.pitchConf,
+        });
+        // A low-confidence frame still carries loudness, but its pitch is
+        // unreliable — so let it drive amplitude and leave the topology alone
+        // rather than jerking the figure on a detector glitch.
+        if (f.pitchConf < 0.35) { target.m = this.field.m; target.n = this.field.n;
+                                  target.kr = this.field.kr; target.ma = this.field.ma; }
+        glide(this.field, target, dt, 0.55);
+        this.field.amp += (target.amp - this.field.amp) * (1 - Math.exp(-dt / 0.12));
+        if (kick > 0.5) fieldKick(this.field, kick);
+        advance(this.field, dt);
+      }
+      // 'idle' and 'hold' both leave the state untouched: idle has nothing to
+      // show yet, and hold is the whole point. The renderer advances material
+      // time (and only material time) for both.
+      this.renderer.setField(this.field, responsive ? 'full' : 'material');
       return;
     }
     this.renderer.setParams({
