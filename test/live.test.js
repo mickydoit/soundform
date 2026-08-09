@@ -66,7 +66,7 @@ const mkFrame = (o = {}) => ({
 });
 
 function harness({ frame = mkFrame(), genDelay = 0, generate = null, getParams = null } = {}) {
-  const log = { xfades: 0, xfadeDurations: [], waves: [], stops: [], paintBegun: 0, paintWrites: [], paintCounts: [], visibleFractions: [] };
+  const log = { xfades: 0, xfadeDurations: [], waves: [], stops: [], paintBegun: 0, paintWrites: [], paintCounts: [], visibleFractions: [], blobs: [] };
   const conductor = new LiveConductor({
     audio: { getMusicalFrame: () => frame.current ?? frame },
     renderer: {
@@ -78,6 +78,7 @@ function harness({ frame = mkFrame(), genDelay = 0, generate = null, getParams =
       writePaintPoints: (o, p) => { log.paintWrites.push([o, p.length / 3]); },
       setPaintCount: (n) => { log.paintCounts.push(n); },
       getPaintSlice: (n) => ({ positions: new Float32Array(n * 3), attr: new Float32Array(n) }),
+      setBlob: (circles, smooth) => { log.blobs.push({ circles, smooth }); },
     },
     generate: generate ?? (async () => ({ positions: new Float32Array(3), attr: new Float32Array(1), strands: [] })),
     applyStops: (s) => log.stops.push(s),
@@ -1247,4 +1248,62 @@ test('freezing mid-rebuild does not truncate the painting', async () => {
   assert.equal(conductor.paint.restore, null, 'freeze must finish a pending rebuild');
   assert.equal(conductor.paint.count, painted, 'freeze must not truncate the painting');
   assert.equal(second.cloud.attr.length, painted, 'the captured cloud must be whole');
+});
+
+// ── Liquid in live mode ────────────────────────────────────────────────
+//
+// Liquid is analytic: its generator returns `circles` and DELIBERATELY empty
+// positions/attr. The morph path used to hand those straight to crossfadeTo,
+// which dissolved into an empty cloud — so live showed nothing at all until
+// freeze ran the separate capture path. That is invisible to every other live
+// test, because they all assert on crossfade counts, which stayed correct.
+test('live: a blob generator reaches setBlob, never crossfadeTo', async () => {
+  const low = mkFrame({ pitchHz: 110, rms: 0.10, centroid: 0.12, spread: 0.30, flux: 0.0015 });
+  const high = mkFrame({ pitchHz: 660, rms: 0.22, centroid: 0.85, spread: 0.65, flux: 0.004,
+    chroma: (() => { const c = new Float32Array(12); c[2] = 1; c[6] = 0.9; c[9] = 0.8; return c; })() });
+  const frame = { current: low };
+  const { conductor, log } = harness({
+    frame,
+    generate: async () => ({
+      kind: 'blob',
+      circles: [{ x: 0, y: 0, r: 0.3 }, { x: 0.4, y: 0.1, r: 0.2 }],
+      smooth: 0.19,
+      positions: new Float32Array(0), attr: new Float32Array(0), strands: [],
+    }),
+    getParams: () => ({ mode: 'liquid', complexity: 0.5, symmetry: 1, twist: 0,
+                        cymStyle: 'auto', liveDensity: 1000, exposure: 30, scale: 1, grain: 1 }),
+  });
+
+  let t = 0;
+  const run = async (sec) => { for (let i = 0; i < sec / 0.05; i++) { t += 0.05; conductor.tick(t); await settle(); } };
+  await run(5);
+  frame.current = high;
+  await run(6);
+
+  assert.ok(log.blobs.length > 0, 'live never handed a blob to the renderer');
+  assert.equal(log.xfades, 0, 'a blob must not go through the point-cloud crossfade');
+  const b = log.blobs[log.blobs.length - 1];
+  assert.equal(b.circles.length, 2);
+  assert.ok(b.smooth > 0, 'blend radius must be passed through');
+});
+
+test('live: the Melt slider overrides the generator blend while live', async () => {
+  // Otherwise every live regeneration snaps the blend back to the
+  // sound-derived value and fights the user's slider.
+  const frame = { current: mkFrame({ pitchHz: 110, rms: 0.10, centroid: 0.12, flux: 0.0015 }) };
+  const { conductor, log } = harness({
+    frame,
+    generate: async () => ({ kind: 'blob', circles: [{ x: 0, y: 0, r: 0.3 }], smooth: 0.19,
+                             positions: new Float32Array(0), attr: new Float32Array(0), strands: [] }),
+    getParams: () => ({ mode: 'liquid', complexity: 0.5, symmetry: 1, twist: 0, melt: 0.07,
+                        cymStyle: 'auto', liveDensity: 1000, exposure: 30, scale: 1, grain: 1 }),
+  });
+  let t = 0;
+  for (let i = 0; i < 220; i++) { t += 0.05; conductor.tick(t); await settle(); }
+  frame.current = mkFrame({ pitchHz: 660, rms: 0.22, centroid: 0.85, spread: 0.65, flux: 0.004,
+    chroma: (() => { const c = new Float32Array(12); c[2] = 1; c[6] = 0.9; return c; })() });
+  for (let i = 0; i < 220; i++) { t += 0.05; conductor.tick(t); await settle(); }
+
+  assert.ok(log.blobs.length > 0, 'no blob reached the renderer');
+  assert.equal(log.blobs[log.blobs.length - 1].smooth, 0.07, 'melt must win over generator smooth');
 });

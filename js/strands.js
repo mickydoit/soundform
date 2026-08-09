@@ -1,6 +1,6 @@
 // Strand → editable SVG path machinery. DOM/THREE-free (works under node).
 
-import { sampleRamp, rgbToHex, hexToRgb } from './palettes.js?v=54';
+import { sampleRamp, rgbToHex, hexToRgb } from './palettes.js?v=55';
 
 export function projectStrand(strand, m, w, h) {
   const pts = [];

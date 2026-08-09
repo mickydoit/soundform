@@ -1,11 +1,11 @@
 // Live mode conductor: rolling feature window, instant envelopes, kick
 // detection, and structural morph scheduling. All I/O (audio, renderer,
 // worker, palette) is injected — this module is node-testable.
-import { buildFingerprint, buildTrajectory } from './features.js?v=54';
-import { liveTarget, glideStops, stopsToHex } from './livecolor.js?v=54';
-import { BrushPace, PAINT_MAX_POINTS } from './paint.js?v=54';
-import { createOrbitBrush, pickSystemLive, modulatesContinuously } from './generators/attractor.js?v=54';
-import { AutoParams, featuresFromFingerprint } from './autoparams.js?v=54';
+import { buildFingerprint, buildTrajectory } from './features.js?v=55';
+import { liveTarget, glideStops, stopsToHex } from './livecolor.js?v=55';
+import { BrushPace, PAINT_MAX_POINTS } from './paint.js?v=55';
+import { createOrbitBrush, pickSystemLive, modulatesContinuously } from './generators/attractor.js?v=55';
+import { AutoParams, featuresFromFingerprint } from './autoparams.js?v=55';
 
 export const WINDOW_SEC = 4;
 export const MORPH_CHECK_INTERVAL = 0.15;
@@ -473,6 +473,10 @@ export class LiveConductor {
         if (!out) { this.lastMorph = this._lastNow; return; }
         this.lastMorph = this._lastNow;
         this.shownFp = fp;
+        // Liquid is analytic: it carries circles, not points, so crossfadeTo
+        // would dissolve into an EMPTY cloud and nothing would appear live
+        // until freeze ran the capture path. Hand the blob straight over.
+        if (out.kind === "blob") { this.renderer.setBlob(out.circles, p.melt ?? out.smooth); return; }
         this.renderer.crossfadeTo(out.positions, out.attr,
           modulating ? MODULATE_CROSSFADE_SEC : MORPH_CROSSFADE_SEC);
       })

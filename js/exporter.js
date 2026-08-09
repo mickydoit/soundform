@@ -1,7 +1,7 @@
-import { buildVectorPaths, toBezierPath, buildPdfOps, toRelativeBezierLegs } from './strands.js?v=54';
-import { hexToRgb } from './palettes.js?v=54';
-import { buildTraceSVG, buildTracePdfOps } from './trace.js?v=54';
-import { blobOutline, ringToPath, closedCatmullRom } from './blob.js?v=54';
+import { buildVectorPaths, toBezierPath, buildPdfOps, toRelativeBezierLegs } from './strands.js?v=55';
+import { hexToRgb } from './palettes.js?v=55';
+import { buildTraceSVG, buildTracePdfOps } from './trace.js?v=55';
+import { blobOutline, ringToPath, closedCatmullRom } from './blob.js?v=55';
 
 export async function exportCanvas(canvas, format) {
   switch (format) {

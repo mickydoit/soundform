@@ -1,13 +1,13 @@
-import { AudioEngine } from './audio.js?v=54';
-import { buildFingerprint, buildTrajectory } from './features.js?v=54';
-import { DensityRenderer } from './density.js?v=54';
-import { PALETTES, buildLUT, customRamp, hexToRgb } from './palettes.js?v=54';
-import { exportCanvas, exportStrandSVG, exportStrandPDF, exportTraceSVG, exportTracePDF, framePlan, exportMP4, loopsForDuration, buildBlobSVG, exportBlobPDF } from './exporter.js?v=54';
-import { paletteFromRamp } from './trace.js?v=54';
-import { motionParams, displacePoint } from './motion.js?v=54';
-import { LiveConductor } from './live.js?v=54';
-import { LiveRecorder, MAX_RECORD_SEC } from './recorder.js?v=54';
-import { selectRingSubset } from './strands.js?v=54';
+import { AudioEngine } from './audio.js?v=55';
+import { buildFingerprint, buildTrajectory } from './features.js?v=55';
+import { DensityRenderer } from './density.js?v=55';
+import { PALETTES, buildLUT, customRamp, hexToRgb } from './palettes.js?v=55';
+import { exportCanvas, exportStrandSVG, exportStrandPDF, exportTraceSVG, exportTracePDF, framePlan, exportMP4, loopsForDuration, buildBlobSVG, exportBlobPDF } from './exporter.js?v=55';
+import { paletteFromRamp } from './trace.js?v=55';
+import { motionParams, displacePoint } from './motion.js?v=55';
+import { LiveConductor } from './live.js?v=55';
+import { LiveRecorder, MAX_RECORD_SEC } from './recorder.js?v=55';
+import { selectRingSubset } from './strands.js?v=55';
 
 const audio = new AudioEngine();
 let renderer = null;
@@ -151,7 +151,7 @@ function regenerate() {
     setStatus('Design created — drag to rotate · adjust sliders');
   };
   try {
-    if (!worker) worker = new Worker('js/worker.js?v=54', { type: 'module' });
+    if (!worker) worker = new Worker('js/worker.js?v=55', { type: 'module' });
     worker.onmessage = (e) => {
       if (e.data.progress !== undefined) setStatus(`Generating… ${Math.round(e.data.progress * 100)}%`);
       else if (e.data.error) setStatus(`Generation error: ${e.data.error}`);
@@ -165,7 +165,7 @@ function regenerate() {
 }
 
 async function fallbackGenerate(onResult) {
-  const { generate } = await import('./generators/index.js?v=54');
+  const { generate } = await import('./generators/index.js?v=55');
   onResult(generate(fingerprint, { ...params, strandCount: 96 }));
 }
 
@@ -174,7 +174,7 @@ async function fallbackGenerate(onResult) {
 function workerGenerate(fingerprint, params) {
   return new Promise((resolve) => {
     try {
-      if (!liveWorker) liveWorker = new Worker('js/worker.js?v=54', { type: 'module' });
+      if (!liveWorker) liveWorker = new Worker('js/worker.js?v=55', { type: 'module' });
       liveWorker.onmessage = (e) => {
         if (e.data.done) resolve(e.data);
         else if (e.data.error) resolve(null);
@@ -197,7 +197,7 @@ async function liveGenerate(fp, p) {
   // result as "generation failed, retry later" (see tick()), so surface a
   // throw the same way rather than letting it become an unhandled rejection.
   try {
-    const { generate } = await import('./generators/index.js?v=54');
+    const { generate } = await import('./generators/index.js?v=55');
     return generate(fp, p);
   } catch {
     return null;
@@ -215,6 +215,10 @@ function makeConductor() {
                         liveDensity: LIVE_DENSITY,
                         paintMaxPoints: paintMaxPoints(),
                         exposure: params.exposure, scale: params.scale, grain: params.grain,
+                        // Liquid: the Melt slider is the authority once the panel
+                        // exists, so live must honour it rather than resetting to
+                        // the sound-derived blend on every regeneration.
+                        melt: params.melt,
                         // Manual-ownership flags: main.js owns autoOwned (the source of
                         // truth for which sliders the voice still drives), so the
                         // conductor needs it exposed here rather than duplicating the
@@ -286,6 +290,10 @@ function syncStyleRows() {
     params.mode === 'cymatics' ? '' : 'none';
   document.getElementById('row-water').style.display = waterActive() ? '' : 'none';
   document.getElementById('row-liquid').style.display = liquid ? '' : 'none';
+  // Paint reveals a point cloud stroke by stroke. Liquid has no points to
+  // reveal, so the control would be a no-op that silently breaks live.
+  document.getElementById('row-growth').style.display = liquid ? 'none' : '';
+  if (liquid) params.growth = 'morph';
   // The blob vector exports only mean anything for a blob; the point-cloud
   // exports (SVG/PDF strands, Trace) only mean anything for a cloud.
   document.querySelectorAll('.btn-liquid-export').forEach((b) => {
@@ -1018,7 +1026,7 @@ async function runTrace(kind) { // kind: 'svg' | 'pdf'
     };
     background = params.transparentBg ? null : params.background;
 
-    traceWorker = new Worker('js/traceworker.js?v=54'); // classic worker
+    traceWorker = new Worker('js/traceworker.js?v=55'); // classic worker
   } catch (err) {
     endTrace();
     setStatus(`Trace error: ${err.message}`);

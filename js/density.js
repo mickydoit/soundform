@@ -201,44 +201,58 @@ void main() {
     return;
   }
 
-  // Surface normal of the implicit shape, from the field gradient.
+  // TRANSPARENT LIQUID.
+  //
+  // Water is CLEAR. Its body is whatever is behind it, essentially unchanged,
+  // and everything that says "liquid" happens in a narrow meniscus at the
+  // boundary: a dark line right at the contact edge where light refracts away
+  // too steeply to reach the eye, a bright line just inside it off the raised
+  // curve, and colour splitting on that bright line.
+  //
+  // Shading the INTERIOR — a dome gradient plus a body tint pulled toward the
+  // ink colour — is what made this read as an opaque bubble. A dome says
+  // "sphere", and a tinted interior says "solid". Both had to go. It also
+  // removes the last of the medial-axis chevrons for free: with every
+  // normal-driven term confined to a thin edge band, the distance field's
+  // gradient singularity at each circle's centre is never sampled for shading.
   vec2 e = vec2(px * 1.5, 0.0);
   vec2 grad = vec2(blobField(p + e.xy) - blobField(p - e.xy),
                    blobField(p + e.yx) - blobField(p - e.yx));
   vec2 nxy = normalize(grad + 1e-6);
 
-  // A thin bright meniscus hugging the edge — the single strongest cue that
-  // this is a liquid bead rather than a flat shape.
-  float rim = exp(-pow(max(0.0, -d) / (uSmooth * 0.30), 1.5));
-  // Depth into the shape: 0 at the outline, 1 well inside.
-  float t = clamp(-d / (uSmooth * 1.6), 0.0, 1.0);
-  // Height of the bead: full in the middle, falling to nothing at the edge.
-  float dome = sqrt(max(0.0, 1.0 - pow(1.0 - t, 2.0)));
-  // How tilted the surface is. Steep at the rim, flat in the middle. Every
-  // normal-dependent term must be gated by this: deep inside, the field's
-  // medial axis creases and the gradient direction flips there, so anything
-  // driven by the normal paints a hard spike straight down the middle of the
-  // blob. Weighting by depth instead of by slope is what put them there.
-  float slope = 1.0 - t;
+  float into = -d;                              // 0 at the outline, grows inward
+  float mw = max(1e-4, uSmooth * 0.55);         // meniscus width
+  float m = clamp(into / mw, 0.0, 1.0);
 
-  // Iridescence. The ground here is a flat colour, so displacing a lookup
-  // into it would refract nothing — there is no detail behind the bead to
-  // bend. What actually reads as thin-film dispersion in the reference is
-  // colour SPLITTING along the rim, so drive a hue sweep from the edge
-  // normal's direction and confine it to the meniscus.
+  float contact = exp(-pow(m / 0.22, 2.0));            // dark, hugs the outline
+  float meniscus = exp(-pow((m - 0.40) / 0.20, 2.0));  // bright, just inside
+
+  // Hue sweep from the edge normal's direction — thin-film dispersion reads
+  // as colour SPLITTING along the rim, not as a tint over the whole body.
   float a = atan(nxy.y, nxy.x) * 2.0;
   vec3 iri = vec3(sin(a), sin(a + 2.094), sin(a + 4.188)) * 0.5 + 0.5;
+  float spec = pow(clamp(dot(nxy, normalize(vec2(-0.5, 0.86))), 0.0, 1.0), 3.0);
 
-  vec3 tint = uGround + (uInk - uGround) * (0.10 + 0.34 * dome);
+  // Concentrate dispersion where the edge actually bends. A true distance
+  // field has |grad| = 1 everywhere; the smooth union is the one place it
+  // dips, which is exactly the necks and tight junctions. Free curvature
+  // signal from the gradient already in hand. Without it the rainbow runs
+  // evenly round the whole outline, which reads as a decal rather than as
+  // light splitting through a curved edge.
+  float curv = clamp(1.0 - length(grad) / (2.0 * e.x), 0.0, 1.0);
+  float irisAmt = 0.25 + 0.75 * smoothstep(0.0, 0.45, curv);
 
-  // slope SQUARED: the gradient of a distance field is singular at each
-  // circle's centre, and a linear gate still leaks a dark chevron pointing at
-  // every lobe centre. Squaring pushes all normal-driven shading onto the
-  // rim, where a bead's shading actually lives.
-  float edge = slope * slope;
-  float spec = pow(clamp(dot(nxy, normalize(vec2(-0.55, 0.83))), 0.0, 1.0), 6.0) * edge;
-  vec3 body = tint + (iri - 0.5) * rim * uDispersion * 0.55;
-  vec3 col = body + vec3(1.0) * (rim * 0.85 + spec * 0.35) * uGloss;
+  // A broad sheen across the whole shape, from POSITION rather than from the
+  // normal — a window reflection lying on the surface. Position has no
+  // singularity, so this reads as glass without reintroducing the chevrons.
+  float sheen = 0.5 + 0.5 * dot(normalize(p + 1e-6), normalize(vec2(-0.6, 0.8)));
+
+  vec3 col = uGround;
+  col = mix(col, col * 0.45, contact * 0.9);                       // contact edge
+  col += vec3(1.0) * meniscus * (0.30 + 0.70 * spec) * uGloss;     // lit meniscus
+  col += (iri - 0.5) * meniscus * uDispersion * irisAmt * 0.8;     // dispersion
+  col += vec3(1.0) * sheen * sheen * 0.05 * uGloss;                // faint sheen
+  col += (uInk - uGround) * 0.06;                                  // barest body tint
 
   gl_FragColor = mix(vec4(mix(uGround, col, inside), 1.0),
                      vec4(col, inside), uTransparentB);
@@ -651,6 +665,9 @@ export class DensityRenderer {
     this._disposeFading();
     if (this.points) { this.group.remove(this.points); this.points.geometry.dispose(); this.points = null; }
     this._paintPos = null; this._paintAttr = null;
+    // Liquid draws from this.blob, not from this.points — leaving it set here
+    // means Clear empties the cloud and the blob stays on screen regardless.
+    this.blob = null;
     this._dirty = true;
   }
 
