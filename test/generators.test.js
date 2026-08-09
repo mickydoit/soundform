@@ -486,6 +486,79 @@ test('cymatics styles: scope/sand/relief are completely different, all valid', (
   }
 });
 
+// The water style's whole purpose is to hand the renderer a SIGNED height
+// field through attr, where every other style writes an unsigned magnitude.
+// If that signedness is lost the shader still runs — it just derives normals
+// from a rectified surface, doubling every ripple and looking wrong for
+// reasons no other test would catch.
+//
+// The exact discriminator: water sets attr = f*0.5+0.5 and y = f*relief from
+// the SAME signed f, so attr correlates strongly with the point's height.
+// Every other style derives attr from |f| or from noise, which carries no
+// sign and so does not track y. A distribution-shape check will not do this
+// job — scope also writes plenty of low attr values.
+//
+// WATER_CORR is calibrated in a measured gap, not guessed. Over 60 seeds x
+// both liveVariance settings: water = 1.000 every run; scope spans
+// -0.591..-0.260, relief -0.493..-0.235, sand +-0.023. (scope and relief run
+// NEGATIVE because |f| anti-correlates with signed f on this field's
+// negatively-skewed distribution — which is why the bar is on |corr|.)
+// Largest non-water magnitude is 0.591, so 0.85 sits clear of both sides.
+const WATER_CORR = 0.85;
+function attrHeightCorrelation(out, n = 20000) {
+  const m = Math.min(n, out.attr.length);
+  let sa = 0, sy = 0;
+  for (let i = 0; i < m; i++) { sa += out.attr[i]; sy += out.positions[i * 3 + 1]; }
+  const ma = sa / m, my = sy / m;
+  let cov = 0, va = 0, vy = 0;
+  for (let i = 0; i < m; i++) {
+    const da = out.attr[i] - ma, dy = out.positions[i * 3 + 1] - my;
+    cov += da * dy; va += da * da; vy += dy * dy;
+  }
+  return cov / Math.sqrt(Math.max(1e-12, va * vy));
+}
+
+test('cymatics water: attr tracks SIGNED height; other styles do not', () => {
+  const fp = testFingerprint();
+  const water = attrHeightCorrelation(
+    generate(fp, { ...baseParams, mode: 'cymatics', cymStyle: 'water' }));
+  assert.ok(water > WATER_CORR, `water: attr must track signed height (corr=${water.toFixed(3)})`);
+
+  for (const style of ['scope', 'sand', 'relief']) {
+    const c = attrHeightCorrelation(
+      generate(fp, { ...baseParams, mode: 'cymatics', cymStyle: style }));
+    assert.ok(Math.abs(c) < WATER_CORR, `${style}: attr should NOT track signed height (corr=${c.toFixed(3)})`);
+  }
+});
+
+test('cymatics water: attr stays in unit range despite sampled fMax', () => {
+  // fMax is a 4000-probe sampled maximum, so |f| can exceed 1 for points the
+  // probe never saw. Unclamped, those escape 0..1 and corrupt the height
+  // reconstruction for the whole pixel they land in.
+  for (const seed of [123456789, 7, 999331, 42424242]) {
+    const out = generate(testFingerprint({ seed }), { ...baseParams, mode: 'cymatics', cymStyle: 'water' });
+    for (let i = 0; i < out.attr.length; i++) {
+      assert.ok(out.attr[i] >= 0 && out.attr[i] <= 1,
+        `seed ${seed}: attr[${i}] = ${out.attr[i]} out of unit range`);
+    }
+  }
+});
+
+test('cymatics water: explicit only — never reachable from auto', () => {
+  // Water must not join the archetype map or the seed rotation, or it would
+  // change what existing sounds produce and break the golden snapshots.
+  for (let seed = 0; seed < 60; seed++) {
+    const fp = testFingerprint({ seed });
+    for (const liveVariance of [false, true]) {
+      const out = generate(fp, { ...baseParams, mode: 'cymatics', density: 15000,
+                                 cymStyle: 'auto', liveVariance });
+      const c = attrHeightCorrelation(out);
+      assert.ok(Math.abs(c) < WATER_CORR,
+        `seed ${seed} (liveVariance=${liveVariance}) auto-selected water (corr=${c.toFixed(3)})`);
+    }
+  }
+});
+
 test('cymatics style auto: deterministic seed-based pick', () => {
   const fp = testFingerprint();
   const a = generate(fp, { ...baseParams, mode: 'cymatics', cymStyle: 'auto' });

@@ -68,11 +68,22 @@ export function generate(fp, params, onProgress) {
   //  scope  — luminous fringed crests, true-black voids (CymaScope imaging)
   //  sand   — grains gathered along the STILL nodal lines (Chladni plate)
   //  relief — the classic smooth water-mandala rendering
+  //  water  — lit liquid surface; writes SIGNED height for the renderer to shade
+  //
+  // 'water' is deliberately absent from STYLES and ARCH_STYLE: it is an
+  // explicit choice only. Adding it to either would change what 'auto' picks
+  // for existing sounds and break the cymatics golden snapshots.
   const STYLES = ['scope', 'sand', 'relief'];
   const ARCH_STYLE = ['relief', 'scope', 'sand']; // tonal, bright, rough
-  const style = STYLES.includes(params.cymStyle) ? params.cymStyle
+  const style = params.cymStyle === 'water' ? 'water'
+              : STYLES.includes(params.cymStyle) ? params.cymStyle
               : arch ? ARCH_STYLE[arch.index]
               : STYLES[fp.seed % 3];
+  // Water samples and normalises exactly like relief — a smooth, evenly
+  // covered surface. Grouping it with the sparse styles instead would apply
+  // fringe weighting and the 6x pBoost rescue, saturating the surface and
+  // wrecking the height reconstruction.
+  const reliefLike = style === 'relief' || style === 'water';
 
   const kFine = 140 + fp.pitchMedian * 80;
   const fringeAt = (r) => Math.pow(Math.abs(Math.cos(kFine * r)), 4);
@@ -87,7 +98,7 @@ export function generate(fp, params, onProgress) {
     const af0 = Math.min(1, Math.abs(field(r, rnd() * Math.PI * 2)) / fMax);
     pSum += pOf(af0, r);
   }
-  const pBoost = style === 'relief' ? 1 : Math.min(6, 0.3 / Math.max(1e-4, pSum / 4000));
+  const pBoost = reliefLike ? 1 : Math.min(6, 0.3 / Math.max(1e-4, pSum / 4000));
   let count = 0, guard = 0;
   while (count < N && guard < N * 60) {
     guard++;
@@ -104,6 +115,14 @@ export function generate(fp, params, onProgress) {
     } else if (style === 'scope') {
       y = f * relief + (rnd() + rnd() - 1) * spray * af0;
       a = Math.min(1, af0 * (0.55 + 0.45 * fringeAt(r)) + 0.1);
+    } else if (style === 'water') {
+      y = f * relief + (rnd() + rnd() - 1) * spray * af0;
+      // SIGNED height, remapped to unit range: the renderer recovers it as
+      // (attr - 0.5) * 2. Unit range rather than raw signed values keeps the
+      // accumulated green channel positive for every other consumer. f is
+      // clamped because fMax is a SAMPLED max (4000 probes) — the true field
+      // peak can exceed it, which would otherwise push attr outside 0..1.
+      a = Math.max(-1, Math.min(1, f)) * 0.5 + 0.5;
     } else {
       y = f * relief + (rnd() + rnd() - 1) * spray * af0;
       a = af0;

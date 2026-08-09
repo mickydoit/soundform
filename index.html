@@ -7,7 +7,7 @@
   <meta http-equiv="Pragma" content="no-cache">
   <meta http-equiv="Expires" content="0">
   <title>Soundform — Audio Design Tool</title>
-  <link rel="stylesheet" href="style.css?v=51">
+  <link rel="stylesheet" href="style.css?v=54">
 </head>
 <body>
 <div id="app">
@@ -54,6 +54,10 @@
         <button class="btn-export" data-fmt="pdf">PDF</button>
         <button class="btn-export" data-fmt="trace-svg">Trace SVG</button>
         <button class="btn-export" data-fmt="trace-pdf">Trace PDF</button>
+        <button class="btn-export btn-liquid-export" data-fmt="blob-svg">Flat SVG</button>
+        <button class="btn-export btn-liquid-export" data-fmt="blob-pdf">Flat PDF</button>
+        <button class="btn-export btn-liquid-export" data-fmt="build-svg">Build SVG</button>
+        <button class="btn-export btn-liquid-export" data-fmt="build-pdf">Build PDF</button>
         <button class="btn-export" data-fmt="mp4">MP4</button>
       </div>
     </div>
@@ -83,14 +87,15 @@
 
   <div id="controls-panel">
 
-    <div class="panel-section">
-      <div class="section-title">Mode</div>
+    <details class="panel-section" open>
+      <summary class="section-title">Mode</summary>
       <div id="mode-btns">
         <button class="btn-mode active" data-mode="attractor">Attractor</button>
         <button class="btn-mode" data-mode="radial">Radial</button>
         <button class="btn-mode" data-mode="cymatics">Cymatics</button>
         <button class="btn-mode" data-mode="oscillo">Oscillo</button>
         <button class="btn-mode" data-mode="harmonic">Harmonic</button>
+        <button class="btn-mode" data-mode="liquid">Liquid</button>
       </div>
       <!-- Attractor is the default mode, so this row starts visible; the
            cymatics row below starts hidden. bindControls() toggles both. -->
@@ -108,7 +113,28 @@
           <option value="scope">Cymatics style: Scope</option>
           <option value="sand">Cymatics style: Sand</option>
           <option value="relief">Cymatics style: Relief</option>
+          <option value="water">Cymatics style: Water</option>
         </select>
+      </div>
+      <div id="row-liquid" style="display:none">
+        <div class="sl-row"><label for="sl-gloss">Gloss</label>
+          <input type="range" id="sl-gloss" min="0" max="2" step="0.05" value="1"></div>
+        <div class="sl-row"><label for="sl-dispersion">Dispersion</label>
+          <input type="range" id="sl-dispersion" min="0" max="2.5" step="0.05" value="1"></div>
+        <div class="sl-row"><label for="sl-melt">Melt</label>
+          <input type="range" id="sl-melt" min="0.03" max="0.32" step="0.01" value="0.12"></div>
+        <div class="sl-row">
+          <label for="chk-flat-blob">Flat view</label>
+          <input type="checkbox" id="chk-flat-blob">
+        </div>
+      </div>
+      <div id="row-water" style="display:none">
+        <div class="sl-row"><label for="sl-shine">Shine</label>
+          <input type="range" id="sl-shine" min="0" max="3" step="0.05" value="1"></div>
+        <div class="sl-row"><label for="sl-ripple">Ripple</label>
+          <input type="range" id="sl-ripple" min="0" max="3" step="0.05" value="1"></div>
+        <div class="sl-row"><label for="sl-caustic">Caustics</label>
+          <input type="range" id="sl-caustic" min="0" max="3" step="0.05" value="1"></div>
       </div>
       <div class="sl-row" id="row-growth">
         <select id="sel-growth" class="live-suspended">
@@ -116,10 +142,10 @@
           <option value="paint">Growth: Paint</option>
         </select>
       </div>
-    </div>
+    </details>
 
-    <div class="panel-section">
-      <div class="section-title">Form</div>
+    <details class="panel-section" open>
+      <summary class="section-title">Form</summary>
       <div class="sl-row"><div class="sl-label"><span>Complexity</span><span id="val-complexity">0.5</span></div>
         <input type="range" id="sl-complexity" min="0" max="1" step="0.05" value="0.5" data-regen></div>
       <div class="sl-row"><div class="sl-label"><span>Symmetry</span><span id="val-symmetry">1</span></div>
@@ -128,10 +154,10 @@
         <input type="range" id="sl-twist" min="-2" max="2" step="0.1" value="0" data-regen></div>
       <div class="sl-row"><div class="sl-label"><span>Scale</span><span id="val-scale">1.0</span></div>
         <input type="range" id="sl-scale" min="0.3" max="2.5" step="0.05" value="1.0"></div>
-    </div>
+    </details>
 
-    <div class="panel-section">
-      <div class="section-title">Texture</div>
+    <details class="panel-section">
+      <summary class="section-title">Texture</summary>
       <div class="sl-row"><div class="sl-label"><span>Density</span><span id="val-density">1500000</span></div>
         <input type="range" id="sl-density" min="200000" max="4000000" step="100000" value="1500000" data-regen></div>
       <div class="sl-row"><div class="sl-label"><span>Grain</span><span id="val-grain">1.0</span></div>
@@ -140,10 +166,10 @@
         <input type="range" id="sl-strands" min="24" max="96" step="4" value="48"></div>
       <div class="sl-row"><div class="sl-label"><span>Stroke Weight</span><span id="val-weight">1.0</span></div>
         <input type="range" id="sl-weight" min="0.3" max="3" step="0.1" value="1.0"></div>
-    </div>
+    </details>
 
-    <div class="panel-section">
-      <div class="section-title">Colour</div>
+    <details class="panel-section">
+      <summary class="section-title">Colour</summary>
       <div class="sl-row">
         <select id="sel-palette">
           <option value="nebula" selected>Nebula</option>
@@ -167,10 +193,10 @@
         <input type="range" id="sl-exposure" min="2" max="200" step="1" value="30"></div>
       <div class="sl-row"><div class="sl-label"><span>Contrast</span><span id="val-contrast">1.0</span></div>
         <input type="range" id="sl-contrast" min="0.4" max="2.5" step="0.05" value="1.0"></div>
-    </div>
+    </details>
 
-    <div class="panel-section">
-      <div class="section-title">Motion</div>
+    <details class="panel-section">
+      <summary class="section-title">Motion</summary>
       <div class="sl-row"><div class="sl-label"><span>Auto-rotate</span><span id="val-rot-speed">0.3</span></div>
         <input type="range" id="sl-rot-speed" min="0" max="2" step="0.05" value="0.3"></div>
       <div class="sl-row"><div class="sl-label"><span>Animate</span></div>
@@ -178,10 +204,10 @@
       <div class="sl-row"><div class="sl-label"><span>Loop (s)</span><span id="val-motion-period">8</span></div>
         <input type="range" id="sl-motion-period" min="4" max="20" step="1" value="8"></div>
       <label class="color-pick-label"><input type="checkbox" id="chk-flat" checked> Flat view (2D)</label>
-    </div>
+    </details>
 
-    <div class="panel-section">
-      <div class="section-title">Export</div>
+    <details class="panel-section">
+      <summary class="section-title">Export</summary>
       <div class="sl-row">
         <select id="sel-export-res">
           <option value="std" selected>Standard res</option>
@@ -233,7 +259,7 @@
         <span id="trace-progress-label">Tracing…</span>
         <button id="trace-cancel" class="vr-btn vr-discard">Cancel</button>
       </div>
-    </div>
+    </details>
 
     <div class="panel-footer">Record → Stop → Create · Drag to rotate · Same sound, same design</div>
   </div>
@@ -242,6 +268,6 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r134/three.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <script src="js/vendor/mp4-muxer.min.js"></script>
-<script type="module" src="js/main.js?v=51"></script>
+<script type="module" src="js/main.js?v=54"></script>
 </body>
 </html>

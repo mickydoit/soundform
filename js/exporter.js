@@ -1,6 +1,7 @@
-import { buildVectorPaths, toBezierPath, buildPdfOps } from './strands.js?v=51';
-import { hexToRgb } from './palettes.js?v=51';
-import { buildTraceSVG, buildTracePdfOps } from './trace.js?v=51';
+import { buildVectorPaths, toBezierPath, buildPdfOps, toRelativeBezierLegs } from './strands.js?v=54';
+import { hexToRgb } from './palettes.js?v=54';
+import { buildTraceSVG, buildTracePdfOps } from './trace.js?v=54';
+import { blobOutline, ringToPath, closedCatmullRom } from './blob.js?v=54';
 
 export async function exportCanvas(canvas, format) {
   switch (format) {
@@ -115,6 +116,109 @@ export function exportStrandPDF({ strands, positions, mvp, width, height, stops,
   if (hasAlpha) doc.setGState(new doc.GState({ opacity: 1 }));
 
   doc.save('soundform.pdf');
+}
+
+// ── Liquid (metaball blob) vector export ────────────────────────────────
+//
+// Unlike every other export path in this file, this one is not tracing or
+// approximating a raster. The blob's outline is analytic — an isocontour of
+// the same field the shader draws — so these paths ARE the shape, contoured
+// on the CPU at whatever resolution is asked for and fitted with periodic
+// beziers. Small files, smooth curves, genuinely editable.
+//
+// Two flavours:
+//   'flat'         — the filled silhouette (one path per ring)
+//   'construction' — the outline plus the constituent circles, so the
+//                    underlying geometry stays adjustable in Illustrator
+export function buildBlobSVG({ circles, smooth, width, height, ink, background, variant = 'flat' }) {
+  const { rings, project, scale } = blobOutline(circles, { smooth, width, height });
+  const paths = rings.map((r, i) =>
+    `    <path id="lobe-${String(i + 1).padStart(2, '0')}" d="${ringToPath(r)}"/>`);
+
+  const body = variant === 'construction'
+    ? [
+        `  <g id="outline" fill="none" stroke="${ink}" stroke-width="2">`,
+        ...paths,
+        '  </g>',
+        `  <g id="construction" fill="none" stroke="${ink}" stroke-width="1" opacity="0.45">`,
+        ...circles.map((c, i) => {
+          const [cx, cy] = project(c.x, c.y);
+          return `    <circle id="c-${String(i + 1).padStart(2, '0')}" cx="${cx.toFixed(1)}"` +
+                 ` cy="${cy.toFixed(1)}" r="${(c.r * scale).toFixed(1)}"/>`;
+        }),
+        '  </g>',
+      ]
+    // ONE path with every ring as a subpath. Separate <path> elements each
+    // fill independently — fill-rule is per-path — so the interior holes
+    // would come out solid instead of punched through.
+    : [`  <path id="blob" fill="${ink}" fill-rule="evenodd" d="${rings.map((r) => ringToPath(r)).join(' ')}"/>`];
+
+  return [
+    '<?xml version="1.0" encoding="UTF-8"?>',
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">`,
+    ...(background != null ? [`  <rect id="background" width="${width}" height="${height}" fill="${background}"/>`] : []),
+    ...body,
+    '</svg>',
+  ].join('\n');
+}
+
+export function exportBlobPDF({ circles, smooth, width, height, ink, background, variant = 'flat' }) {
+  const { jsPDF } = window.jspdf;
+  const { rings, project, scale } = blobOutline(circles, { smooth, width, height });
+  const mmW = width > height ? 297 : 210;
+  const mmH = mmW * (height / width);
+  const doc = new jsPDF({
+    orientation: width > height ? 'landscape' : 'portrait',
+    unit: 'mm', format: [mmW, mmH],
+  });
+  const px2mm = mmW / width;
+
+  if (background != null) {
+    const [r, g, b] = hexToRgb(background).map((v) => Math.round(v * 255));
+    doc.setFillColor(r, g, b);
+    doc.rect(0, 0, mmW, mmH, 'F');
+  }
+  const [ir, ig, ib] = hexToRgb(ink).map((v) => Math.round(v * 255));
+  doc.setFillColor(ir, ig, ib);
+  doc.setDrawColor(ir, ig, ib);
+
+  if (variant !== 'construction') {
+    // Emitted as raw operators rather than via lines(): each lines() call
+    // paints its own path, which fills the interior holes solid. Building one
+    // path from every ring and closing with an EVEN-ODD fill (f*) is what
+    // punches them through.
+    const ci = (x) => doc.internal.getCoordinateString(x);
+    const cv = (y) => doc.internal.getVerticalCoordinateString(y);
+    for (const ring of rings) {
+      if (ring.length < 3) continue;
+      const pts = ring.map(([x, y]) => [x * px2mm, y * px2mm]);
+      doc.internal.write(`${ci(pts[0][0])} ${cv(pts[0][1])} m`);
+      for (const { c1, c2, end } of closedCatmullRom(pts)) {
+        doc.internal.write(
+          `${ci(c1[0])} ${cv(c1[1])} ${ci(c2[0])} ${cv(c2[1])} ${ci(end[0])} ${cv(end[1])} c`);
+      }
+      doc.internal.write('h');
+    }
+    doc.internal.write('f*');
+  } else {
+    doc.setLineWidth(2 * px2mm);
+    for (const ring of rings) {
+      if (ring.length < 3) continue;
+      // Periodic beziers, encoded the way jsPDF's lines() actually reads
+      // them: all three pairs are offsets from the point BEFORE the curve,
+      // not chained. Chaining silently shatters every curve after the first.
+      const legs = toRelativeBezierLegs(ring[0], closedCatmullRom(ring));
+      doc.lines(legs, ring[0][0] * px2mm, ring[0][1] * px2mm, [px2mm, px2mm], 'S', true);
+    }
+  }
+  if (variant === 'construction') {
+    doc.setLineWidth(1 * px2mm);
+    for (const c of circles) {
+      const [cx, cy] = project(c.x, c.y);
+      doc.circle(cx * px2mm, cy * px2mm, c.r * scale * px2mm, 'S');
+    }
+  }
+  doc.save(`soundform-${variant}.pdf`);
 }
 
 // Trace export: grouped filled tone-band SVG (one <g id="tone-NN"> per level).

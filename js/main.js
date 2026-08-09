@@ -1,13 +1,13 @@
-import { AudioEngine } from './audio.js?v=51';
-import { buildFingerprint, buildTrajectory } from './features.js?v=51';
-import { DensityRenderer } from './density.js?v=51';
-import { PALETTES, buildLUT, customRamp, hexToRgb } from './palettes.js?v=51';
-import { exportCanvas, exportStrandSVG, exportStrandPDF, exportTraceSVG, exportTracePDF, framePlan, exportMP4, loopsForDuration } from './exporter.js?v=51';
-import { paletteFromRamp } from './trace.js?v=51';
-import { motionParams, displacePoint } from './motion.js?v=51';
-import { LiveConductor } from './live.js?v=51';
-import { LiveRecorder, MAX_RECORD_SEC } from './recorder.js?v=51';
-import { selectRingSubset } from './strands.js?v=51';
+import { AudioEngine } from './audio.js?v=54';
+import { buildFingerprint, buildTrajectory } from './features.js?v=54';
+import { DensityRenderer } from './density.js?v=54';
+import { PALETTES, buildLUT, customRamp, hexToRgb } from './palettes.js?v=54';
+import { exportCanvas, exportStrandSVG, exportStrandPDF, exportTraceSVG, exportTracePDF, framePlan, exportMP4, loopsForDuration, buildBlobSVG, exportBlobPDF } from './exporter.js?v=54';
+import { paletteFromRamp } from './trace.js?v=54';
+import { motionParams, displacePoint } from './motion.js?v=54';
+import { LiveConductor } from './live.js?v=54';
+import { LiveRecorder, MAX_RECORD_SEC } from './recorder.js?v=54';
+import { selectRingSubset } from './strands.js?v=54';
 
 const audio = new AudioEngine();
 let renderer = null;
@@ -48,6 +48,13 @@ const params = {
   motionOn: false, motionPeriod: 8,
   exportRes: 'std', videoDur: 0, transparentBg: false,
   flatView: true, cymStyle: 'auto', growth: 'morph',
+  // Water-style shading. Inert unless cymStyle === 'water' (the renderer
+  // branches on uWater, which only that style turns on).
+  shine: 1.0, ripple: 1.0, caustic: 1.0,
+  // Liquid (metaball blob) mode. `melt` is the smooth-union blend radius —
+  // how far neighbouring lobes fuse — and overrides the generator's own
+  // sound-derived value once the user touches it.
+  gloss: 1.0, dispersion: 1.0, melt: 0.12, blobFlat: false,
   // Which attractor system to build. 'auto' restores the historic sound-based
   // routing (halvorsen/clifford by vocal register); anything else is the user's
   // pick and overrides it on both the recorded and the live path. Must match
@@ -128,6 +135,14 @@ function regenerate() {
   const onResult = (out) => {
     design = out;
     renderer.setMotion(motionParams(fingerprint.seed));
+    // Liquid is analytic — no point cloud to hand over, and no orientation to
+    // reset since the blob is drawn in 2D.
+    if (out.kind === 'blob') {
+      renderer.setBlob(out.circles, params.melt || out.smooth);
+      applyBlobStyle();
+      setStatus('Liquid design created — adjust sliders · export Flat/Build vectors');
+      return;
+    }
     // Every Create presents a perfect plate: re-assert top-down so prior
     // drags or stale state can't leave a new design tilted.
     if (params.flatView) renderer.setOrientation(-Math.PI / 2, 0);
@@ -136,7 +151,7 @@ function regenerate() {
     setStatus('Design created — drag to rotate · adjust sliders');
   };
   try {
-    if (!worker) worker = new Worker('js/worker.js?v=51', { type: 'module' });
+    if (!worker) worker = new Worker('js/worker.js?v=54', { type: 'module' });
     worker.onmessage = (e) => {
       if (e.data.progress !== undefined) setStatus(`Generating… ${Math.round(e.data.progress * 100)}%`);
       else if (e.data.error) setStatus(`Generation error: ${e.data.error}`);
@@ -150,7 +165,7 @@ function regenerate() {
 }
 
 async function fallbackGenerate(onResult) {
-  const { generate } = await import('./generators/index.js?v=51');
+  const { generate } = await import('./generators/index.js?v=54');
   onResult(generate(fingerprint, { ...params, strandCount: 96 }));
 }
 
@@ -159,7 +174,7 @@ async function fallbackGenerate(onResult) {
 function workerGenerate(fingerprint, params) {
   return new Promise((resolve) => {
     try {
-      if (!liveWorker) liveWorker = new Worker('js/worker.js?v=51', { type: 'module' });
+      if (!liveWorker) liveWorker = new Worker('js/worker.js?v=54', { type: 'module' });
       liveWorker.onmessage = (e) => {
         if (e.data.done) resolve(e.data);
         else if (e.data.error) resolve(null);
@@ -182,7 +197,7 @@ async function liveGenerate(fp, p) {
   // result as "generation failed, retry later" (see tick()), so surface a
   // throw the same way rather than letting it become an unhandled rejection.
   try {
-    const { generate } = await import('./generators/index.js?v=51');
+    const { generate } = await import('./generators/index.js?v=54');
     return generate(fp, p);
   } catch {
     return null;
@@ -254,6 +269,44 @@ function applyRenderParams() {
   renderer.setParams({
     exposure: params.exposure, contrast: params.contrast, grain: params.grain,
     background: hexToRgb(params.background), scale: params.scale, autoRotate: params.autoRotate,
+    water: waterActive() ? 1 : 0,
+    shine: params.shine, ripple: params.ripple, caustic: params.caustic,
+  });
+}
+
+// Water shading applies only to a cymatics design actually built as water —
+// the signed height field the shader reads exists in no other generator.
+function waterActive() {
+  return params.mode === 'cymatics' && params.cymStyle === 'water';
+}
+
+function syncStyleRows() {
+  const liquid = params.mode === 'liquid';
+  document.getElementById('row-cym-style').style.display =
+    params.mode === 'cymatics' ? '' : 'none';
+  document.getElementById('row-water').style.display = waterActive() ? '' : 'none';
+  document.getElementById('row-liquid').style.display = liquid ? '' : 'none';
+  // The blob vector exports only mean anything for a blob; the point-cloud
+  // exports (SVG/PDF strands, Trace) only mean anything for a cloud.
+  document.querySelectorAll('.btn-liquid-export').forEach((b) => {
+    b.style.display = liquid ? '' : 'none';
+  });
+  for (const fmt of ['svg', 'pdf', 'trace-svg', 'trace-pdf']) {
+    const b = document.querySelector(`.btn-export[data-fmt="${fmt}"]`);
+    if (b) b.style.display = liquid ? 'none' : '';
+  }
+}
+
+// The blob is drawn as dark ink on a pale ground, matching the reference
+// identity — but both come from the existing palette controls, so setting a
+// dark background gives the inverted, projection-friendly version for free.
+function applyBlobStyle() {
+  renderer.setBlobStyle({
+    flat: params.blobFlat,
+    gloss: params.gloss,
+    dispersion: params.dispersion,
+    ink: hexToRgb(params.colorPrimary),
+    ground: hexToRgb(params.background),
   });
 }
 
@@ -605,8 +658,8 @@ function bindControls() {
       if (btn.disabled) return;
       params.mode = btn.dataset.mode;
       document.querySelectorAll('.btn-mode').forEach(b => b.classList.toggle('active', b === btn));
-      document.getElementById('row-cym-style').style.display =
-        params.mode === 'cymatics' ? '' : 'none';
+      syncStyleRows();
+      applyRenderParams();   // mode switch can turn water shading on or off
       document.getElementById('row-attractor-system').style.display =
         params.mode === 'attractor' ? '' : 'none';
       if (appState === 'captured') { offerPaintRestore(); regenerate(); }
@@ -664,7 +717,38 @@ function bindControls() {
 
   document.getElementById('sel-cym-style').addEventListener('change', (e) => {
     params.cymStyle = e.target.value;
+    syncStyleRows();
+    // Order matters: the shader branch must be live BEFORE the new cloud
+    // arrives, otherwise a water design renders one frame through the
+    // particle path (and vice versa).
+    applyRenderParams();
     if (appState === 'captured' && params.mode === 'cymatics') regenerate();
+  });
+
+  for (const [id, key] of [['sl-shine', 'shine'], ['sl-ripple', 'ripple'], ['sl-caustic', 'caustic']]) {
+    document.getElementById(id).addEventListener('input', (e) => {
+      params[key] = parseFloat(e.target.value);
+      applyRenderParams();   // shading only — no regeneration
+    });
+  }
+
+  // Liquid controls. Gloss/Dispersion/Flat are pure shading. Melt changes the
+  // geometry, but the blob is analytic — the shader re-evaluates the field
+  // every frame — so it still needs no regeneration, unlike the point-cloud
+  // modes where a geometry change means a worker round trip.
+  for (const [id, key] of [['sl-gloss', 'gloss'], ['sl-dispersion', 'dispersion']]) {
+    document.getElementById(id).addEventListener('input', (e) => {
+      params[key] = parseFloat(e.target.value);
+      applyBlobStyle();
+    });
+  }
+  document.getElementById('sl-melt').addEventListener('input', (e) => {
+    params.melt = parseFloat(e.target.value);
+    if (design && design.kind === 'blob') renderer.setBlob(design.circles, params.melt);
+  });
+  document.getElementById('chk-flat-blob').addEventListener('change', (e) => {
+    params.blobFlat = e.target.checked;
+    applyBlobStyle();
   });
 
   // Picking a different attractor is as fundamental a change as picking a
@@ -710,9 +794,34 @@ function bindControls() {
       applyColorParams();
     });
   });
+
+  // Mode-dependent rows and export buttons start correct rather than only
+  // after the first mode click — otherwise the Liquid vector exports sit
+  // visible (and inert) while the app opens on Attractor.
+  syncStyleRows();
 }
 
 // ── Export ────────────────────────────────────────────────────────
+
+// Vector exports match the live canvas's aspect ratio. A fixed size (always
+// 1600x1200) stretches a non-4:3 window's design into an oval.
+const VEC_LONG_EDGE = 1600;
+function exportDims() {
+  const el = document.getElementById('renderer-container');
+  const aspect = (el.clientWidth || 1600) / (el.clientHeight || 1200);
+  return aspect >= 1
+    ? [VEC_LONG_EDGE, Math.round(VEC_LONG_EDGE / aspect)]
+    : [Math.round(VEC_LONG_EDGE * aspect), VEC_LONG_EDGE];
+}
+
+function downloadText(text, filename) {
+  const type = filename.endsWith('.svg') ? 'image/svg+xml' : 'text/plain';
+  const url = URL.createObjectURL(new Blob([text], { type }));
+  const a = Object.assign(document.createElement('a'), { href: url, download: filename });
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 3000);
+}
+
 function bindExport() {
   document.querySelectorAll('.btn-export').forEach(btn => {
     btn.addEventListener('click', async () => {
@@ -720,6 +829,25 @@ function bindExport() {
         const fmt = btn.dataset.fmt;
         if (fmt === 'trace-svg' || fmt === 'trace-pdf') {
           await runTrace(fmt === 'trace-svg' ? 'svg' : 'pdf');
+          return;
+        }
+        if (fmt.startsWith('blob-') || fmt.startsWith('build-')) {
+          if (!design || design.kind !== 'blob') { setStatus('Switch to Liquid and create a design first'); return; }
+          const variant = fmt.startsWith('build-') ? 'construction' : 'flat';
+          const [W, H] = exportDims();
+          const opts = {
+            circles: design.circles, smooth: params.melt,
+            width: W, height: H,
+            ink: params.colorPrimary,
+            background: params.transparentBg ? null : params.background,
+            variant,
+          };
+          if (fmt.endsWith('-svg')) {
+            downloadText(buildBlobSVG(opts), `soundform-${variant}.svg`);
+          } else {
+            exportBlobPDF(opts);
+          }
+          setStatus(`${variant === 'construction' ? 'Construction' : 'Flat'} vector saved`);
           return;
         }
         if (fmt === 'svg' || fmt === 'pdf') {
@@ -890,7 +1018,7 @@ async function runTrace(kind) { // kind: 'svg' | 'pdf'
     };
     background = params.transparentBg ? null : params.background;
 
-    traceWorker = new Worker('js/traceworker.js?v=51'); // classic worker
+    traceWorker = new Worker('js/traceworker.js?v=54'); // classic worker
   } catch (err) {
     endTrace();
     setStatus(`Trace error: ${err.message}`);
