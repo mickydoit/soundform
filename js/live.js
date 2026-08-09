@@ -1,12 +1,12 @@
 // Live mode conductor: rolling feature window, instant envelopes, kick
 // detection, and structural morph scheduling. All I/O (audio, renderer,
 // worker, palette) is injected — this module is node-testable.
-import { buildFingerprint, buildTrajectory } from './features.js?v=57';
-import { liveTarget, glideStops, stopsToHex } from './livecolor.js?v=57';
-import { BrushPace, PAINT_MAX_POINTS } from './paint.js?v=57';
-import { createOrbitBrush, pickSystemLive, modulatesContinuously } from './generators/attractor.js?v=57';
-import { AutoParams, featuresFromFingerprint } from './autoparams.js?v=57';
-import { idleState, targetFromFeatures, glide, advance, kick as fieldKick } from './cymafield.js?v=57';
+import { buildFingerprint, buildTrajectory } from './features.js?v=58';
+import { liveTarget, glideStops, stopsToHex } from './livecolor.js?v=58';
+import { BrushPace, PAINT_MAX_POINTS } from './paint.js?v=58';
+import { createOrbitBrush, pickSystemLive, modulatesContinuously } from './generators/attractor.js?v=58';
+import { AutoParams, featuresFromFingerprint } from './autoparams.js?v=58';
+import { idleState, targetFromFeatures, glide, advance, kick as fieldKick } from './cymafield.js?v=58';
 
 export const WINDOW_SEC = 4;
 export const MORPH_CHECK_INTERVAL = 0.15;

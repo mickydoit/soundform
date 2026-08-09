@@ -1,16 +1,16 @@
-import { AudioEngine } from './audio.js?v=57';
-import { buildFingerprint, buildTrajectory } from './features.js?v=57';
-import { DensityRenderer } from './density.js?v=57';
-import { PALETTES, buildLUT, customRamp, hexToRgb } from './palettes.js?v=57';
-import { exportCanvas, exportStrandSVG, exportStrandPDF, exportTraceSVG, exportTracePDF, framePlan, exportMP4, loopsForDuration, buildBlobSVG, exportBlobPDF } from './exporter.js?v=57';
-import { paletteFromRamp } from './trace.js?v=57';
-import { motionParams, displacePoint } from './motion.js?v=57';
-import { LiveConductor } from './live.js?v=57';
-import { LiveRecorder, MAX_RECORD_SEC } from './recorder.js?v=57';
-import { selectRingSubset } from './strands.js?v=57';
+import { AudioEngine } from './audio.js?v=58';
+import { buildFingerprint, buildTrajectory } from './features.js?v=58';
+import { DensityRenderer } from './density.js?v=58';
+import { PALETTES, buildLUT, customRamp, hexToRgb } from './palettes.js?v=58';
+import { exportCanvas, exportStrandSVG, exportStrandPDF, exportTraceSVG, exportTracePDF, framePlan, exportMP4, loopsForDuration, buildBlobSVG, exportBlobPDF } from './exporter.js?v=58';
+import { paletteFromRamp } from './trace.js?v=58';
+import { motionParams, displacePoint } from './motion.js?v=58';
+import { LiveConductor } from './live.js?v=58';
+import { LiveRecorder, MAX_RECORD_SEC } from './recorder.js?v=58';
+import { selectRingSubset } from './strands.js?v=58';
 // Used only by the __soundform debug hook, which drives Liquid to an exact
 // state for capturing the acceptance frames headlessly.
-import { idleState, targetFromFeatures, kick } from './cymafield.js?v=57';
+import { idleState, targetFromFeatures, kick } from './cymafield.js?v=58';
 
 const audio = new AudioEngine();
 let renderer = null;
@@ -117,7 +117,9 @@ window.addEventListener('DOMContentLoaded', () => {
     // acceptance frames (silence / low tone / high tone / transient) without
     // needing a working microphone in a headless browser.
     setField: (st, anim = 'full') => { stopFieldPlayback(); applyBlobStyle(); renderer.setField(st, anim); },
-    idleState, targetFromFeatures, kick };
+    idleState, targetFromFeatures, kick,
+    // Exposed for diagnostics: uniform state is otherwise unreachable.
+    renderer: () => renderer };
 });
 
 function captureLoop() {
@@ -166,7 +168,7 @@ function regenerate() {
     setStatus('Design created — drag to rotate · adjust sliders');
   };
   try {
-    if (!worker) worker = new Worker('js/worker.js?v=57', { type: 'module' });
+    if (!worker) worker = new Worker('js/worker.js?v=58', { type: 'module' });
     worker.onmessage = (e) => {
       if (e.data.progress !== undefined) setStatus(`Generating… ${Math.round(e.data.progress * 100)}%`);
       else if (e.data.error) setStatus(`Generation error: ${e.data.error}`);
@@ -180,7 +182,7 @@ function regenerate() {
 }
 
 async function fallbackGenerate(onResult) {
-  const { generate } = await import('./generators/index.js?v=57');
+  const { generate } = await import('./generators/index.js?v=58');
   onResult(generate(fingerprint, { ...params, strandCount: 96 }));
 }
 
@@ -189,7 +191,7 @@ async function fallbackGenerate(onResult) {
 function workerGenerate(fingerprint, params) {
   return new Promise((resolve) => {
     try {
-      if (!liveWorker) liveWorker = new Worker('js/worker.js?v=57', { type: 'module' });
+      if (!liveWorker) liveWorker = new Worker('js/worker.js?v=58', { type: 'module' });
       liveWorker.onmessage = (e) => {
         if (e.data.done) resolve(e.data);
         else if (e.data.error) resolve(null);
@@ -212,7 +214,7 @@ async function liveGenerate(fp, p) {
   // result as "generation failed, retry later" (see tick()), so surface a
   // throw the same way rather than letting it become an unhandled rejection.
   try {
-    const { generate } = await import('./generators/index.js?v=57');
+    const { generate } = await import('./generators/index.js?v=58');
     return generate(fp, p);
   } catch {
     return null;
@@ -1065,7 +1067,7 @@ async function runTrace(kind) { // kind: 'svg' | 'pdf'
     };
     background = params.transparentBg ? null : params.background;
 
-    traceWorker = new Worker('js/traceworker.js?v=57'); // classic worker
+    traceWorker = new Worker('js/traceworker.js?v=58'); // classic worker
   } catch (err) {
     endTrace();
     setStatus(`Trace error: ${err.message}`);

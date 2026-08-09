@@ -1,8 +1,8 @@
-import { buildVectorPaths, toBezierPath, buildPdfOps, toRelativeBezierLegs } from './strands.js?v=57';
-import { hexToRgb } from './palettes.js?v=57';
-import { buildTraceSVG, buildTracePdfOps } from './trace.js?v=57';
-import { fieldOutline, ringToPath, closedCatmullRom } from './blob.js?v=57';
-import { makeWaterField } from './cymafield.js?v=57';
+import { buildVectorPaths, toBezierPath, buildPdfOps, toRelativeBezierLegs } from './strands.js?v=58';
+import { hexToRgb } from './palettes.js?v=58';
+import { buildTraceSVG, buildTracePdfOps } from './trace.js?v=58';
+import { fieldOutline, ringToPath, closedCatmullRom } from './blob.js?v=58';
+import { makeWaterField } from './cymafield.js?v=58';
 
 export async function exportCanvas(canvas, format) {
   switch (format) {

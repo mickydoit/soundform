@@ -267,13 +267,22 @@ void main() {
   vec2 grad = vec2(waterAt(p + e.xy) - waterAt(p - e.xy),
                    waterAt(p + e.yx) - waterAt(p - e.yx));
 
-  // Shimmer perturbs the LIGHTING normal only — never the thickness T. The
-  // silhouette, the coverage mask and therefore the vector export stay
-  // bit-identical while the surface is moving, so a held design cannot drift
-  // its topology no matter how long it shimmers.
-  vec2 shim = vec2(sin(p.x * 3.1 + uMatTime * 0.70) * cos(p.y * 2.6 - uMatTime * 0.50),
-                   cos(p.x * 2.4 - uMatTime * 0.62) * sin(p.y * 3.3 + uMatTime * 0.81))
-            * 0.055 * smoothstep(0.05, 0.5, T);
+  // Internal surface motion, LIGHTING ONLY — never applied to the thickness
+  // T. The silhouette, the coverage mask and the vector export therefore stay
+  // bit-identical while the surface moves, so a held design cannot drift its
+  // topology however long it shimmers (verified: in flat view, which strips
+  // material shading, a held frame hashes identically over 5s).
+  //
+  // Three travelling waves rather than one static wobble: two crossing plane
+  // waves plus a radial one. A single low-amplitude perturbation measured
+  // only ~13/255 on the water and read as motionless — the water body is
+  // nearly flat, so the eye needs the highlights to actually travel across it.
+  float mt = uMatTime;
+  float inWater = smoothstep(0.08, 0.55, T);
+  float w1 = sin(p.x * 4.7 + p.y * 2.9 + mt * 0.85);
+  float w2 = sin(p.x * -3.1 + p.y * 5.4 - mt * 0.63);
+  float w3 = sin(length(p) * 7.5 - mt * 1.05);
+  vec2 shim = vec2(w1 * 0.55 + w3 * 0.45, w2 * 0.55 - w3 * 0.45) * 0.22 * inWater;
   vec3 N = normalize(vec3(-(grad.x * 26.0 + shim.x), 1.0, -(grad.y * 26.0 + shim.y)));
 
   // A faint structured backdrop. Refraction is invisible against a flat
@@ -295,6 +304,9 @@ void main() {
   // makes it read as a real liquid layer rather than a decal.
   vec3 body = mix(back, uDeep, clamp(T * 0.55, 0.0, 1.0));
   body += caustic * 0.28 * uGloss;
+  // Travelling caustics: bright filaments drifting through the water. This
+  // is the clearest signal that the liquid is alive while a design is held.
+  body += pow(max(0.0, w1 * w2), 3.0) * inWater * 0.13 * uGloss;
 
   // Contact darkening: a soft shadow offset beneath thicker water.
   float shade = waterAt(p + vec2(px * 5.0, -px * 5.0));

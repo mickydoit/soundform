@@ -1,4 +1,4 @@
-import { idleState, targetFromFeatures, clamp01 } from '../cymafield.js?v=57';
+import { idleState, targetFromFeatures, clamp01 } from '../cymafield.js?v=58';
 
 // Liquid: a cymatic water layer.
 //
